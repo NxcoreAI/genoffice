@@ -3001,8 +3001,17 @@ export function registerProjectIpc(): void {
   })
 }
 
+// Embedded hosts (EverRoom) call registerDocsIpc() once per created view, and
+// these handlers are process-global and never torn down — so, like sheets'
+// registerSheetsIpc(), this must register once per process or the second call
+// throws "Attempted to register a second handler".
+let coreIpcRegistered = false
+
 /** document/attachment/window IPC (everything except the AI proxy above) */
 export function registerDocsIpc(): void {
+  if (coreIpcRegistered) return
+  coreIpcRegistered = true
+
   // shared with the other editor modules — last (identical) registration wins
   ipcMain.removeHandler('app:get-language')
   ipcMain.handle('app:get-language', () => getUiLang())

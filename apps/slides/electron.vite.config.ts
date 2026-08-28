@@ -34,6 +34,21 @@ export default defineConfig({
   // source with extensionless relative imports; externalizing them under Node
   // yields ERR_MODULE_NOT_FOUND).
   main: {
+    build: {
+      rollupOptions: {
+        input: {
+          // The standalone bootstrap (updater, GenOffice AI/login IPC, project
+          // store) stays out of EverRoom embed builds; only the embed entry ships.
+          ...(process.env.GENOFFICE_EMBED_ONLY === '1'
+            ? {}
+            : { index: resolve(here, 'src/main/index.ts') }),
+          embed: resolve(here, 'src/main/embed.ts'),
+        },
+      },
+    },
+    define: {
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(process.env.GENOFFICE_EMBED_ONLY === '1'),
+    },
     resolve: { alias: workspaceAlias },
     // Bundle opentype.js too (the packaged app ships only out/**, so external deps are unresolvable at runtime)
     plugins: [
@@ -45,6 +60,12 @@ export default defineConfig({
           '@genoffice/file-parse',
           '@genoffice/electron-utils',
           'opentype.js',
+          // EverRoom embed closure: the copied runtime has no node_modules, so
+          // every main-process npm dep must be bundled (prepare script asserts).
+          'pngjs',
+          'acorn',
+          'harfbuzzjs',
+          'utif2',
         ],
       }),
     ],
@@ -54,6 +75,9 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils'] })],
   },
   renderer: {
+    define: {
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(process.env.GENOFFICE_EMBED_ONLY === '1'),
+    },
     resolve: { alias: workspaceAlias },
     plugins: [react()],
     server: {

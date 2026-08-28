@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   GroupRenderNode,
   RenderFill,
@@ -83,7 +83,6 @@ import { GensparkMark, IconAiBeautify, IconAiFactCheck, IconAiImage } from './co
 import { ToastHost } from './components/toast'
 import { showToast } from './components/toast-bus'
 import { t, useI18n } from './i18n/locale'
-import { AiPanel } from './ai/AiPanel'
 import { ChartDataDialog } from './components/ChartDataDialog'
 import type { BrushFormat } from './format-brush'
 import { isTextUndoTarget, shouldRouteUndoToDeck } from './undo-routing'
@@ -113,6 +112,16 @@ import * as tableActions from './table-actions'
 import * as styleActions from './style-actions'
 import { handleGlobalKeydown } from './keyboard-actions'
 import { buildCtxItems } from './context-menu-items'
+
+// EverRoom embed builds fold this define to true: the AI panel (and its chunk)
+// is swapped for null so no GenOffice AI UI or IPC ever loads in the embed.
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+const AiPanel = !__GENOFFICE_EMBED_ONLY__
+  ? lazy(async () => {
+      const module = await import('./ai/AiPanel')
+      return { default: module.AiPanel }
+    })
+  : null
 
 const _IS_MAC = navigator.platform.toLowerCase().includes('mac')
 
@@ -266,6 +275,9 @@ function collectAligns(node: RenderNode, out: Set<ParaAlign>) {
 
 export function App() {
   const { lang } = useI18n()
+  // EverRoom embed: no GenOffice AI dock, no AI settings boot load, no stage
+  // AI bar. The dock reservation also disappears from the layout math.
+  const everroomEmbed = __GENOFFICE_EMBED_ONLY__
   const [slides, setSlides] = useState<RenderSlide[]>([])
   // Layouts may reference Office-private fonts (resolved in main); register them as FontFaces
   useEffect(() => {
@@ -385,7 +397,9 @@ export function App() {
     localStorage.setItem('ai-slides-auto-save', autoSave ? '1' : '0')
     window.slidesApi.setAutoSavePref?.(autoSave)
   }, [autoSave])
-  const [showAi, setShowAi] = useState(() => localStorage.getItem('ai-slides-show-ai') !== '0')
+  const [showAi, setShowAi] = useState(
+    () => !everroomEmbed && localStorage.getItem('ai-slides-show-ai') !== '0',
+  )
   const [showFormat, setShowFormat] = useState(false)
   const [showBgFormat, setShowBgFormat] = useState(false)
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
@@ -576,7 +590,9 @@ export function App() {
       const viewportW =
         el?.clientWidth ||
         stageViewportSize.w ||
-        window.innerWidth - (showThumbs ? thumbsW : 0) - (showAi ? 360 : 34)
+        window.innerWidth -
+          (showThumbs ? thumbsW : 0) -
+          (everroomEmbed ? 0 : showAi ? 360 : 34)
       const viewportH = el?.clientHeight || stageViewportSize.h || window.innerHeight - 150
       const availW = viewportW - 56
       // -72: vertical padding is 48 (AI-bar headroom) + 32, minus the same 8px slack as width
@@ -1101,6 +1117,8 @@ export function App() {
   useEffect(() => window.slidesApi.onRenamed((p) => setPath(p)), [])
 
   useEffect(() => {
+    // Embed hosts register no ai:* handlers; the invoke would reject forever.
+    if (everroomEmbed) return
     void window.slidesApi.getAiSettings().then(setAiSettings)
   }, [])
 
@@ -3077,10 +3095,10 @@ export function App() {
       />
 
       <div className="app-main">
-        {slide && viewMode !== 'reading' && viewMode !== 'sorter' && (
+        {slide && !everroomEmbed && viewMode !== 'reading' && viewMode !== 'sorter' && (
           <div className={`ai-dock${showAi && aiSettings ? '' : ' collapsed'}`}>
             {/* always mounted once settings load: collapse must not drop state or in-flight runs */}
-            {aiSettings ? (
+            {aiSettings && AiPanel ? (
               <AiPanel
                 key={aiPanelKey}
                 slides={slides}
@@ -3464,6 +3482,7 @@ export function App() {
                             : undefined
                         }
                       >
+                        {!everroomEmbed && (
                         <div className="stage-ai-bar">
                           <div className="stage-ai-group">
                             <button
@@ -3515,6 +3534,7 @@ export function App() {
                             )}
                           </div>
                         </div>
+                        )}
                         <div
                           ref={stageScaleRef}
                           className="stage-scale"

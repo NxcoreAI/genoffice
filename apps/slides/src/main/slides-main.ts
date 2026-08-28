@@ -226,6 +226,11 @@ import {
   type Session,
 } from './session-state'
 import { registerAiIpc, registerSlidesOnlyAiIpc } from './ai-ipc'
+
+// EverRoom embed builds fold this to true (electron.vite.config.ts define) so
+// GenOffice cloud/AI IPC registration is compiled out of the embed bundle.
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 import { listPrivateFontFaces, getPrivateFontData } from './fonts'
 import {
   downloadFontFamily,
@@ -4262,7 +4267,11 @@ html, body { margin: 0; padding: 0; }
   // aggregate mode only calls this function) ──
   registerPresenterIpc()
 
-  registerSlidesOnlyAiIpc()
+  // EverRoom embed hosts must not expose GenOffice cloud/AI channels. The
+  // define folds this call away in embed builds so ai-ipc (and its
+  // @genoffice/ai-provider networking) is tree-shaken from the bundle; the
+  // standalone bootstrap keeps it via its own registerAiIpc call.
+  if (!__GENOFFICE_EMBED_ONLY__) registerSlidesOnlyAiIpc()
 }
 
 // ── project-store IPC (standalone mode) ───────────────────────────────────

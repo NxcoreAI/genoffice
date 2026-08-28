@@ -1,5 +1,9 @@
 /** Home tab of the slides ribbon. Extracted from Ribbon.tsx. */
 import { useState } from 'react'
+
+// EverRoom embed builds fold this to true and drop the Genspark AI group: the
+// embed host registers no ai:* handlers, so the buttons would be dead UI.
+declare const __GENOFFICE_EMBED_ONLY__: boolean
 import { platformShortcuts } from '@genoffice/i18n'
 import { ColorPicker, isSymbolFontFamily } from '@genoffice/ui'
 import { saveEditSelection } from '../TextEditOverlay'
@@ -182,6 +186,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
   }
   return (
     <>
+      {!__GENOFFICE_EMBED_ONLY__ && (
       <Group label="Genspark AI">
         <button
           className={`rb-big ai-entry${aiOpen ? ' active' : ''}`}
@@ -246,6 +251,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
           <span>{t('aiImageBtn')}</span>
         </button>
       </Group>
+      )}
       <div className="ribbon-sep" />
       <Group label={t('ribbonGroupClipboard')}>
         <button
