@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import { normalizePath } from 'vite'
@@ -11,9 +11,24 @@ const pdfjsRoot = dirname(dirname(require.resolve('pdfjs-dist/package.json')))
 // vite-plugin-static-copy globs require POSIX separators; join() breaks on Windows
 const pdfjsDir = (sub: string) => normalizePath(join(pdfjsRoot, 'pdfjs-dist', sub))
 
+const embedOnly = process.env.GENOFFICE_EMBED_ONLY === '1'
+
 export default defineConfig({
   // @genoffice/i18n ships as TS source; pdf-lib's package only includes out/** — both must be bundled
   main: {
+    build: {
+      rollupOptions: {
+        input: {
+          // Embed hosts load embed.js only; the standalone bootstrap must not
+          // ship in the EverRoom closure.
+          ...(!embedOnly ? { index: resolve(__dirname, 'src/main/index.ts') } : {}),
+          embed: resolve(__dirname, 'src/main/embed.ts'),
+        },
+      },
+    },
+    define: {
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(embedOnly),
+    },
     plugins: [
       externalizeDepsPlugin({
         exclude: [
@@ -30,6 +45,11 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@genoffice/i18n', '@genoffice/electron-utils'] })],
   },
   renderer: {
+    define: {
+      // EverRoom embed build: folds the Genspark AI surfaces out of the
+      // renderer (the embed closure ships no AI backend to talk to).
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(embedOnly),
+    },
     plugins: [
       react(),
       viteStaticCopy({

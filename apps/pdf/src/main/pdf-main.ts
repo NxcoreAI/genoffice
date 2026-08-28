@@ -437,6 +437,10 @@ interface RuntimePaths {
   createDocument?: (request: CreateDocumentRequest) => Promise<CreateDocumentResult>
 }
 
+/// EverRoom embed build: the Genspark image-generation channel (and its
+/// ai-search networking) is folded out — the embed closure ships no AI backend.
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 let runtime: RuntimePaths = { preloadPath: '' }
 
 export function configurePdfRuntime(paths: RuntimePaths): void {
@@ -1344,32 +1348,35 @@ function registerPdfIpc(): void {
   )
 
   // pdf-owned (unlike ai:image-search / ai:fetch-image, which the shell registers app-wide):
-  // slides' ai:generate-image is only registered once a slides view exists, so pdf needs its own
-  ipcMain.handle(
-    PDF_CHANNELS.generateImage,
-    async (_e, op: { prompt?: unknown; aspectRatio?: unknown }) => {
-      if (!hasGskAuth())
-        return {
-          error: 'Genspark account is not logged in on this machine; ask the user to log in first',
+  // slides' ai:generate-image is only registered once a slides view exists, so pdf needs its own.
+  // EverRoom embed hosts must not expose GenOffice cloud/AI channels — the
+  // define folds this registration away so ai-search is tree-shaken out.
+  if (!__GENOFFICE_EMBED_ONLY__)
+    ipcMain.handle(
+      PDF_CHANNELS.generateImage,
+      async (_e, op: { prompt?: unknown; aspectRatio?: unknown }) => {
+        if (!hasGskAuth())
+          return {
+            error: 'Genspark account is not logged in on this machine; ask the user to log in first',
+          }
+        if (!gskCloudToolsOn())
+          return {
+            error:
+              'Genspark cloud tools are turned off in Settings (AI Model); enable them to use this tool',
+          }
+        const prompt = String(op?.prompt ?? '').trim()
+        if (!prompt) return { error: 'prompt must not be empty' }
+        try {
+          const r = await gskGenerateImage({
+            prompt,
+            aspectRatio: op?.aspectRatio ? String(op.aspectRatio) : undefined,
+          })
+          return { url: r.url }
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) }
         }
-      if (!gskCloudToolsOn())
-        return {
-          error:
-            'Genspark cloud tools are turned off in Settings (AI Model); enable them to use this tool',
-        }
-      const prompt = String(op?.prompt ?? '').trim()
-      if (!prompt) return { error: 'prompt must not be empty' }
-      try {
-        const r = await gskGenerateImage({
-          prompt,
-          aspectRatio: op?.aspectRatio ? String(op.aspectRatio) : undefined,
-        })
-        return { url: r.url }
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) }
-      }
-    },
-  )
+      },
+    )
 
   ipcMain.handle(PDF_CHANNELS.listSignatures, () => withSignatures(async (list) => list))
 
@@ -1445,7 +1452,10 @@ function grantAndTrack(wc: WebContents, openPath?: string | null): void {
   })
 }
 
-export function createPdfView(openPath?: string | null): WebContentsView {
+export function createPdfView(
+  openPath?: string | null,
+  options?: { readonly?: boolean },
+): WebContentsView {
   registerPdfIpc()
   const view = new WebContentsView({
     webPreferences: {
@@ -1456,8 +1466,17 @@ export function createPdfView(openPath?: string | null): WebContentsView {
     },
   })
   grantAndTrack(view.webContents, openPath)
-  if (runtime.rendererUrl) void view.webContents.loadURL(runtime.rendererUrl)
-  else if (runtime.rendererFile) void view.webContents.loadFile(runtime.rendererFile)
+  // Read-only embed (host passes readonly=1): every editing surface stays
+  // view-only, like an encrypted document without the password.
+  if (runtime.rendererUrl) {
+    const url = new URL(runtime.rendererUrl)
+    if (options?.readonly) url.searchParams.set('readonly', '1')
+    void view.webContents.loadURL(url.toString())
+  } else if (runtime.rendererFile) {
+    void view.webContents.loadFile(runtime.rendererFile, {
+      query: options?.readonly ? { readonly: '1' } : {},
+    })
+  }
   return view
 }
 
