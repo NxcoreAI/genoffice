@@ -16,6 +16,14 @@ export default defineConfig({
   // must be bundled — externalizing them yields ERR_MODULE_NOT_FOUND under Node
   // (same setup as apps/slides).
   main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          embed: resolve(__dirname, 'src/main/embed.ts'),
+        },
+      },
+    },
     plugins: [
       externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils', '@genoffice/font-metrics'] }),
     ],
