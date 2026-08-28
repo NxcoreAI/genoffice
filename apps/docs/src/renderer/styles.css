@@ -5362,6 +5362,10 @@ body.docs-crop-active
   color: var(--color-text-primary);
 }
 
+html[data-host-mode='everroom'] .ai-entry {
+  display: none;
+}
+
 /* drag handle on the panel's right edge — resize the panel horizontally */
 .ai-panel-resizer {
   position: absolute;

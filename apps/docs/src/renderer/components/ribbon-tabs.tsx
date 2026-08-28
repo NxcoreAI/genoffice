@@ -1229,7 +1229,7 @@ export function ViewTab({
       <div className="ribbon-group">
         <div className="ribbon-group-items">
           <button
-            className={`rb-big ${showAi ? 'active' : ''}`}
+            className={`rb-big ai-entry ${showAi ? 'active' : ''}`}
             data-tip={t('ribbonAiPanelTip')}
             onClick={onToggleAi}
           >

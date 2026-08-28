@@ -8,6 +8,7 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 const localAlias = {
   '@genoffice/docx-engine': resolve(__dirname, '../../packages/docx-engine/src/index.ts'),
 }
+const embedOnly = process.env.GENOFFICE_EMBED_ONLY === '1'
 
 export default defineConfig({
   // Main and preload use only electron + node builtins; bundle everything so
@@ -19,7 +20,7 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/main/index.ts'),
+          ...(!embedOnly ? { index: resolve(__dirname, 'src/main/index.ts') } : {}),
           embed: resolve(__dirname, 'src/main/embed.ts'),
         },
       },
@@ -35,6 +36,9 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils'] })],
   },
   renderer: {
+    define: {
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(embedOnly),
+    },
     plugins: [react()],
     resolve: { alias: localAlias },
     server: {

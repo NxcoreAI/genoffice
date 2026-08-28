@@ -1,4 +1,5 @@
 import {
+  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -37,7 +38,6 @@ import {
 } from '@genoffice/docx-engine'
 import type { AiDocContent, AiSettings, OpenDocxResult } from '../shared/ipc'
 import { AI_PROVIDERS } from '../shared/ipc'
-import { AiPanel, AI_REVISION_AUTHOR } from './ai/AiPanel'
 import type { AiCommentsAccess, AiHeaderFooterAccess } from './ai/tools'
 import { applyHfText, hfEditText } from './editor/hf-text'
 import { AiAskPopover } from './components/AiAskPopover'
@@ -400,7 +400,17 @@ const DEFAULT_SETTINGS: AiSettings = {
   ) as AiSettings['providers'],
 }
 
+const AI_REVISION_AUTHOR = 'AI Assistant'
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
+const AiPanel = !__GENOFFICE_EMBED_ONLY__ ? lazy(async () => {
+  const module = await import('./ai/AiPanel')
+  return { default: module.AiPanel }
+}) : null
+
 export function App() {
+  const everroomEmbed = __GENOFFICE_EMBED_ONLY__
+    || new URLSearchParams(window.location.search).get('mode') === 'everroom'
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -427,7 +437,7 @@ export function App() {
   } | null>(null)
   const [_recent, setRecent] = useState<string[]>([])
   const [settings, setSettings] = useState<AiSettings>(DEFAULT_SETTINGS)
-  const [showAi, setShowAi] = useState(() => localStorage.getItem('aidocs.showAi') !== '0')
+  const [showAi, setShowAi] = useState(() => !everroomEmbed && localStorage.getItem('aidocs.showAi') !== '0')
   /** Increments on every open/new document: AiPanel remounts by key to reset the conversation and history (save path changes don't bump it, so the session continues) */
   const [aiPanelKey, setAiPanelKey] = useState(0)
   const [ribbonTabRequest, setRibbonTabRequest] = useState<{ tab: string; nonce: number } | null>(
@@ -4027,7 +4037,7 @@ export function App() {
       />
 
       <div className="app-main">
-        {doc && (
+        {doc && !everroomEmbed && AiPanel && (
           <div className={`ai-dock${showAi ? '' : ' collapsed'}`}>
             {/* always mounted: collapse must not drop state or in-flight runs */}
             <AiPanel

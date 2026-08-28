@@ -48,33 +48,14 @@ import type {
   WebContents,
 } from 'electron'
 import { parseFileToText } from '@genoffice/file-parse'
-import {
-  AiCreditsError,
-  AiTimeoutError,
-  isAiNetworkError,
-  chatForProvider,
-  defaultAiSettings,
-  activeProvider,
-  cloudToolsEnabled,
-  resolveAiSettings,
-  setRescueFetch,
-  streamForProvider,
-  type AiChatRequest,
-  type AiSettings,
-  type AiStreamChunk,
-  type AiStreamRequest,
-  type GenSparkAccountStatus,
-  type LegacyAiSettings,
+import type {
+  AiChatRequest,
+  AiSettings,
+  AiStreamChunk,
+  AiStreamRequest,
+  GenSparkAccountStatus,
+  LegacyAiSettings,
 } from '@genoffice/ai-provider'
-import {
-  ensureGenofficeLogin,
-  gskApiKey,
-  gskGenerateImage,
-  gskLoginInfo,
-  hasGskAuth,
-  webSearch,
-  imageSearch,
-} from '@genoffice/ai-search'
 import type {
   AiDocContent,
   AttachmentAddResult,
@@ -2573,10 +2554,6 @@ const TWIPS_PER_INCH = 1440
 const SETTINGS_PATH = () => userDataPath('ai-settings.json')
 
 /** live read: the shell settings pane writes the file; every tool call re-checks */
-function gskCloudToolsOn(): boolean {
-  return cloudToolsEnabled(readJson<Partial<AiSettings>>(SETTINGS_PATH(), {}))
-}
-
 const activeAiStreams = new Map<string, AbortController>()
 
 /**
@@ -2584,7 +2561,35 @@ const activeAiStreams = new Map<string, AbortController>()
  * register them exactly once for all window types (docs, sheets, home) —
  * sheets' standalone AI handlers use the same channel names.
  */
-export function registerAiIpc(): void {
+export async function registerAiIpc(): Promise<void> {
+  const [providerModule, searchModule] = await Promise.all([
+    import('@genoffice/ai-provider'),
+    import('@genoffice/ai-search'),
+  ])
+  const {
+    AiCreditsError,
+    AiTimeoutError,
+    activeProvider,
+    chatForProvider,
+    cloudToolsEnabled,
+    defaultAiSettings,
+    isAiNetworkError,
+    resolveAiSettings,
+    setRescueFetch,
+    streamForProvider,
+  } = providerModule
+  const {
+    ensureGenofficeLogin,
+    gskApiKey,
+    gskGenerateImage,
+    gskLoginInfo,
+    hasGskAuth,
+    imageSearch,
+    webSearch,
+  } = searchModule
+  const gskCloudToolsOn = () =>
+    cloudToolsEnabled(readJson<Partial<AiSettings>>(SETTINGS_PATH(), {}))
+  setRescueFetch((url, init) => net.fetch(url, init))
   ipcMain.handle('ai:get-settings', (): AiSettings => {
     const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(SETTINGS_PATH(), {})
     // pre-lock legacy file: genspark selected with cloud tools opted out. The
@@ -2998,9 +3003,6 @@ export function registerProjectIpc(): void {
 
 /** document/attachment/window IPC (everything except the AI proxy above) */
 export function registerDocsIpc(): void {
-  // Node fetch (undici) direct connections get reset under VPN/tun setups; retry over Chromium's stack
-  setRescueFetch((url, init) => net.fetch(url, init))
-
   // shared with the other editor modules — last (identical) registration wins
   ipcMain.removeHandler('app:get-language')
   ipcMain.handle('app:get-language', () => getUiLang())
@@ -4172,7 +4174,10 @@ async function performDocsClose(
   return requestRendererSave(contents)
 }
 
-export function createDocsView(openPath?: string): WebContentsView {
+export function createDocsView(
+  openPath?: string,
+  options?: { hostMode?: 'tab' | 'everroom' },
+): WebContentsView {
   const view = new WebContentsView({
     webPreferences: {
       preload: runtime.preloadPath,
@@ -4191,15 +4196,17 @@ export function createDocsView(openPath?: string): WebContentsView {
     return { action: 'deny' }
   })
 
-  // mode=tab: the shell's tab strip owns the traffic lights / caption buttons,
-  // so the ribbon must not reserve space for them
+  // Embedded hosts own the traffic lights / caption buttons, so the ribbon
+  // must not reserve space for them. EverRoom mode additionally disables the
+  // bundled AI surface; EverRoom supplies its own Agent panel.
+  const hostMode = options?.hostMode ?? 'tab'
   if (runtime.rendererUrl) {
     // append via URL so a dev URL that already carries query params stays valid
     const devUrl = new URL(runtime.rendererUrl)
-    devUrl.searchParams.set('mode', 'tab')
+    devUrl.searchParams.set('mode', hostMode)
     void view.webContents.loadURL(devUrl.toString())
   } else {
-    void view.webContents.loadFile(runtime.rendererFile, { query: { mode: 'tab' } })
+    void view.webContents.loadFile(runtime.rendererFile, { query: { mode: hostMode } })
   }
   // view.webContents becomes undefined after destroy, so grab the id beforehand
   const wcId = view.webContents.id
@@ -4249,11 +4256,11 @@ export function startDocsStandalone(): void {
     mainWindow?.focus()
   })
 
-  registerAiIpc()
   registerProjectIpc()
   registerDocsIpc()
 
   app.whenReady().then(async () => {
+    await registerAiIpc()
     setUiLang(normalizeLang(process.env.GENOFFICE_LANG ?? app.getLocale()))
     // packaged builds get the Dock icon from icon.icns; dev shows Electron's default
     if (isDev && process.platform === 'darwin') {

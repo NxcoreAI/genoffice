@@ -19,6 +19,8 @@ function applyTheme(theme: UiTheme): void {
 }
 
 async function bootstrap(): Promise<void> {
+  const hostMode = new URLSearchParams(window.location.search).get('mode')
+  if (hostMode) document.documentElement.dataset.hostMode = hostMode
   let lang: Lang = 'zh'
   let theme: UiTheme = 'system'
   try {
