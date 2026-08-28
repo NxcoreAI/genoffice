@@ -4429,7 +4429,10 @@ function armVibrancy(view: WebContentsView): void {
 }
 
 /** Tab version of createSlidesWindow: same runtime/IPC, hosted in the shell's WebContentsView */
-export function createSlidesView(openPath?: string | null): WebContentsView {
+export function createSlidesView(
+  openPath?: string | null,
+  options?: { readonly?: boolean },
+): WebContentsView {
   const view = new WebContentsView({
     webPreferences: {
       preload: runtime.preloadPath,
@@ -4449,9 +4452,12 @@ export function createSlidesView(openPath?: string | null): WebContentsView {
     // append via URL so a dev URL that already carries query params stays valid
     const devUrl = new URL(runtime.rendererDevUrl)
     devUrl.searchParams.set('mode', 'tab')
+    if (options?.readonly) devUrl.searchParams.set('readonly', '1')
     void view.webContents.loadURL(devUrl.toString())
   } else if (runtime.rendererFilePath)
-    void view.webContents.loadFile(runtime.rendererFilePath, { query: { mode: 'tab' } })
+    void view.webContents.loadFile(runtime.rendererFilePath, {
+      query: options?.readonly ? { mode: 'tab', readonly: '1' } : { mode: 'tab' },
+    })
   return view
 }
 

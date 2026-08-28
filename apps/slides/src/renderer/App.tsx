@@ -278,6 +278,11 @@ export function App() {
   // EverRoom embed: no GenOffice AI dock, no AI settings boot load, no stage
   // AI bar. The dock reservation also disappears from the layout math.
   const everroomEmbed = __GENOFFICE_EMBED_ONLY__
+  // Read-only embed (host passes readonly=1): open straight into the reading
+  // view and never leave it — the editor stays unmounted and the ribbon hidden,
+  // so the deck is view-only like a PDF.
+  const embedReadonly = everroomEmbed
+    && new URLSearchParams(window.location.search).get('readonly') === '1'
   const [slides, setSlides] = useState<RenderSlide[]>([])
   // Layouts may reference Office-private fonts (resolved in main); register them as FontFaces
   useEffect(() => {
@@ -456,7 +461,7 @@ export function App() {
   const stageWrapRef = useRef<HTMLDivElement | null>(null)
   const [stageViewportSize, setStageViewportSize] = useState({ w: 0, h: 0 })
   // ── View tab: view mode + display toggles ─────────────────────────────
-  const [viewMode, setViewMode] = useState<SlidesViewMode>('normal')
+  const [viewMode, setViewMode] = useState<SlidesViewMode>(embedReadonly ? 'reading' : 'normal')
   // Follow slide changes made outside the list (arrow keys, canvas paging); viewMode/showThumbs
   // re-run it because the list remounts at scroll 0 when the normal view returns
   useEffect(() => {
@@ -1860,6 +1865,8 @@ export function App() {
     if (viewMode !== 'reading') return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // A read-only embed has no editor view to go back to — Esc just closes nothing
+        if (embedReadonly) return
         e.preventDefault()
         setViewMode('normal')
       } else if (
@@ -1878,7 +1885,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [viewMode, slides.length])
+  }, [viewMode, slides.length, embedReadonly])
 
   // Reading view follows window size
   const [winSize, setWinSize] = useState({ w: window.innerWidth, h: window.innerHeight })
@@ -2770,6 +2777,8 @@ export function App() {
   return (
     <div className="app">
       <ToastHost />
+      {/* Read-only embed: the reading view is the whole UI — no editing ribbon */}
+      {!embedReadonly && (
       <Ribbon
         hasDoc={!!slide}
         deckEmpty={deckEmpty}
@@ -3093,6 +3102,7 @@ export function App() {
         onFlip={(axis) => void flipSelected(axis)}
         canDistribute={selectedIds.length >= 3}
       />
+      )}
 
       <div className="app-main">
         {slide && !everroomEmbed && viewMode !== 'reading' && viewMode !== 'sorter' && (
@@ -3217,9 +3227,11 @@ export function App() {
                       >
                         {t('appReadingNext')}
                       </button>
-                      <button className="reading-exit" onClick={() => onViewMode('normal')}>
-                        {t('appReadingExit')}
-                      </button>
+                      {!embedReadonly && (
+                        <button className="reading-exit" onClick={() => onViewMode('normal')}>
+                          {t('appReadingExit')}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )

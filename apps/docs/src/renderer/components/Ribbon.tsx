@@ -129,6 +129,10 @@ import {
   IconRepeatHeader,
   IconTableProperties,
 } from './icons'
+
+/// EverRoom embed build: the Genspark AI group is folded out (no AI backend).
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 interface RibbonProps {
   /** App keyboard shortcuts reuse ribbon closures through here (font-size stepping keeps its coalescing) */
   actionsRef?: React.MutableRefObject<{
@@ -2737,7 +2741,9 @@ function RibbonInner({
           </div>
         ) : tab === 'home' ? (
           <>
-            {/* ---- Genspark AI (first slot: entry + one-click AI actions) ---- */}
+            {/* ---- Genspark AI (first slot: entry + one-click AI actions);
+                 folded out of EverRoom embed builds (no AI backend) ---- */}
+            {!__GENOFFICE_EMBED_ONLY__ && (
             <div className="ribbon-group">
               <div className="ribbon-group-items">
                 <button
@@ -2850,6 +2856,7 @@ function RibbonInner({
               </div>
               <div className="ribbon-group-label">Genspark AI</div>
             </div>
+            )}
 
             <div className="ribbon-sep" />
 

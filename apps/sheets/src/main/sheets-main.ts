@@ -1775,7 +1775,9 @@ export async function createSheetsWindow(
 }
 
 /** tab-mode equivalent of createSheetsWindow: same runtime/IPC wiring, no BrowserWindow of its own. */
-export function createSheetsView(options: { includeAiHandlers?: boolean } = {}): WebContentsView {
+export function createSheetsView(
+  options: { includeAiHandlers?: boolean; readonly?: boolean } = {},
+): WebContentsView {
   const client = sidecar ?? new XlsxSidecarClient(resolveSidecarPath())
   sidecar = client
   client.start()
@@ -1804,9 +1806,12 @@ export function createSheetsView(options: { includeAiHandlers?: boolean } = {}):
     // append via URL so a dev URL that already carries query params stays valid
     const devUrl = new URL(runtime.rendererUrl)
     devUrl.searchParams.set('mode', 'tab')
+    if (options.readonly) devUrl.searchParams.set('readonly', '1')
     void view.webContents.loadURL(devUrl.toString())
   } else {
-    void view.webContents.loadFile(runtime.rendererFile, { query: { mode: 'tab' } })
+    void view.webContents.loadFile(runtime.rendererFile, {
+      query: options.readonly ? { mode: 'tab', readonly: '1' } : { mode: 'tab' },
+    })
   }
   return view
 }

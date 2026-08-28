@@ -1626,6 +1626,12 @@ button.check-item:hover {
   grid-template-columns: 34px minmax(0, 1fr);
 }
 
+/* EverRoom embed: no AI panel at all (not even the collapsed rail) — the
+ * sheet takes the full width */
+.app-shell.copilot-off .sheet-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .spreadsheet {
   min-width: 0;
   min-height: 0;

@@ -4185,7 +4185,7 @@ async function performDocsClose(
 
 export function createDocsView(
   openPath?: string,
-  options?: { hostMode?: 'tab' | 'everroom' },
+  options?: { hostMode?: 'tab' | 'everroom'; readonly?: boolean },
 ): WebContentsView {
   const view = new WebContentsView({
     webPreferences: {
@@ -4213,9 +4213,12 @@ export function createDocsView(
     // append via URL so a dev URL that already carries query params stays valid
     const devUrl = new URL(runtime.rendererUrl)
     devUrl.searchParams.set('mode', hostMode)
+    if (options?.readonly) devUrl.searchParams.set('readonly', '1')
     void view.webContents.loadURL(devUrl.toString())
   } else {
-    void view.webContents.loadFile(runtime.rendererFile, { query: { mode: hostMode } })
+    void view.webContents.loadFile(runtime.rendererFile, {
+      query: options?.readonly ? { mode: hostMode, readonly: '1' } : { mode: hostMode },
+    })
   }
   // view.webContents becomes undefined after destroy, so grab the id beforehand
   const wcId = view.webContents.id

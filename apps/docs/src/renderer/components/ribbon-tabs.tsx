@@ -1054,6 +1054,10 @@ interface ViewTabProps {
   onPagePreview: () => void
 }
 
+/// EverRoom embed build: the View-tab "AI Panel" toggle is folded out (the
+/// AI dock it toggles doesn't exist in embeds).
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 export function ViewTab({
   hasDoc,
   filePath,
@@ -1079,6 +1083,8 @@ export function ViewTab({
   onPagePreview,
 }: ViewTabProps) {
   const { t } = useI18n()
+  // EverRoom embed: the AI dock this toggles is folded out of embed builds.
+  const embedOnly = __GENOFFICE_EMBED_ONLY__
   const [winMenuOpen, setWinMenuOpen] = useState(false)
   const [windows, setWindows] = useState<DocsTabInfo[]>([])
   /** wrap holding both the switch-tabs trigger and its menu */
@@ -1228,6 +1234,7 @@ export function ViewTab({
 
       <div className="ribbon-group">
         <div className="ribbon-group-items">
+          {!embedOnly && (
           <button
             className={`rb-big ai-entry ${showAi ? 'active' : ''}`}
             data-tip={t('ribbonAiPanelTip')}
@@ -1238,6 +1245,7 @@ export function ViewTab({
             </span>
             <span>{t('ribbonAiPanel')}</span>
           </button>
+          )}
           <button
             className={`rb-big ${darkCanvas ? 'active' : ''}`}
             data-tip={t('ribbonDarkModeTip')}

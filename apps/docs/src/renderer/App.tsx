@@ -411,6 +411,10 @@ const AiPanel = !__GENOFFICE_EMBED_ONLY__ ? lazy(async () => {
 export function App() {
   const everroomEmbed = __GENOFFICE_EMBED_ONLY__
     || new URLSearchParams(window.location.search).get('mode') === 'everroom'
+  // Read-only embed (host passes readonly=1): the body is view-only, like a
+  // document opened under a write lock — isProtected carries it everywhere.
+  const embedReadonly = everroomEmbed
+    && new URLSearchParams(window.location.search).get('readonly') === '1'
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -911,7 +915,8 @@ export function App() {
 
   useEffect(() => {
     void window.desktop.getRecentFiles().then(setRecent)
-    void window.desktop.getAiSettings().then(setSettings)
+    // Embed closure registers no AI settings handler — skip the call there.
+    if (!everroomEmbed) void window.desktop.getAiSettings().then(setSettings)
   }, [])
 
   useEffect(() => {
@@ -939,12 +944,13 @@ export function App() {
   const editRestriction = protection?.enforced ? protection.edit : null
   /** modify password set but not entered: honor-system write lock, document read-only */
   const writeLocked = !!writeProtection?.hash && !modifyUnlocked
-  /** body is read-only (readOnly/forms/comments restriction or write lock) */
+  /** body is read-only (readOnly/forms/comments restriction, write lock, or host embed) */
   const isProtected =
     writeLocked ||
     editRestriction === 'readOnly' ||
     editRestriction === 'forms' ||
-    editRestriction === 'comments'
+    editRestriction === 'comments' ||
+    embedReadonly
   /** comments restriction: body read-only but adding comments stays allowed */
   const commentsAllowed = !writeLocked && editRestriction === 'comments'
   /** trackedChanges restriction: editing allowed, revision recording forced on */
@@ -3819,7 +3825,10 @@ export function App() {
     onGotoRevision: (dir: 1 | -1) => {
       if (editor) gotoRevision(editor, dir)
     },
-    onProtectDoc: () => setShowProtectDialog(true),
+    onProtectDoc: () => {
+      // A read-only embed must not rewrite protection state (that would dirty the file)
+      if (!embedReadonly) setShowProtectDialog(true)
+    },
     onCompare: () => void compareWithFile(),
     onViewMode: setViewMode,
     onReadMode: setReadMode,

@@ -45,6 +45,11 @@ import type { ConsolidateConfig } from './consolidate'
 import { HeaderFooterDialog, type HeaderFooterResult } from './HeaderFooterDialog'
 import type { HeaderFooterParts } from './edit-journal'
 
+/// EverRoom embed build: every Genspark AI surface (ribbon group, docked chat
+/// panel, selection-ask popup) is folded out — the embed closure ships no AI
+/// backend to talk to.
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 // No File tab: file commands live in the macOS
 // application menu (File → Open/Save/Save As) and the toolbar icons.
 const ribbonTabs = ['Home', 'Insert', 'Page Layout', 'Formulas', 'Data', 'Review', 'View'] as const
@@ -360,9 +365,10 @@ export function ExcelShell({
 }: ExcelShellProps): React.JSX.Element {
   const { t } = useI18n()
   const [activeTab, setActiveTab] = useState<RibbonTab>('Home')
-  // Persisted so a closed AI panel stays closed on next launch (docs/slides parity)
+  // Persisted so a closed AI panel stays closed on next launch (docs/slides parity).
+  // EverRoom embed: always closed — there is no AI backend behind it.
   const [isCopilotOpen, setIsCopilotOpen] = useState(
-    () => localStorage.getItem('ai-sheets-show-ai') !== '0',
+    () => !__GENOFFICE_EMBED_ONLY__ && localStorage.getItem('ai-sheets-show-ai') !== '0',
   )
   useEffect(() => {
     localStorage.setItem('ai-sheets-show-ai', isCopilotOpen ? '1' : '0')
@@ -455,7 +461,11 @@ export function ExcelShell({
   const saveAsTitle = `${t('appSaveAs')} (${platformShortcuts('⇧⌘S')})`
 
   return (
-    <main className={`app-shell ${isCopilotOpen ? '' : 'copilot-collapsed'}`}>
+    <main
+      className={`app-shell ${isCopilotOpen ? '' : 'copilot-collapsed'}${
+        __GENOFFICE_EMBED_ONLY__ ? ' copilot-off' : ''
+      }`}
+    >
       <header className="excel-header">
         <nav
           className={`ribbon-tabs ${IN_TAB ? '' : IS_MAC ? 'ribbon-tabs-mac' : 'ribbon-tabs-win'}`}
@@ -587,8 +597,10 @@ export function ExcelShell({
         />
       </header>
 
-      {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
+      {/* AI panel docks on the left, full height under the ribbon (unified with docs);
+          folded out of EverRoom embed builds (collapsed rail included) */}
       <div className="sheet-body">
+        {!__GENOFFICE_EMBED_ONLY__ && (
         <AiChatPanel
           isOpen={isCopilotOpen}
           hasContent={sheetHasContent}
@@ -616,6 +628,7 @@ export function ExcelShell({
           onExpand={() => setIsCopilotOpen(true)}
           onCollapse={() => setIsCopilotOpen(false)}
         />
+        )}
         <div className="sheet-main">
           {/* Excel's formula-bar row, Name Box only for now (fx bar TBD). */}
           <div className="name-box-bar">
@@ -632,7 +645,7 @@ export function ExcelShell({
           <section className="workbook-area">
             <div id="univer-container" className="spreadsheet" />
           </section>
-          {aiSelectionAskAnchor && aiScopeRange && !aiBusy && (
+          {!__GENOFFICE_EMBED_ONLY__ && aiSelectionAskAnchor && aiScopeRange && !aiBusy && (
             <AiSelectionAsk
               anchor={aiSelectionAskAnchor}
               range={aiScopeRange}
@@ -2465,6 +2478,8 @@ function Ribbon({
     : [...fontSizes, echoSize].sort((a, b) => a - b)
   return (
     <div className="ribbon">
+      {/* Genspark AI group is folded out of EverRoom embed builds (no AI backend) */}
+      {!__GENOFFICE_EMBED_ONLY__ && (
       <RibbonGroup label={t('appGroupAiAssistant')}>
         <button
           className={`ribbon-tool as-button large ai-entry ${aiOpen ? 'active' : ''}`}
@@ -2536,6 +2551,7 @@ function Ribbon({
           </span>
         </button>
       </RibbonGroup>
+      )}
       <RibbonGroup label={t('appGroupClipboard')}>
         <button
           className="ribbon-tool as-button large"

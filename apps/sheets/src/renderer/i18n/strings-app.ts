@@ -5,6 +5,7 @@ export const appStrings = defineStrings({
   zh: {
     appFormulaBarShown: '公式栏已显示。',
     appFormulaBarHidden: '公式栏已隐藏。',
+    appReadOnlyPreview: '只读预览——此工作簿在 EverRoom 中仅可查看。',
     appThemesTitle: '选择文档主题（颜色与字体）',
     appThemeColorsTitle: '更改主题颜色',
     appThemeFontsTitle: '更改主题字体',
@@ -1259,6 +1260,7 @@ export const appStrings = defineStrings({
   en: {
     appFormulaBarShown: 'Formula bar shown.',
     appFormulaBarHidden: 'Formula bar hidden.',
+    appReadOnlyPreview: 'Read-only preview — this workbook is view-only in EverRoom.',
     appThemesTitle: 'Pick a document theme (colors and fonts)',
     appThemeColorsTitle: 'Change the theme colors',
     appThemeFontsTitle: 'Change the theme fonts',
@@ -2550,6 +2552,7 @@ export const appStrings = defineStrings({
   ja: {
     appFormulaBarShown: '数式バーを表示しました。',
     appFormulaBarHidden: '数式バーを非表示にしました。',
+    appReadOnlyPreview: '読み取り専用プレビュー——このブックは EverRoom では閲覧のみです。',
     appThemesTitle: 'ドキュメントのテーマを選択（配色とフォント）',
     appThemeColorsTitle: 'テーマの配色を変更',
     appThemeFontsTitle: 'テーマのフォントを変更',
@@ -3909,6 +3912,7 @@ export const appStrings = defineStrings({
   ko: {
     appFormulaBarShown: '수식 입력줄을 표시했습니다.',
     appFormulaBarHidden: '수식 입력줄을 숨겼습니다.',
+    appReadOnlyPreview: '읽기 전용 미리보기——이 통합 문서는 EverRoom에서 보기 전용입니다.',
     appThemesTitle: '문서 테마 선택(색 및 글꼴)',
     appThemeColorsTitle: '테마 색 변경',
     appThemeFontsTitle: '테마 글꼴 변경',
@@ -5237,6 +5241,7 @@ export const appStrings = defineStrings({
   fr: {
     appFormulaBarShown: 'Barre de formule affichée.',
     appFormulaBarHidden: 'Barre de formule masquée.',
+    appReadOnlyPreview: 'Aperçu en lecture seule — ce classeur est en consultation seule dans EverRoom.',
     appThemesTitle: 'Choisir un thème de document (couleurs et polices)',
     appThemeColorsTitle: 'Modifier les couleurs du thème',
     appThemeFontsTitle: 'Modifier les polices du thème',
@@ -6606,6 +6611,7 @@ export const appStrings = defineStrings({
   de: {
     appFormulaBarShown: 'Bearbeitungsleiste eingeblendet.',
     appFormulaBarHidden: 'Bearbeitungsleiste ausgeblendet.',
+    appReadOnlyPreview: 'Schreibgeschützte Vorschau — diese Arbeitsmappe ist in EverRoom nur lesbar.',
     appThemesTitle: 'Dokumentdesign auswählen (Farben und Schriftarten)',
     appThemeColorsTitle: 'Designfarben ändern',
     appThemeFontsTitle: 'Designschriftarten ändern',
@@ -7961,6 +7967,7 @@ export const appStrings = defineStrings({
   es: {
     appFormulaBarShown: 'Barra de fórmulas mostrada.',
     appFormulaBarHidden: 'Barra de fórmulas oculta.',
+    appReadOnlyPreview: 'Vista previa de solo lectura: este libro solo se puede consultar en EverRoom.',
     appThemesTitle: 'Elegir un tema del documento (colores y fuentes)',
     appThemeColorsTitle: 'Cambiar los colores del tema',
     appThemeFontsTitle: 'Cambiar las fuentes del tema',
@@ -9305,6 +9312,7 @@ export const appStrings = defineStrings({
   th: {
     appFormulaBarShown: 'แสดงแถบสูตรแล้ว',
     appFormulaBarHidden: 'ซ่อนแถบสูตรแล้ว',
+    appReadOnlyPreview: 'ตัวอย่างแบบอ่านอย่างเดียว — เวิร์กบุ๊กนี้เปิดดูอย่างเดียวใน EverRoom',
     appThemesTitle: 'เลือกธีมของเอกสาร (สีและแบบอักษร)',
     appThemeColorsTitle: 'เปลี่ยนสีของธีม',
     appThemeFontsTitle: 'เปลี่ยนแบบอักษรของธีม',
@@ -10581,6 +10589,7 @@ export const appStrings = defineStrings({
   id: {
     appFormulaBarShown: 'Bilah rumus ditampilkan.',
     appFormulaBarHidden: 'Bilah rumus disembunyikan.',
+    appReadOnlyPreview: 'Pratinjau hanya-baca — buku kerja ini hanya dapat dilihat di EverRoom.',
     appThemesTitle: 'Pilih tema dokumen (warna dan font)',
     appThemeColorsTitle: 'Ubah warna tema',
     appThemeFontsTitle: 'Ubah font tema',
@@ -11887,6 +11896,7 @@ export const appStrings = defineStrings({
   ru: {
     appFormulaBarShown: 'Строка формул показана.',
     appFormulaBarHidden: 'Строка формул скрыта.',
+    appReadOnlyPreview: 'Просмотр без изменений — эту книгу в EverRoom можно только просматривать.',
     appThemesTitle: 'Выберите тему документа (цвета и шрифты)',
     appThemeColorsTitle: 'Изменить цвета темы',
     appThemeFontsTitle: 'Изменить шрифты темы',
@@ -13214,6 +13224,7 @@ export const appStrings = defineStrings({
   ar: {
     appFormulaBarShown: 'تم إظهار شريط الصيغة.',
     appFormulaBarHidden: 'تم إخفاء شريط الصيغة.',
+    appReadOnlyPreview: 'معاينة للقراءة فقط — هذا المصنف متاح للعرض فقط في EverRoom.',
     appThemesTitle: 'اختيار نسق المستند (الألوان والخطوط)',
     appThemeColorsTitle: 'تغيير ألوان النسق',
     appThemeFontsTitle: 'تغيير خطوط النسق',
@@ -14490,6 +14501,7 @@ export const appStrings = defineStrings({
   pt: {
     appFormulaBarShown: 'Barra de fórmulas exibida.',
     appFormulaBarHidden: 'Barra de fórmulas oculta.',
+    appReadOnlyPreview: 'Visualização somente leitura — esta pasta de trabalho é apenas de consulta no EverRoom.',
     appThemesTitle: 'Escolher um tema do documento (cores e fontes)',
     appThemeColorsTitle: 'Alterar as cores do tema',
     appThemeFontsTitle: 'Alterar as fontes do tema',
@@ -15831,6 +15843,7 @@ export const appStrings = defineStrings({
   it: {
     appFormulaBarShown: 'Barra della formula mostrata.',
     appFormulaBarHidden: 'Barra della formula nascosta.',
+    appReadOnlyPreview: 'Anteprima in sola lettura — questa cartella di lavoro è solo visualizzabile in EverRoom.',
     appThemesTitle: 'Scegli un tema del documento (colori e tipi di carattere)',
     appThemeColorsTitle: 'Cambia i colori del tema',
     appThemeFontsTitle: 'Cambia i tipi di carattere del tema',
@@ -17173,6 +17186,7 @@ export const appStrings = defineStrings({
   pl: {
     appFormulaBarShown: 'Pasek formuły widoczny.',
     appFormulaBarHidden: 'Pasek formuły ukryty.',
+    appReadOnlyPreview: 'Podgląd tylko do odczytu — ten skoroszyt w EverRoom można tylko przeglądać.',
     appThemesTitle: 'Wybierz motyw dokumentu (kolory i czcionki)',
     appThemeColorsTitle: 'Zmień kolory motywu',
     appThemeFontsTitle: 'Zmień czcionki motywu',
@@ -18508,6 +18522,7 @@ export const appStrings = defineStrings({
   nl: {
     appFormulaBarShown: 'Formulebalk weergegeven.',
     appFormulaBarHidden: 'Formulebalk verborgen.',
+    appReadOnlyPreview: 'Alleen-lezen voorvertoning — deze werkmap is in EverRoom alleen te bekijken.',
     appThemesTitle: 'Kies een documentthema (kleuren en lettertypen)',
     appThemeColorsTitle: 'Themakleuren wijzigen',
     appThemeFontsTitle: 'Themalettertypen wijzigen',
@@ -19853,6 +19868,7 @@ export const appStrings = defineStrings({
   ms: {
     appFormulaBarShown: 'Bar formula dipaparkan.',
     appFormulaBarHidden: 'Bar formula disembunyikan.',
+    appReadOnlyPreview: 'Pratonton baca-sahaja — buku kerja ini untuk dilihat sahaja dalam EverRoom.',
     appThemesTitle: 'Pilih tema dokumen (warna dan fon)',
     appThemeColorsTitle: 'Tukar warna tema',
     appThemeFontsTitle: 'Tukar fon tema',
@@ -21160,6 +21176,7 @@ export const appStrings = defineStrings({
   he: {
     appFormulaBarShown: 'שורת הנוסחאות מוצגת.',
     appFormulaBarHidden: 'שורת הנוסחאות הוסתרה.',
+    appReadOnlyPreview: 'תצוגה מקדימה לקריאה בלבד — חוברת זו לצפייה בלבד ב-EverRoom.',
     appThemesTitle: 'בחירת ערכת נושא למסמך (צבעים וגופנים)',
     appThemeColorsTitle: 'שינוי צבעי ערכת הנושא',
     appThemeFontsTitle: 'שינוי גופני ערכת הנושא',
@@ -22417,6 +22434,7 @@ export const appStrings = defineStrings({
   hi: {
     appFormulaBarShown: 'सूत्र पट्टी दिखाई गई।',
     appFormulaBarHidden: 'सूत्र पट्टी छिपाई गई।',
+    appReadOnlyPreview: 'सिर्फ़-पढ़ने-योग्य पूर्वावलोकन — EverRoom में यह कार्यपुस्तिका केवल देखी जा सकती है।',
     appThemesTitle: 'दस्तावेज़ थीम चुनें (रंग और फ़ॉन्ट)',
     appThemeColorsTitle: 'थीम के रंग बदलें',
     appThemeFontsTitle: 'थीम के फ़ॉन्ट बदलें',
@@ -23723,6 +23741,7 @@ export const appStrings = defineStrings({
   'zh-TW': {
     appFormulaBarShown: '公式列已顯示。',
     appFormulaBarHidden: '公式列已隱藏。',
+    appReadOnlyPreview: '唯讀預覽——此活頁簿在 EverRoom 中僅可檢視。',
     appThemesTitle: '選擇文件佈景主題（色彩與字型）',
     appThemeColorsTitle: '變更佈景主題色彩',
     appThemeFontsTitle: '變更佈景主題字型',

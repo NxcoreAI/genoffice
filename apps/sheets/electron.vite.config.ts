@@ -47,5 +47,10 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react()],
+    define: {
+      // EverRoom embed build: folds the Genspark AI surfaces out of the renderer
+      // (the embed closure ships no AI backend to talk to).
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(process.env.GENOFFICE_EMBED_ONLY === '1'),
+    },
   },
 })

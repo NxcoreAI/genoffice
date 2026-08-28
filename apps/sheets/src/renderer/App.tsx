@@ -75,6 +75,7 @@ import {
   BooleanNumber,
   InterceptorEffectEnum,
   isRealNum,
+  IConfigService,
   IUndoRedoService,
   LocaleType,
   mergeLocales,
@@ -297,6 +298,7 @@ import { installMergeBorderFix } from './merge-border-fix'
 import { installRichTextBidiFix } from './rich-text-bidi-fix'
 import { installRtlTextDirectionFix } from './rtl-text-fix'
 import { installRtlGridMirror } from './rtl-grid-mirror'
+import { installReadonlyVeto } from './readonly-veto'
 import { installMultiRowAutofit } from './autofit-multi-row'
 import { installCopyMaterialize } from './copy-materialize'
 import { applyUniverLocale } from './univer-locales'
@@ -402,6 +404,28 @@ import { ChartFormatPane, SelectDataDialog } from './ChartPanels'
 // Source sheet id of an in-flight copy-sheet command; the next insert-sheet
 // mutation is that copy and must journal as a duplicate, not a blank add.
 let pendingCopySource: string | undefined
+
+/// Read-only embed (host passes readonly=1): the workbook is view-only.
+/// Seals the edit entry + vetoes direct-write commands at Univer setup, and
+/// gates the ribbon/formula bar below.
+const READONLY_EMBED = new URLSearchParams(window.location.search).get('readonly') === '1'
+
+/// EverRoom embed build: no AI backend ships — skip its startup IPC (the
+/// calls would reject with "No handler registered").
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
+/// Ribbon commands that only change how the workbook is displayed — the only
+/// ones a read-only embed still honors.
+const READONLY_VIEW_COMMANDS: ReadonlySet<string> = new Set([
+  'zoom-in',
+  'zoom-out',
+  'zoom-reset',
+  'zoom-to-selection',
+  'toggle-headings',
+  'toggle-gridlines',
+  'toggle-show-formulas',
+  'find',
+])
 
 export function App(): React.JSX.Element {
   const adapterRef = useRef(new InMemoryWorkbookAdapter(initialSnapshot))
@@ -755,6 +779,8 @@ export function App(): React.JSX.Element {
   /** gsk login state for the cloud-tools gate (refreshed on mount and window focus) */
   const gskLoggedInRef = useRef(false)
   useEffect(() => {
+    // Embed closure registers no gsk handler — skip the poll there.
+    if (__GENOFFICE_EMBED_ONLY__) return
     let alive = true
     const refresh = () => {
       void window.desktopApi
@@ -894,7 +920,7 @@ export function App(): React.JSX.Element {
   // ── project-store: resolve chatId and load history when a workbook opens ──
   useEffect(() => {
     const api = (window as Window & { projectApi?: typeof window.projectApi }).projectApi
-    if (!api) return
+    if (!api || __GENOFFICE_EMBED_ONLY__) return
     // Reset (new workbook or new session)
     chatRefIdsRef.current = null
     setHistoricChat([])
@@ -1350,6 +1376,7 @@ export function App(): React.JSX.Element {
   }
 
   useEffect(() => {
+    if (__GENOFFICE_EMBED_ONLY__) return
     void window.desktopApi.getAiSettings().then(setAiSettingsState)
   }, [])
 
@@ -1438,6 +1465,16 @@ export function App(): React.JSX.Element {
     })
     loadSnapshotIntoUniver(runtime, initialSnapshot, 'new-workbook', 'Untitled')
     univerRef.current = runtime
+    // Read-only embed: seal the edit entry (Univer's official disableEdit —
+    // no cell editor mount, fx input disabled) and veto the direct-write
+    // commands the config alone leaves open (Delete, context menu, paste).
+    if (READONLY_EMBED) {
+      runtime.univer
+        .__getInjector()
+        .get(IConfigService)
+        .setConfig('sheets-ui.config', { disableEdit: true })
+      installReadonlyVeto(runtime, true)
+    }
     // find-bar reveals share scrollToCell's broken freeze offset (r135)
     const findRevealDispose = installFindRevealFix(runtime)
     // Load-time wrap-row measures queue until Univer's auto-height
@@ -3860,6 +3897,14 @@ export function App(): React.JSX.Element {
       setMessage(t('appRecalculated'))
       return
     }
+    // Read-only embed: pure view commands stay (the status-bar zoom slider
+    // sends `zoom:<percent>`), everything that edits the workbook (formats,
+    // structure, data tools, freeze, find-and-replace) just explains itself
+    // instead of opening its dialog.
+    if (READONLY_EMBED && !READONLY_VIEW_COMMANDS.has(command) && !command.startsWith('zoom:')) {
+      setMessage(t('appReadOnlyPreview'))
+      return
+    }
     handleRibbonCommandImpl(ribbonContext(), command)
   }
 
@@ -4576,7 +4621,11 @@ export function App(): React.JSX.Element {
         activeCellA1={activeCellA1}
         onGoToReference={(ref) => goToReferenceImpl(dataToolsContext(), ref)}
         onListDefinedNames={() => listDefinedNamesImpl(dataToolsContext())}
-        onApplyFormula={(formula) => handleApplyFormulaImpl(dataToolsContext(), formula)}
+        onApplyFormula={(formula) =>
+          READONLY_EMBED
+            ? t('appReadOnlyPreview')
+            : handleApplyFormulaImpl(dataToolsContext(), formula)
+        }
         onCreateSubtotal={(config) => handleCreateSubtotalImpl(dataToolsContext(), config)}
         onCreateConsolidate={(config) => handleCreateConsolidateImpl(dataToolsContext(), config)}
         onGetConsolidateDefault={() => consolidateDefaultReferenceImpl(dataToolsContext())}
