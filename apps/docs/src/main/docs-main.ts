@@ -110,7 +110,6 @@ import {
   snapshotDocPassword,
 } from './docx-encryption'
 import { isExternallyModified, type DiskFileState } from './external-change'
-import { initDocsAutoUpdater } from './updater'
 
 /**
  * Docs main-process logic as an embeddable module: no top-level side effects.
@@ -4254,7 +4253,7 @@ export function startDocsStandalone(): void {
   registerProjectIpc()
   registerDocsIpc()
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     setUiLang(normalizeLang(process.env.GENOFFICE_LANG ?? app.getLocale()))
     // packaged builds get the Dock icon from icon.icns; dev shows Electron's default
     if (isDev && process.platform === 'darwin') {
@@ -4262,6 +4261,7 @@ export function startDocsStandalone(): void {
     }
     buildDocsMenu()
     createDocsWindow()
+    const { initDocsAutoUpdater } = await import('./updater')
     initDocsAutoUpdater(() => mainWindow)
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createDocsWindow()
