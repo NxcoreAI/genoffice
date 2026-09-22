@@ -11,6 +11,7 @@ export {
   registerSlidesIpc,
   requestSlidesClose,
   setActiveSlidesWebContents,
+  setSlidesFileSavedHook,
   setSlidesShellWindow,
   slidesIsDirty,
 } from './slides-main'

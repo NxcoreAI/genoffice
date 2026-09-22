@@ -392,6 +392,12 @@ export function setSlidesOpenedHook(fn: ((wc: WebContents, path: string) => void
   slidesOpenedHook = fn
 }
 
+/** Host hook: a plain save (or Save As) landed on disk — embed hosts use it to sync versions. */
+let slidesFileSavedHook: ((wc: WebContents, path: string) => void) | null = null
+export function setSlidesFileSavedHook(fn: ((wc: WebContents, path: string) => void) | null): void {
+  slidesFileSavedHook = fn
+}
+
 /** Detached editor windows (createSlidesWindow), keyed by webContents id — their titles are owned here */
 const standaloneWindows = new Map<number, BrowserWindow>()
 
@@ -4031,6 +4037,7 @@ export function registerSlidesIpc(): void {
       // but the renderer still expects the render tree in the response.
       commitSaved(session.opened)
       session.metaDirty = false
+      slidesFileSavedHook?.(e.sender, session.path)
       return {
         ok: true,
         path: session.path,
@@ -4060,6 +4067,7 @@ export function registerSlidesIpc(): void {
       syncAttachedPaths(session, r.filePath)
       commitSaved(session.opened)
       session.metaDirty = false
+      slidesFileSavedHook?.(e.sender, r.filePath)
       return {
         ok: true,
         path: r.filePath,

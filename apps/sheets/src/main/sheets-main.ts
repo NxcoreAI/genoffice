@@ -1503,6 +1503,14 @@ export function setSheetsWorkbookOpenedHook(
   workbookOpenedHook = fn
 }
 
+/** Host hook: a save landed on disk (the xlsx target, not the CSV source) — embed hosts use it to sync versions. */
+let fileSavedHook: ((wc: WebContents, path: string) => void) | null = null
+export function setSheetsFileSavedHook(
+  fn: ((wc: WebContents, path: string) => void) | null,
+): void {
+  fileSavedHook = fn
+}
+
 /** forward an application-menu File command into the sheets renderer */
 export function sendSheetsMenuAction(
   action: 'open' | 'save' | 'save-as' | 'export-pdf' | 'export-csv' | 'undo' | 'redo',
@@ -2600,6 +2608,7 @@ export function registerSheetsIpc(): void {
       event.sender,
       (csvInPlace ? session.csvSourcePath : undefined) ?? targetPath,
     )
+    fileSavedHook?.(event.sender, targetPath)
     // The file on disk now carries these edits
     clearWorkbookRecovery(targetPath)
     if (session.suggestSaveAs !== undefined) clearWorkbookRecovery(session.suggestSaveAs)
