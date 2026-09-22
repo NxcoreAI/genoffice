@@ -398,6 +398,24 @@ export function setSlidesFileSavedHook(fn: ((wc: WebContents, path: string) => v
   slidesFileSavedHook = fn
 }
 
+/**
+ * Persist the session to disk and settle autosave/recovery/dirty state (the
+ * shared body of slides:save and the embed host's silent agent save). Throws
+ * on write failure, leaving the in-memory dirty flags untouched.
+ */
+export async function persistSession(session: Session, wc: WebContents): Promise<void> {
+  await savePptxToFile(session.opened, session.path)
+  autosaveBackoff.delete(session.path)
+  void rm(autosavePathFor(session.path), { force: true }).catch(() => {})
+  dropUntitledRecovery(wc.id)
+  // Bake the saved patches back into the in-memory model (clears dirty, syncs
+  // anchor.originalXml with disk) — a full reopen would re-read and unzip the
+  // whole package, doubling save latency on large decks.
+  commitSaved(session.opened)
+  session.metaDirty = false
+  slidesFileSavedHook?.(wc, session.path)
+}
+
 /** Detached editor windows (createSlidesWindow), keyed by webContents id — their titles are owned here */
 const standaloneWindows = new Map<number, BrowserWindow>()
 
@@ -859,7 +877,7 @@ function findEl(slide: Slide, sourceId: string): TextElement | undefined {
  * rebuilt result after this change; when the height changed, update the transform and rebuild
  * once more. Top-level elements only (group children use a different coordinate system, skip).
  */
-function applyAutofitResize(
+export function applyAutofitResize(
   session: Session,
   slideIndex: number,
   sourceId: string,
@@ -893,7 +911,7 @@ function applyAutofitResize(
  * Triggered only by text edits (resize gestures do not write: the layout cap locks the stored
  * value, and writing back during a gesture would ratchet one way); top-level elements only.
  */
-function syncAutofitScale(
+export function syncAutofitScale(
   session: Session,
   slideIndex: number,
   sourceId: string,
@@ -4027,17 +4045,7 @@ export function registerSlidesIpc(): void {
       slidesOpenedHook?.(e.sender, session.path)
     }
     try {
-      await savePptxToFile(session.opened, session.path)
-      autosaveBackoff.delete(session.path)
-      void rm(autosavePathFor(session.path), { force: true }).catch(() => {})
-      dropUntitledRecovery(e.sender.id)
-      // Bake the saved patches back into the in-memory model (clears dirty, syncs
-      // anchor.originalXml with disk) — a full reopen would re-read and unzip the
-      // whole package, doubling save latency on large decks. Element ids survive,
-      // but the renderer still expects the render tree in the response.
-      commitSaved(session.opened)
-      session.metaDirty = false
-      slidesFileSavedHook?.(e.sender, session.path)
+      await persistSession(session, e.sender)
       return {
         ok: true,
         path: session.path,
