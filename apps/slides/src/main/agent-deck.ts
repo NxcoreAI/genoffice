@@ -110,7 +110,7 @@ export async function buildAgentDeckPptx(
 
   try {
     const base = await openPptx(pages[0]!)
-    for (const one of pages.slice(1)) await mergeSlideFromPptx(base, one.bytes)
+    for (const one of pages.slice(1)) await mergeSlideFromPptx(base, one)
     for (const slide of base.deck.slides) promoteSlideBackground(slide, base.deck.size)
     return { ok: true, deck: { bytes: await savePptx(base), warnings, imageFailures } }
   } catch (err) {
