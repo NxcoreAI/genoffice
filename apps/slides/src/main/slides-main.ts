@@ -399,6 +399,29 @@ export function setSlidesFileSavedHook(fn: ((wc: WebContents, path: string) => v
 }
 
 /**
+ * Host hook: the "AI 修改" popover's send-now payload, relayed so the embed
+ * host (EverRoom) can route it to its own agent. The ids are the deck outline
+ * / edit-op id space (durableId ?? sourceId).
+ */
+export interface SlidesAgentAskOp {
+  instruction: string
+  slideIndex: number
+  targets: Array<{
+    id: string
+    desc: { type: string; text?: string; rows?: number; cols?: number }
+  }>
+}
+export type SlidesAgentAskResult = { ok: true } | { ok: false; error: string }
+let slidesAgentAskHook:
+  | ((wcId: number, op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>)
+  | null = null
+export function setSlidesAgentAskHook(
+  fn: ((wcId: number, op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>) | null,
+): void {
+  slidesAgentAskHook = fn
+}
+
+/**
  * Persist the session to disk and settle autosave/recovery/dirty state (the
  * shared body of slides:save and the embed host's silent agent save). Throws
  * on write failure, leaving the in-memory dirty flags untouched.
@@ -1621,6 +1644,26 @@ export function registerSlidesIpc(): void {
       }
     },
   )
+
+  // ── Host "AI 修改" forward (EverRoom embed): the popover's send-now payload is
+  // validated here and handed to the host hook; without a host (standalone app)
+  // the invoke answers with an error instead of hanging forever.
+  ipcMain.handle('slides:agent-ask', async (e, op: unknown): Promise<SlidesAgentAskResult> => {
+    const o = (op ?? {}) as Partial<SlidesAgentAskOp>
+    const instruction = typeof o.instruction === 'string' ? o.instruction.trim() : ''
+    const slideIndex = typeof o.slideIndex === 'number' ? Math.trunc(o.slideIndex) : -1
+    const targets = Array.isArray(o.targets)
+      ? o.targets.filter(
+          (t): t is SlidesAgentAskOp['targets'][number] =>
+            !!t && typeof t === 'object' && typeof t.id === 'string' && t.id.length > 0,
+        )
+      : []
+    if (!instruction || slideIndex < 0 || targets.length === 0) {
+      return { ok: false, error: 'invalid ask payload' }
+    }
+    if (!slidesAgentAskHook) return { ok: false, error: 'no host agent registered' }
+    return slidesAgentAskHook(e.sender.id, { instruction, slideIndex, targets })
+  })
 
   // ── Local single-page generation (no gsk needed, e.g. BYOK): a JSON slide spec written by
   // the renderer's LLM call is built directly into a one-slide pptx with pptx-engine

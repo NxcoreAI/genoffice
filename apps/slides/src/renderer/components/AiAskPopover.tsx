@@ -46,6 +46,8 @@ interface Props {
   onSendNow?: (text: string) => void
   /** Disables "Add to queue" only; sending now never touches the queue */
   queueFull?: boolean
+  /** Embed hosts have no queue UI (the queue card lives in the host-compiled AiPanel): send-now only */
+  hideQueue?: boolean
 }
 
 const WIDTH = 340
@@ -157,6 +159,7 @@ export function AiAskPopover({
   onCancel,
   onSendNow,
   queueFull,
+  hideQueue,
 }: Props): React.JSX.Element | null {
   const { t } = useI18n()
   const [text, setText] = useState(initialText ?? '')
@@ -191,9 +194,9 @@ export function AiAskPopover({
   /** Clicking away keeps whatever was typed: it lands in the queue, where it can still be edited or removed */
   const commitOrCancel = useCallback(() => {
     const value = textRef.current.trim()
-    if (value && !queueBlocked) onSubmit(value)
+    if (value && !queueBlocked && !hideQueue) onSubmit(value)
     else onCancel()
-  }, [onSubmit, onCancel, queueBlocked])
+  }, [onSubmit, onCancel, queueBlocked, hideQueue])
 
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
@@ -283,7 +286,7 @@ export function AiAskPopover({
           if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
             e.preventDefault()
             if (!canSubmit) return
-            if (queueBlocked) onSendNow?.(text.trim())
+            if (hideQueue || queueBlocked) onSendNow?.(text.trim())
             else onSubmit(text.trim())
           }
         }}
@@ -304,7 +307,7 @@ export function AiAskPopover({
         ))}
       </div>
       <div className="ai-ask-pop-foot">
-        {onSendNow ? (
+        {onSendNow && !hideQueue ? (
           <>
             <button
               className="ai-ask-cancel"
@@ -320,6 +323,19 @@ export function AiAskPopover({
               onClick={() => canSubmit && !queueFull && onSubmit(text.trim())}
             >
               {t('aiAskQueue')}
+            </button>
+          </>
+        ) : onSendNow ? (
+          <>
+            <button className="ai-ask-cancel" onClick={onCancel}>
+              {t('paneCancel')}
+            </button>
+            <button
+              className="ai-ask-confirm"
+              disabled={!canSubmit}
+              onClick={() => canSubmit && onSendNow(text.trim())}
+            >
+              {t('aiAskSendNow')}
             </button>
           </>
         ) : (

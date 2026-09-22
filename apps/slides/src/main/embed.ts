@@ -12,6 +12,7 @@ export {
   registerSlidesIpc,
   requestSlidesClose,
   setActiveSlidesWebContents,
+  setSlidesAgentAskHook,
   setSlidesFileSavedHook,
   setSlidesShellWindow,
   slidesIsDirty,

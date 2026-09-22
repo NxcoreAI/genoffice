@@ -4106,6 +4106,7 @@ export function App() {
         !editingCell &&
         !cropTarget &&
         !cutoutTarget &&
+        !embedReadonly &&
         inkTool === 'select' &&
         selectedIds.length > 0 && (
           <AiAskTrigger getAnchorRect={getAskTriggerRect} onOpen={openAskPopover} />
@@ -4116,6 +4117,7 @@ export function App() {
           targets={askTargets}
           getAnchorRect={getAskAnchorRect}
           queueFull={editQueue.length >= EDIT_QUEUE_MAX}
+          hideQueue={everroomEmbed}
           onSubmit={(instruction) => {
             askClosedAtRef.current = Date.now()
             commitAsk(instruction)
@@ -4130,6 +4132,24 @@ export function App() {
               : (instruction) => {
                   askClosedAtRef.current = Date.now()
                   setAskState(null)
+                  if (everroomEmbed) {
+                    // Embed hosts own the AI: forward the ask to the host's
+                    // agent (EverRoom Room chat) instead of the compiled-out
+                    // AiPanel pipeline.
+                    void window.slidesApi
+                      .agentAsk({
+                        instruction,
+                        slideIndex: current,
+                        targets: askTargets.map((tg) => ({ id: tg.id, desc: tg.desc })),
+                      })
+                      .then((res) => {
+                        if (!res.ok) showToast(res.error ?? t('aiErrUnknown'), 'error')
+                      })
+                      .catch((err) =>
+                        showToast(err instanceof Error ? err.message : String(err), 'error'),
+                      )
+                    return
+                  }
                   // Carry the popover's frozen durable targets into the run.
                   // The canvas keeps parse-time source ids for rendering, while
                   // the AI inventory and edit tools speak durable ids.
