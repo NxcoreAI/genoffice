@@ -38,7 +38,7 @@ export interface AgentDeckResult {
 
 const MAX_AGENT_PAGES = 24
 
-function agentPageDeps() {
+export function agentPageDeps() {
   return {
     fontMetrics: getFontMetrics(),
     fetchImage: async (url: string): Promise<{ bytes: Uint8Array; ext: string } | null> => {

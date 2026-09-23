@@ -8,10 +8,12 @@
  */
 import { webContents } from 'electron'
 
-import { slideDurableId, materializeSlide } from '@genoffice/pptx-engine'
+import { extractMergeSlideSource, slideDurableId, materializeSlide } from '@genoffice/pptx-engine'
 
+import { agentPageDeps } from './agent-deck'
 import { buildAgentDeckOutline } from '../shared/deck-outline'
 import { opVocabulary } from '../shared/op-docs'
+import { buildPagePptx, parsePageSpec } from './page-spec'
 import { runTxn, type Op, type OpRecord } from './ops'
 import {
   attachedIds,
@@ -52,6 +54,8 @@ export interface AgentApplyResult {
   saved?: boolean
   saveError?: string
   outline?: string
+  /** Page-spec parse warnings (page-fill path): the page rendered, but look at these. */
+  warnings?: Array<{ page: number; messages: string[] }>
 }
 
 export function describeAgentDeck(wcId: number): { outline: string; opVocabulary: string } | null {
@@ -186,6 +190,90 @@ export async function applyAgentDeckOps(
       ...(rec.created ? { created: rec.created } : {}),
     })),
     ...(r.failures?.length ? { failures: compact(r.failures) } : {}),
+    saved,
+    ...(saveError ? { saveError } : {}),
+    outline: buildAgentDeckOutline(slides),
+  }
+}
+
+/**
+ * Fill one page of the LIVE session from a PageSpec: the same tolerant parser
+ * and single-page builder as whole-deck generation, landed as one
+ * insertSlidePptx{at, replace} transaction — the identical pipeline the
+ * renderer's regenerate_slide uses — so a filled page is pixel-for-pixel what
+ * generation would have produced. One history push = one undo step; the fresh
+ * render state goes to every attached view, then the silent save fires the
+ * host's fileSaved hook (version-chain re-import).
+ */
+export async function applyAgentDeckPage(
+  wcId: number,
+  req: { slideIndex: number; specJson: string },
+): Promise<AgentApplyResult> {
+  const session = sessions.get(wcId)
+  if (!session) return { ok: false, error: 'no slides session for this view' }
+  if (!session.path) return { ok: false, error: 'the deck has no file path yet' }
+  const total = session.opened.deck.slides.length
+  const at = req.slideIndex
+  if (!Number.isInteger(at) || at < 0 || at >= total) {
+    return { ok: false, error: `slideIndex must be an integer between 0 and ${total - 1}` }
+  }
+  const parsed = parsePageSpec(String(req.specJson ?? ''))
+  if (!parsed.ok) return { ok: false, error: `page ${at + 1}: ${parsed.error}` }
+
+  let source: Awaited<ReturnType<typeof extractMergeSlideSource>>
+  try {
+    const built = await buildPagePptx(parsed.spec, agentPageDeps())
+    source = await extractMergeSlideSource(built.bytes)
+  } catch (err) {
+    return { ok: false, error: `page ${at + 1}: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  if (!source) return { ok: false, error: `page ${at + 1}: the page could not be merged into this deck` }
+
+  pushHistory(session)
+  const r = runTxn(session.opened, { ops: [{ op: 'insertSlidePptx', source, at, replace: true } as Op] })
+  if (!r.applied) {
+    session.undoStack.pop() // The executor already restored the deck
+    return {
+      ok: true,
+      applied: false,
+      failures: (r.failures ?? []).map((f) => ({ index: f.index, error: f.error })),
+    }
+  }
+  journalOps(session, 'generate', r.records ?? [])
+
+  const slides = buildAllRenderSlides(session.opened, session.fitWidthPx)
+  const payload = {
+    slides,
+    size: { cx: session.opened.deck.size.cx, cy: session.opened.deck.size.cy },
+  }
+  for (const id of attachedIds(session)) webContents.fromId(id)?.send('slides:deck-changed', payload)
+
+  let saved = true
+  let saveError: string | undefined
+  const wc = webContents.fromId(wcId)
+  if (!wc) {
+    saved = false
+    saveError = 'the view was closed before the deck could be saved'
+  } else {
+    try {
+      await persistSession(session, wc)
+    } catch (err) {
+      saved = false
+      saveError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  return {
+    ok: true,
+    applied: true,
+    records: (r.records ?? []).map((rec) => ({
+      op: rec.op.op,
+      ...(rec.op.target
+        ? { target: `${rec.op.target.slide}${rec.op.target.el ? `/${rec.op.target.el}` : ''}` }
+        : {}),
+      ...(rec.created ? { created: rec.created } : {}),
+    })),
+    ...(parsed.warnings.length > 0 ? { warnings: [{ page: at + 1, messages: parsed.warnings }] } : {}),
     saved,
     ...(saveError ? { saveError } : {}),
     outline: buildAgentDeckOutline(slides),
