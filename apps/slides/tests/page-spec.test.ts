@@ -82,6 +82,73 @@ describe('parsePageSpec', () => {
     expect(r.spec.elements).toHaveLength(2)
     expect((r.spec.elements[0] as { shape: string }).shape).toBe('rect')
   })
+
+  it('rejects emoji anywhere in text (pictographs, VS16, forced symbols) but keeps bare ★', () => {
+    const withEmoji = parsePageSpec(
+      JSON.stringify({ elements: [textSpec('季度目标 🎯 达成')] }),
+    )
+    expect(withEmoji.ok).toBe(false)
+    if (!withEmoji.ok) expect(withEmoji.error).toContain('emoji')
+
+    const forcedStar = parsePageSpec(
+      JSON.stringify({ elements: [textSpec('重点☀️关注')] }),
+    )
+    expect(forcedStar.ok).toBe(false)
+
+    const bareStar = parsePageSpec(JSON.stringify({ elements: [textSpec('重点 ★ 关注')] }))
+    expect(bareStar.ok).toBe(true)
+  })
+
+  it('rejects text elements whose ink rectangles overlap, naming both indices', () => {
+    const r = parsePageSpec(
+      JSON.stringify({
+        elements: [
+          textSpec('标题占位', { y: 100, h: 60 }),
+          textSpec('副标题占位', { y: 130, h: 60 }),
+        ],
+      }),
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toContain('element 0')
+      expect(r.error).toContain('element 1')
+      expect(r.error).toContain('overlaps')
+    }
+  })
+
+  it('rejects a labeled shape colliding with a text box, counting shape label ink', () => {
+    const r = parsePageSpec(
+      JSON.stringify({
+        elements: [
+          {
+            type: 'shape',
+            shape: 'rect',
+            x: 80,
+            y: 300,
+            w: 400,
+            h: 60,
+            fill: '#EEF2F7',
+            paragraphs: [{ runs: [{ text: '卡片标题', sizePt: 14 }] }],
+          },
+          textSpec('正文从同高度穿过', { x: 80, y: 310, w: 700, h: 40 }),
+        ],
+      }),
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it('accepts a text box sitting on a plain (text-less) card shape and non-colliding neighbors', () => {
+    const r = parsePageSpec(
+      JSON.stringify({
+        elements: [
+          { type: 'shape', shape: 'roundRect', x: 60, y: 80, w: 500, h: 300, fill: '#EEF2F7' },
+          textSpec('卡片内标题', { x: 88, y: 108, w: 300, h: 60 }),
+          textSpec('卡片内正文', { x: 88, y: 180, w: 440, h: 150 }),
+        ],
+      }),
+    )
+    expect(r.ok).toBe(true)
+  })
 })
 
 describe('buildPagePptx', () => {

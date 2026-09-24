@@ -111,6 +111,84 @@ export interface PageSpec {
 
 const EMU_PER_PT = 12700
 
+/** PowerPoint's default body font size, used when a run omits sizePt. */
+const DEFAULT_SIZE_PT = 18
+
+/** Overlap tolerance: intersecting ink rectangles must clear each other by more than this. */
+const OVERLAP_TOL_PX = 6
+
+function paragraphText(paragraphs: SpecParagraph[]): string {
+  return paragraphs.flatMap((p) => p.runs.map((r) => r.text)).join('')
+}
+
+function fmtBox(b: TextInkBox): string {
+  return `[x=${Math.round(b.x)},y=${Math.round(b.y)},w=${Math.round(b.w)},h=${Math.round(b.h)}]`
+}
+
+const CJK_CHAR = /[⺀-鿿豈-﫿＀-￯]/
+
+/**
+ * Emoji have no place in generated decks (iconography is shapes), and they
+ * render as tofu in the preview canvas. Rejects pictograph-block code points
+ * and VS16; keeps bare ★/▲/● etc. as legal text glyphs unless VS16-forced.
+ */
+function emojiCodePoints(text: string): string[] {
+  const hits: string[] = []
+  const chars = [...text]
+  for (let k = 0; k < chars.length; k++) {
+    const cp = chars[k]!.codePointAt(0)!
+    const forced =
+      cp >= 0x1f000 && cp <= 0x1faff
+      || cp === 0xfe0f
+      || ((cp >= 0x2600 && cp <= 0x27bf) && chars[k + 1]?.codePointAt(0) === 0xfe0f)
+    if (forced) hits.push(`U+${cp.toString(16).toUpperCase()}`)
+  }
+  return hits
+}
+
+interface TextInkBox {
+  idx: number
+  x: number
+  y: number
+  w: number
+  h: number
+  label: string
+}
+
+/**
+ * Estimates where the glyphs of a text-bearing element actually land, using the
+ * same heuristic the agent prompt documents (line ≈ sizePt*1.8px at 110%
+ * spacing, CJK char ≈ sizePt*1.35px, latin ≈ sizePt*0.7px). Content taller than
+ * the box extends past it in the anchor direction — that is where the rendered
+ * glyphs go (and where growTextBoxesToContent later grows the box to).
+ */
+function estimateTextInk(
+  el: { x: number; y: number; w: number; h: number; valign?: 'top' | 'middle' | 'bottom' },
+  paragraphs: SpecParagraph[],
+  idx: number,
+  defaultAnchor: 'top' | 'middle',
+): TextInkBox {
+  let contentH = 0
+  let label = ''
+  for (const p of paragraphs) {
+    const size = Math.max(DEFAULT_SIZE_PT, ...p.runs.map((r) => r.sizePt ?? DEFAULT_SIZE_PT))
+    const lineH = size * 1.8 * ((p.lineSpacingPct ?? 110) / 110)
+    let textW = 0
+    for (const r of p.runs) {
+      label += r.text
+      const s = r.sizePt ?? DEFAULT_SIZE_PT
+      for (const ch of r.text) textW += (CJK_CHAR.test(ch) ? 1.35 : 0.7) * s
+    }
+    const lines = Math.max(1, Math.ceil(textW / Math.max(1, el.w)))
+    contentH += lines * lineH + (p.spaceBeforePt ?? 0) * 1.33 + (p.spaceAfterPt ?? 0) * 1.33
+  }
+  const anchor = el.valign ?? defaultAnchor
+  const top = anchor === 'top' ? el.y
+    : anchor === 'bottom' ? el.y + el.h - contentH
+      : el.y + (el.h - contentH) / 2
+  return { idx, x: el.x, y: top, w: el.w, h: contentH, label: label.trim().slice(0, 20) }
+}
+
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
 }
@@ -155,6 +233,8 @@ export function parsePageSpec(
 
   const warnings: string[] = []
   const elements: SpecElement[] = []
+  const emojiProblems: string[] = []
+  const inkBoxes: TextInkBox[] = []
   let images = 0
 
   const parseParagraphs = (v: unknown): SpecParagraph[] => {
@@ -254,6 +334,10 @@ export function parsePageSpec(
         continue
       }
       const valign = el.valign
+      for (const emoji of emojiCodePoints(paragraphText(paragraphs))) {
+        emojiProblems.push(`element ${i}: text contains emoji ${emoji}`)
+      }
+      inkBoxes.push(estimateTextInk(base, paragraphs, i, 'top'))
       elements.push({
         type: 'text',
         ...base,
@@ -283,13 +367,20 @@ export function parsePageSpec(
       }
       const paragraphs = parseParagraphs(el.paragraphs)
       const valign = el.valign
+      const hasText = paragraphs.some((p) => p.runs.some((r) => r.text.trim()))
+      if (hasText) {
+        for (const emoji of emojiCodePoints(paragraphText(paragraphs))) {
+          emojiProblems.push(`element ${i}: text contains emoji ${emoji}`)
+        }
+        inkBoxes.push(estimateTextInk(base, paragraphs, i, 'middle'))
+      }
       elements.push({
         type: 'shape',
         shape,
         ...base,
         ...(fill ? { fill } : {}),
         ...(stroke ? { stroke } : {}),
-        ...(paragraphs.some((p) => p.runs.some((r) => r.text.trim())) ? { paragraphs } : {}),
+        ...(hasText ? { paragraphs } : {}),
         ...(valign === 'top' || valign === 'middle' || valign === 'bottom' ? { valign } : {}),
       })
       continue
@@ -304,6 +395,37 @@ export function parsePageSpec(
       error: `no valid elements (${warnings.join('; ') || 'all dropped'})`,
     }
   }
+
+  // Hard layout gates: the page is rejected and the model retries. These two
+  // defects (emoji glyphs, colliding text) cannot be auto-fixed downstream —
+  // growTextBoxesToContent only stretches single boxes and would worsen a
+  // collision — so they must never land in the deck.
+  const problems: string[] = [...emojiProblems]
+  for (let a = 0; a < inkBoxes.length; a++) {
+    for (let b = a + 1; b < inkBoxes.length; b++) {
+      const A = inkBoxes[a]!
+      const B = inkBoxes[b]!
+      const overlapW = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x)
+      const overlapH = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y)
+      if (overlapW > OVERLAP_TOL_PX && overlapH > OVERLAP_TOL_PX) {
+        problems.push(
+          `element ${A.idx} ("${A.label}") ink ${fmtBox(A)} overlaps element ${B.idx} ("${B.label}") ink ${fmtBox(B)}`,
+        )
+      }
+    }
+  }
+  if (problems.length > 0) {
+    return {
+      ok: false,
+      error:
+        `page rejected — ${problems.join('; ')}. ` +
+        'Emoji are not supported: delete them and express icons with allowed shapes. ' +
+        'Every text element (including shapes carrying a label) must own a rectangle that does not ' +
+        'intersect any other text: move or resize boxes, shorten text, or drop elements so all text ' +
+        `rectangles clear each other by more than ${OVERLAP_TOL_PX}px.`,
+    }
+  }
+
   return {
     ok: true,
     spec: {
