@@ -3182,6 +3182,7 @@ export function registerDocsIpc(): void {
         )
         clearRecoveryCopy(filePath)
         pushRecent(filePath)
+        notifyFileSaved(event.sender, filePath)
         return { ok: true, passwordIntentPending }
       } catch (err) {
         return { ok: false, error: String(err) }

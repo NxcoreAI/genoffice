@@ -150,6 +150,14 @@ const api: SlidesApi = {
   }) => ipcRenderer.invoke('slides:cloud-page-generate', op),
   localGeneratePage: (op: { specJson: string }) =>
     ipcRenderer.invoke('slides:local-page-generate', op),
+  agentAsk: (op: {
+    instruction: string
+    slideIndex: number
+    targets: Array<{
+      id: string
+      desc: { type: string; text?: string; rows?: number; cols?: number }
+    }>
+  }) => ipcRenderer.invoke('slides:agent-ask', op),
   editText: (op: EditTextOp) => ipcRenderer.invoke('slides:edit-text', op),
   setElementFont: (op: SetElementFontOp) => ipcRenderer.invoke('slides:set-element-font', op),
   setElementParagraphFormat: (op: SetElementParagraphFormatOp) =>

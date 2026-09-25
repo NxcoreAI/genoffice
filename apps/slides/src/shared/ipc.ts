@@ -1241,6 +1241,15 @@ export interface SlidesApi {
   localGeneratePage: (op: {
     specJson: string
   }) => Promise<{ ok: boolean; marker?: string; error?: string; imageFailures?: string[] }>
+  /** Host (EverRoom embed) "AI 修改" forward: the popover's send-now payload is relayed to the host agent */
+  agentAsk: (op: {
+    instruction: string
+    slideIndex: number
+    targets: Array<{
+      id: string
+      desc: { type: string; text?: string; rows?: number; cols?: number }
+    }>
+  }) => Promise<{ ok: boolean; error?: string }>
   editText: (op: EditTextOp) => Promise<RenderSlide | null>
   /** Change font/size on selected elements wholesale (elements without text ignored; returns null if all ignored) */
   setElementFont: (op: SetElementFontOp) => Promise<RenderSlide | null>

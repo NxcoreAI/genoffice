@@ -392,6 +392,53 @@ export function setSlidesOpenedHook(fn: ((wc: WebContents, path: string) => void
   slidesOpenedHook = fn
 }
 
+/** Host hook: a plain save (or Save As) landed on disk — embed hosts use it to sync versions. */
+let slidesFileSavedHook: ((wc: WebContents, path: string) => void) | null = null
+export function setSlidesFileSavedHook(fn: ((wc: WebContents, path: string) => void) | null): void {
+  slidesFileSavedHook = fn
+}
+
+/**
+ * Host hook: the "AI 修改" popover's send-now payload, relayed so the embed
+ * host (EverRoom) can route it to its own agent. The ids are the deck outline
+ * / edit-op id space (durableId ?? sourceId).
+ */
+export interface SlidesAgentAskOp {
+  instruction: string
+  slideIndex: number
+  targets: Array<{
+    id: string
+    desc: { type: string; text?: string; rows?: number; cols?: number }
+  }>
+}
+export type SlidesAgentAskResult = { ok: true } | { ok: false; error: string }
+let slidesAgentAskHook:
+  | ((wcId: number, op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>)
+  | null = null
+export function setSlidesAgentAskHook(
+  fn: ((wcId: number, op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>) | null,
+): void {
+  slidesAgentAskHook = fn
+}
+
+/**
+ * Persist the session to disk and settle autosave/recovery/dirty state (the
+ * shared body of slides:save and the embed host's silent agent save). Throws
+ * on write failure, leaving the in-memory dirty flags untouched.
+ */
+export async function persistSession(session: Session, wc: WebContents): Promise<void> {
+  await savePptxToFile(session.opened, session.path)
+  autosaveBackoff.delete(session.path)
+  void rm(autosavePathFor(session.path), { force: true }).catch(() => {})
+  dropUntitledRecovery(wc.id)
+  // Bake the saved patches back into the in-memory model (clears dirty, syncs
+  // anchor.originalXml with disk) — a full reopen would re-read and unzip the
+  // whole package, doubling save latency on large decks.
+  commitSaved(session.opened)
+  session.metaDirty = false
+  slidesFileSavedHook?.(wc, session.path)
+}
+
 /** Detached editor windows (createSlidesWindow), keyed by webContents id — their titles are owned here */
 const standaloneWindows = new Map<number, BrowserWindow>()
 
@@ -853,7 +900,7 @@ function findEl(slide: Slide, sourceId: string): TextElement | undefined {
  * rebuilt result after this change; when the height changed, update the transform and rebuild
  * once more. Top-level elements only (group children use a different coordinate system, skip).
  */
-function applyAutofitResize(
+export function applyAutofitResize(
   session: Session,
   slideIndex: number,
   sourceId: string,
@@ -887,7 +934,7 @@ function applyAutofitResize(
  * Triggered only by text edits (resize gestures do not write: the layout cap locks the stored
  * value, and writing back during a gesture would ratchet one way); top-level elements only.
  */
-function syncAutofitScale(
+export function syncAutofitScale(
   session: Session,
   slideIndex: number,
   sourceId: string,
@@ -1597,6 +1644,26 @@ export function registerSlidesIpc(): void {
       }
     },
   )
+
+  // ── Host "AI 修改" forward (EverRoom embed): the popover's send-now payload is
+  // validated here and handed to the host hook; without a host (standalone app)
+  // the invoke answers with an error instead of hanging forever.
+  ipcMain.handle('slides:agent-ask', async (e, op: unknown): Promise<SlidesAgentAskResult> => {
+    const o = (op ?? {}) as Partial<SlidesAgentAskOp>
+    const instruction = typeof o.instruction === 'string' ? o.instruction.trim() : ''
+    const slideIndex = typeof o.slideIndex === 'number' ? Math.trunc(o.slideIndex) : -1
+    const targets = Array.isArray(o.targets)
+      ? o.targets.filter(
+          (t): t is SlidesAgentAskOp['targets'][number] =>
+            !!t && typeof t === 'object' && typeof t.id === 'string' && t.id.length > 0,
+        )
+      : []
+    if (!instruction || slideIndex < 0 || targets.length === 0) {
+      return { ok: false, error: 'invalid ask payload' }
+    }
+    if (!slidesAgentAskHook) return { ok: false, error: 'no host agent registered' }
+    return slidesAgentAskHook(e.sender.id, { instruction, slideIndex, targets })
+  })
 
   // ── Local single-page generation (no gsk needed, e.g. BYOK): a JSON slide spec written by
   // the renderer's LLM call is built directly into a one-slide pptx with pptx-engine
@@ -4021,16 +4088,7 @@ export function registerSlidesIpc(): void {
       slidesOpenedHook?.(e.sender, session.path)
     }
     try {
-      await savePptxToFile(session.opened, session.path)
-      autosaveBackoff.delete(session.path)
-      void rm(autosavePathFor(session.path), { force: true }).catch(() => {})
-      dropUntitledRecovery(e.sender.id)
-      // Bake the saved patches back into the in-memory model (clears dirty, syncs
-      // anchor.originalXml with disk) — a full reopen would re-read and unzip the
-      // whole package, doubling save latency on large decks. Element ids survive,
-      // but the renderer still expects the render tree in the response.
-      commitSaved(session.opened)
-      session.metaDirty = false
+      await persistSession(session, e.sender)
       return {
         ok: true,
         path: session.path,
@@ -4060,6 +4118,7 @@ export function registerSlidesIpc(): void {
       syncAttachedPaths(session, r.filePath)
       commitSaved(session.opened)
       session.metaDirty = false
+      slidesFileSavedHook?.(e.sender, r.filePath)
       return {
         ok: true,
         path: r.filePath,

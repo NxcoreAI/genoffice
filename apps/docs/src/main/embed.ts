@@ -7,9 +7,12 @@ export {
   configureDocsRuntime,
   createDocsView,
   docsQueryDirty,
+  markDocsNewBlank,
+  queueDocsAiContent,
   registerDocsIpc,
   requestDocsClose,
   setActiveDocsResolver,
+  setDocsFileSavedHook,
   setDocsShellWindow,
   teardownDocsRenderer,
 } from './docs-main'

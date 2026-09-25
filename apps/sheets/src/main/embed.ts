@@ -7,6 +7,7 @@ export {
   registerSheetsIpc,
   requestSheetsClose,
   setActiveSheetsWebContents,
+  setSheetsFileSavedHook,
   setSheetsShellWindow,
   sheetsPendingEditCount,
   stopSheetsSidecar,
