@@ -92,4 +92,95 @@ describe('mergeSlideFromPptx', () => {
     const sldIds = [...pres.matchAll(/<p:sldId\b/g)].length
     expect(sldIds).toBe(2)
   })
+
+  it('merging a slide with a chart: part moved to a fresh name, rels and Content_Types stay valid', async () => {
+    async function onePageWithChart(label: string, last: number): Promise<Uint8Array> {
+      const p = new PptxGenJS()
+      p.defineLayout({ name: 'W', width: 13.333, height: 7.5 })
+      p.layout = 'W'
+      const s = p.addSlide()
+      s.addText(label, { x: 1, y: 1, w: 8, h: 1, fontSize: 32 })
+      s.addChart(p.ChartType.bar, [{ name: 'S', labels: ['A', 'B', 'C'], values: [1, 2, last] }], {
+        x: 1,
+        y: 3,
+        w: 6,
+        h: 3,
+      })
+      const buf = (await p.write({ outputType: 'nodebuffer' })) as Buffer
+      return new Uint8Array(buf)
+    }
+
+    // Base deck already owns ppt/charts/chart1.xml; the merged slide's chart
+    // must land as chart2.xml (not overwrite), with its rel remapped.
+    const base = await openPptx(await onePageWithChart('PAGE_ONE', 3))
+    await mergeSlideFromPptx(base, await onePageWithChart('PAGE_TWO', 7))
+    expect(base.deck.slides.length).toBe(2)
+
+    const chartParts = [...base.archive.entries.keys()].filter((k) =>
+      /^ppt\/charts\/chart\d+\.xml$/.test(k),
+    ).sort()
+    expect(chartParts).toEqual(['ppt/charts/chart1.xml', 'ppt/charts/chart2.xml'])
+
+    // The merged slide's rels point at chart2.xml and the Content_Types Override exists
+    const rels = base.archive.readText('ppt/slides/_rels/slide2.xml.rels') ?? ''
+    expect(rels).toContain('Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"')
+    expect(rels).toContain('Target="../charts/chart2.xml"')
+    const slide2 = base.archive.readText('ppt/slides/slide2.xml') ?? ''
+    const rid = rels.match(/Id="(rId\d+)"[^>]*Target="\.\.\/charts\/chart2\.xml"/)?.[1]
+    expect(rid).toBeTruthy()
+    expect(slide2).toContain(`r:id="${rid}"`)
+    const ct = base.archive.readText('[Content_Types].xml') ?? ''
+    expect(ct).toContain('PartName="/ppt/charts/chart2.xml"')
+
+    // Reopen after save: both slides keep a parsed chart element
+    const reopenedChart = await openPptx(await savePptx(base))
+    expect(reopenedChart.deck.slides.length).toBe(2)
+    const chartCounts = reopenedChart.deck.slides.map(
+      (sl) => sl.elements.filter((el) => el.type === 'chart').length,
+    )
+    expect(chartCounts[0]).toBe(1)
+    expect(chartCounts[1]).toBe(1)
+  })
+
+  it('merging a slide with a jpeg: the new Default lands inside the <Types> root, not outside it', async () => {
+    // Regression: ensureDefaultContentType once inserted the Default right after the
+    // XML declaration (first '>' in the file), producing malformed XML that
+    // LibreOffice/PowerPoint reject outright ("source file could not be loaded").
+    async function onePageWithJpeg(label: string): Promise<Uint8Array> {
+      const p = new PptxGenJS()
+      p.defineLayout({ name: 'W', width: 13.333, height: 7.5 })
+      p.layout = 'W'
+      const s = p.addSlide()
+      s.addText(label, { x: 1, y: 1, w: 8, h: 1, fontSize: 32 })
+      // bytes are PNG but the data URI mime decides the part extension: .jpeg
+      s.addImage({ data: 'image/jpeg;base64,' + RED_DOT, x: 1, y: 3, w: 2, h: 2 })
+      const buf = (await p.write({ outputType: 'nodebuffer' })) as Buffer
+      return new Uint8Array(buf)
+    }
+
+    // Target deck stripped to a bare Content_Types (like the engine's blank template:
+    // no image Defaults) so the merge has to add the jpeg Default itself
+    const base = await openPptx(await onePagePptx('COVER'))
+    const bareCt = (base.archive.readText('[Content_Types].xml') ?? '').replace(
+      /<Default Extension="(?:jpeg|jpg|png|gif|svg)"/g,
+      '<Default Extension="x-$1"',
+    )
+    base.archive.entries.set('[Content_Types].xml', Buffer.from(bareCt, 'utf8'))
+    expect(bareCt).not.toContain('Extension="jpeg"')
+
+    await mergeSlideFromPptx(base, await onePageWithJpeg('WITH_JPEG'))
+    const ct = base.archive.readText('[Content_Types].xml') ?? ''
+    const typesOpen = ct.search(/<Types\b/)
+    const jpegDefault = ct.indexOf('<Default Extension="jpeg"')
+    expect(typesOpen).toBeGreaterThan(-1)
+    // Inside the root element: after <Types …> opens, before </Types> closes
+    expect(jpegDefault).toBeGreaterThan(typesOpen)
+    expect(ct.lastIndexOf('</Types>')).toBeGreaterThan(jpegDefault)
+    // The XML declaration must be followed directly by the root element
+    expect(ct.replace(/^<\?xml[^?]*\?>/, '')).toMatch(/^\s*<Types\b/)
+
+    const reopened = await openPptx(await savePptx(base))
+    const picCount = reopened.deck.slides[1]!.elements.filter((el) => el.type === 'picture').length
+    expect(picCount).toBeGreaterThanOrEqual(1)
+  })
 })

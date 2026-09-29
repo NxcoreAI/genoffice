@@ -55,6 +55,8 @@ export interface NewChartOptions extends ChartStyleOptions {
   barDir?: 'col' | 'bar'
   /** Per-point fills, [seriesIdx][pointIdx] (sparse; written as <c:dPt>, wins over the series color) */
   pointColors?: Array<Array<string | undefined> | undefined>
+  /** Per-series fills (sparse; written as <c:ser><c:spPr>, overridden by pointColors) */
+  seriesColors?: Array<string | undefined>
 }
 
 const CHART_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml'
@@ -89,9 +91,30 @@ function numCacheXml(values: (number | null | undefined)[], f: string): string {
 }
 
 /** Data label fragment (dLbls follows ser in the schema; shared by all chart types). */
+const FONT_DLABELS =
+  '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>' +
+  '<a:defRPr sz="1000"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:defRPr>' +
+  '</a:pPr><a:endParaRPr lang="zh-CN"/></a:p></c:txPr>'
 const DLBLS_XML =
-  '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/>' +
+  '<c:dLbls>' + FONT_DLABELS + '<c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/>' +
   '<c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'
+
+/** Restrained single-hue palette used when the caller does not pass series colors. */
+const DEFAULT_SERIES_COLORS = ['#3B5F82', '#8FA9C4', '#C6D3E0', '#54749A', '#A9BFD4', '#2C4468']
+
+const FONT_AXIS =
+  '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>' +
+  '<a:defRPr sz="1100"><a:solidFill><a:srgbClr val="64748B"/></a:solidFill></a:defRPr>' +
+  '</a:pPr><a:endParaRPr lang="zh-CN"/></a:p></c:txPr>'
+const AXIS_LN =
+  '<c:spPr><a:ln w="9525" cap="flat"><a:solidFill><a:srgbClr val="CBD5E1"/></a:solidFill></a:ln></c:spPr>'
+const AX_STYLE = AXIS_LN + FONT_AXIS
+const GRID_XML =
+  '<c:majorGridlines><c:spPr><a:ln w="9525" cap="flat"><a:solidFill><a:srgbClr val="E2E8F0"/></a:solidFill></a:ln></c:spPr></c:majorGridlines>'
+const FONT_LEGEND =
+  '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>' +
+  '<a:defRPr sz="1100"><a:solidFill><a:srgbClr val="475569"/></a:solidFill></a:defRPr>' +
+  '</a:pPr><a:endParaRPr lang="zh-CN"/></a:p></c:txPr>'
 
 /** Axis title fragment (value axis vertical, rot=-5400000). */
 function axTitleXml(text: string, vertical: boolean): string {
@@ -107,20 +130,44 @@ function axTitleXml(text: string, vertical: boolean): string {
 export function buildChartSpaceXml(opts: NewChartOptions): string {
   const rows = opts.categories.length
   const dLbls = opts.dataLabels ? DLBLS_XML : ''
-  const grid = opts.gridlines ? '<c:majorGridlines/>' : ''
+  const grid = opts.gridlines ? GRID_XML : ''
   const catTitle = opts.catAxisTitle ? axTitleXml(opts.catAxisTitle, false) : ''
   const valTitle = opts.valAxisTitle ? axTitleXml(opts.valAxisTitle, true) : ''
   const gapWidth =
-    opts.gapWidthPct != null ? `<c:gapWidth val="${Math.round(opts.gapWidthPct)}"/>` : ''
+    opts.gapWidthPct != null
+      ? `<c:gapWidth val="${Math.round(opts.gapWidthPct)}"/>`
+      : '<c:gapWidth val="60"/>'
   // Empty names stay empty: no <c:tx> for an unnamed series, no <c:cat> when every category name is empty
   const txXml = (name: string, i: number) =>
     name === '' ? '' : `<c:tx>${strCacheXml([name], `Sheet1!$${colLetter(i)}$1`)}</c:tx>`
   const catXml = opts.categories.some((c) => c !== '')
     ? `<c:cat>${strCacheXml(opts.categories, `Sheet1!$A$2:$A$${rows + 1}`)}</c:cat>`
     : ''
-  // Per-point <c:dPt> fills (schema position: after tx/spPr, before dLbls/cat/val)
-  const dPtXml = (i: number): string => {
-    const colors = opts.pointColors?.[i]
+  // Per-series <c:spPr> (schema position: after tx, before dPt/dLbls/cat/val).
+  // Line-family series carry the color on the stroke (a:ln) — a solidFill alone
+  // leaves the line on the theme default, which clashes with the deck palette.
+  const colorAt = (i: number) =>
+    opts.seriesColors?.[i] ?? DEFAULT_SERIES_COLORS[i % DEFAULT_SERIES_COLORS.length]!
+  const hexAt = (i: number) => colorAt(i).replace('#', '').toUpperCase()
+  const serSpPrXml = (i: number, style: 'fill' | 'line' | 'markerOnly' = 'fill'): string => {
+    if (style === 'line')
+      return (
+        '<c:spPr><a:ln w="28575" cap="rnd"><a:solidFill>' +
+        `<a:srgbClr val="${hexAt(i)}"/></a:solidFill></a:ln></c:spPr>`
+      )
+    if (style === 'markerOnly') return '<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>'
+    return `<c:spPr><a:solidFill><a:srgbClr val="${hexAt(i)}"/></a:solidFill></c:spPr>`
+  }
+  const markerXml = (i: number, size: number): string =>
+    '<c:marker><c:symbol val="circle"/>' +
+    `<c:size val="${size}"/>` +
+    `<c:spPr><a:solidFill><a:srgbClr val="${hexAt(i)}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr>` +
+    '</c:marker>'
+  // Per-point <c:dPt> fills (schema position: after tx/spPr, before dLbls/cat/val);
+  // pie/doughnut fall back to the restrained palette so untouched charts do not
+  // render with the theme's full-saturation accent cycle
+  const dPtXml = (i: number, fallback?: string[]): string => {
+    const colors = opts.pointColors?.[i] ?? fallback
     if (!colors) return ''
     let out = ''
     colors.forEach((c, pi) => {
@@ -133,18 +180,32 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
     return out
   }
   // Single-series fragment (idx/order use global ordinals so colors stay in order when a combo chart splits into two plots)
-  const serXml = (ser: { name: string; values: number[] }, i: number): string => {
+  const serXml = (
+    ser: { name: string; values: number[] },
+    i: number,
+    style: 'fill' | 'line' | 'markerOnly' = 'fill',
+    markerSize = 5,
+    dPtFallback?: string[],
+  ): string => {
     const col = colLetter(i)
     return (
       `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>` +
       txXml(ser.name, i) +
-      dPtXml(i) +
+      serSpPrXml(i, style) +
+      (style === 'fill' ? '' : markerXml(i, style === 'markerOnly' ? 7 : markerSize)) +
+      dPtXml(i, dPtFallback) +
       catXml +
       `<c:val>${numCacheXml(ser.values.slice(0, rows), `Sheet1!$${col}$2:$${col}$${rows + 1}`)}</c:val>` +
       '</c:ser>'
     )
   }
-  const sers = opts.series.map(serXml).join('')
+  const sers = opts.series.map((ser, i) => serXml(ser, i)).join('')
+  const pieLike = opts.kind === 'pie' || opts.kind === 'pie3D' || opts.kind === 'doughnut'
+  const pieDptFallback =
+    pieLike && !opts.pointColors?.[0]?.length ? DEFAULT_SERIES_COLORS.slice(0, rows) : undefined
+  const pieSers = pieDptFallback
+    ? opts.series.map((ser, i) => serXml(ser, i, 'fill', 5, pieDptFallback)).join('')
+    : sers
 
   let plot: string
   if (opts.kind === 'comboBarLine') {
@@ -155,10 +216,10 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
     // matching how PowerPoint writes "combo chart + secondary axis".
     const lineCount = opts.series.length >= 2 ? 1 : 0
     const barEnd = opts.series.length - lineCount
-    const barSers = opts.series.slice(0, barEnd).map(serXml).join('')
+    const barSers = opts.series.slice(0, barEnd).map((ser, i) => serXml(ser, i)).join('')
     const lineSers = opts.series
       .slice(barEnd)
-      .map((ser, k) => serXml(ser, barEnd + k))
+      .map((ser, k) => serXml(ser, barEnd + k, 'line', 5))
       .join('')
     plot =
       '<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>' +
@@ -168,19 +229,19 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
           `${lineSers}${dLbls}<c:marker val="1"/><c:axId val="333333333"/><c:axId val="444444444"/></c:lineChart>`
         : '') +
       '<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-      `<c:delete val="0"/><c:axPos val="b"/>${catTitle}<c:crossAx val="222222222"/></c:catAx>` +
+      `<c:delete val="0"/><c:axPos val="b"/>${catTitle}${AX_STYLE}<c:crossAx val="222222222"/></c:catAx>` +
       '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-      `<c:delete val="0"/><c:axPos val="l"/>${grid}${valTitle}<c:crossAx val="111111111"/></c:valAx>` +
+      `<c:delete val="0"/><c:axPos val="l"/>${grid}${valTitle}${AX_STYLE}<c:crossAx val="111111111"/></c:valAx>` +
       (lineSers
         ? '<c:valAx><c:axId val="444444444"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-          '<c:delete val="0"/><c:axPos val="r"/><c:crossAx val="333333333"/><c:crosses val="max"/></c:valAx>' +
+          `<c:delete val="0"/><c:axPos val="r"/>${AX_STYLE}<c:crossAx val="333333333"/><c:crosses val="max"/></c:valAx>` +
           '<c:catAx><c:axId val="333333333"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
           '<c:delete val="1"/><c:axPos val="b"/><c:crossAx val="444444444"/></c:catAx>'
         : '')
   } else if (opts.kind === 'pie') {
-    plot = `<c:pieChart><c:varyColors val="1"/>${sers}${dLbls}<c:firstSliceAng val="0"/></c:pieChart>`
+    plot = `<c:pieChart><c:varyColors val="1"/>${pieSers}${dLbls}<c:firstSliceAng val="0"/></c:pieChart>`
   } else if (opts.kind === 'pie3D') {
-    plot = `<c:pie3DChart><c:varyColors val="1"/>${sers}${dLbls}</c:pie3DChart>`
+    plot = `<c:pie3DChart><c:varyColors val="1"/>${pieSers}${dLbls}</c:pie3DChart>`
   } else if (opts.kind === 'bar3D') {
     // bar3D takes three axes (category / value / series); the series axis is required by the schema
     const horizontal = opts.barDir === 'bar'
@@ -189,14 +250,14 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
       `${sers}${dLbls}${gapWidth}<c:shape val="box"/>` +
       '<c:axId val="111111111"/><c:axId val="222222222"/><c:axId val="333333333"/></c:bar3DChart>' +
       '<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-      `<c:delete val="0"/><c:axPos val="${horizontal ? 'l' : 'b'}"/>${catTitle}<c:crossAx val="222222222"/></c:catAx>` +
+      `<c:delete val="0"/><c:axPos val="${horizontal ? 'l' : 'b'}"/>${catTitle}${AX_STYLE}<c:crossAx val="222222222"/></c:catAx>` +
       '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-      `<c:delete val="0"/><c:axPos val="${horizontal ? 'b' : 'l'}"/>${grid}${valTitle}<c:crossAx val="111111111"/></c:valAx>` +
+      `<c:delete val="0"/><c:axPos val="${horizontal ? 'b' : 'l'}"/>${grid}${valTitle}${AX_STYLE}<c:crossAx val="111111111"/></c:valAx>` +
       '<c:serAx><c:axId val="333333333"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
       '<c:delete val="0"/><c:axPos val="b"/><c:crossAx val="222222222"/></c:serAx>'
   } else if (opts.kind === 'doughnut') {
     plot =
-      `<c:doughnutChart><c:varyColors val="1"/>${sers}${dLbls}` +
+      `<c:doughnutChart><c:varyColors val="1"/>${pieSers}${dLbls}` +
       '<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>'
   } else if (opts.kind === 'scatter') {
     // Scatter (XY): x values come from categories (numeric strings use their value,
@@ -212,6 +273,8 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
         return (
           `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>` +
           txXml(ser.name, i) +
+          serSpPrXml(i, 'markerOnly') +
+          markerXml(i, 7) +
           `<c:xVal>${numCacheXml(xs, `Sheet1!$A$2:$A$${rows + 1}`)}</c:xVal>` +
           `<c:yVal>${numCacheXml(ser.values.slice(0, rows), `Sheet1!$${col}$2:$${col}$${rows + 1}`)}</c:yVal>` +
           '<c:smooth val="0"/></c:ser>'
@@ -222,9 +285,9 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
       '<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>' +
       `${scatterSers}${dLbls}<c:axId val="111111111"/><c:axId val="222222222"/></c:scatterChart>` +
       '<c:valAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-      `<c:delete val="0"/><c:axPos val="b"/>${catTitle}<c:crossAx val="222222222"/></c:valAx>` +
+      `<c:delete val="0"/><c:axPos val="b"/>${catTitle}${AX_STYLE}<c:crossAx val="222222222"/></c:valAx>` +
       '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-      `<c:delete val="0"/><c:axPos val="l"/>${grid}${valTitle}<c:crossAx val="111111111"/></c:valAx>`
+      `<c:delete val="0"/><c:axPos val="l"/>${grid}${valTitle}${AX_STYLE}<c:crossAx val="111111111"/></c:valAx>`
   } else {
     // Horizontal bar chart (barDir=bar): category axis on the left, value axis at the bottom (matches how PowerPoint writes it)
     const isBarKind =
@@ -232,16 +295,17 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
     const horizontal = isBarKind && opts.barDir === 'bar'
     const axes =
       `<c:catAx><c:axId val="111111111"/><c:scaling><c:orientation val="minMax"/></c:scaling>` +
-      `<c:delete val="0"/><c:axPos val="${horizontal ? 'l' : 'b'}"/>${catTitle}<c:crossAx val="222222222"/></c:catAx>` +
+      `<c:delete val="0"/><c:axPos val="${horizontal ? 'l' : 'b'}"/>${catTitle}${AX_STYLE}<c:crossAx val="222222222"/></c:catAx>` +
       '<c:valAx><c:axId val="222222222"/><c:scaling><c:orientation val="minMax"/></c:scaling>' +
-      `<c:delete val="0"/><c:axPos val="${horizontal ? 'b' : 'l'}"/>${grid}${valTitle}<c:crossAx val="111111111"/></c:valAx>`
+      `<c:delete val="0"/><c:axPos val="${horizontal ? 'b' : 'l'}"/>${grid}${valTitle}${AX_STYLE}<c:crossAx val="111111111"/></c:valAx>`
     const axIds = '<c:axId val="111111111"/><c:axId val="222222222"/>'
     let inner: string
     if (opts.kind === 'radar') {
       // Radar: categories are vertices (clockwise from 12 o'clock), standard style (unfilled lines)
       inner = `<c:radarChart><c:radarStyle val="standard"/><c:varyColors val="0"/>${sers}${dLbls}${axIds}</c:radarChart>`
     } else if (opts.kind === 'line') {
-      inner = `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${sers}${dLbls}<c:marker val="1"/>${axIds}</c:lineChart>`
+      const lineSers = opts.series.map((ser, i) => serXml(ser, i, 'line', 5)).join('')
+      inner = `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${lineSers}${dLbls}<c:marker val="1"/>${axIds}</c:lineChart>`
     } else if (opts.kind === 'area') {
       inner = `<c:areaChart><c:grouping val="standard"/><c:varyColors val="0"/>${sers}${dLbls}${axIds}</c:areaChart>`
     } else {
@@ -261,6 +325,7 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
 
   const title = opts.title
     ? '<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r>' +
+      '<a:rPr lang="zh-CN" sz="1300" b="1"><a:solidFill><a:srgbClr val="1E293B"/></a:solidFill></a:rPr>' +
       `<a:t>${escapeXmlText(opts.title)}</a:t></a:r></a:p></c:rich></c:tx>` +
       '<c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>'
     : '<c:autoTitleDeleted val="1"/>'
@@ -278,7 +343,7 @@ export function buildChartSpaceXml(opts: NewChartOptions): string {
   const legend =
     legendPos === 'none'
       ? ''
-      : `<c:legend><c:legendPos val="${legendPos}"/><c:overlay val="0"/></c:legend>`
+      : `<c:legend><c:legendPos val="${legendPos}"/><c:overlay val="0"/>${FONT_LEGEND}</c:legend>`
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
     `<c:chartSpace xmlns:c="${C_NS}" xmlns:a="${A_NS}" xmlns:r="${R_NS}">` +

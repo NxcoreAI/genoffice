@@ -47,6 +47,11 @@ export interface NewElementOptions {
   stroke?: { color: string; widthEmu: number }
   /** body geometry overrides; absent = `wrap="square" rtlCol="0"` as before */
   bodyPr?: NewElementBodyPr
+  /**
+   * Custom geometry: a complete <a:pathLst> fragment. When present it replaces
+   * the preset geometry (baked icon shapes); kind is only used for the element name.
+   */
+  custGeomPathLst?: string
 }
 
 /**
@@ -142,13 +147,19 @@ export function nextCNvPrId(slide: Slide): number {
 export function buildSpXml(slide: Slide, opts: NewElementOptions): string {
   const id = nextCNvPrId(slide)
   const isTextbox = opts.kind === 'textbox'
-  const name = isTextbox ? `TextBox ${id}` : `Shape ${id}`
+  const name = opts.custGeomPathLst
+    ? `Icon ${id}`
+    : isTextbox
+      ? `TextBox ${id}`
+      : `Shape ${id}`
   const o = opts.offset
   const xfrm = `<a:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/></a:xfrm>`
   // Parser convention: has txBody and no prstGeom → 'text'; textbox omits prstGeom
-  const geom = isTextbox
-    ? ''
-    : `<a:prstGeom prst="${escapeXmlAttr(opts.kind)}"><a:avLst/></a:prstGeom>`
+  const geom = opts.custGeomPathLst
+    ? `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:rect l="0" t="0" r="0" b="0"/>${opts.custGeomPathLst}</a:custGeom>`
+    : isTextbox
+      ? ''
+      : `<a:prstGeom prst="${escapeXmlAttr(opts.kind)}"><a:avLst/></a:prstGeom>`
   const fill = opts.fillColor ? `<a:solidFill>${srgbClrXml(opts.fillColor)}</a:solidFill>` : ''
   const ln = opts.stroke
     ? `<a:ln w="${Math.round(opts.stroke.widthEmu)}"><a:solidFill><a:srgbClr val="${opts.stroke.color.replace(/^#/, '').slice(0, 6).toUpperCase()}"/></a:solidFill></a:ln>`
@@ -197,7 +208,7 @@ export function addElement(slide: Slide, opts: NewElementOptions): TextElement {
     type: opts.kind === 'textbox' ? 'text' : 'shape',
     anchor: { spIndex: slide.elements.length, originalXml: xml, range: [0, 0] },
     transform: { offset: { ...opts.offset }, rot: 0, flipH: false, flipV: false },
-    ...(opts.kind !== 'textbox' ? { presetGeometry: opts.kind } : {}),
+    ...(opts.kind !== 'textbox' && !opts.custGeomPathLst ? { presetGeometry: opts.kind } : {}),
     ...(opts.fillColor ? { fill: { type: 'solid' as const, color: opts.fillColor } } : {}),
     ...(opts.stroke
       ? {
@@ -281,15 +292,17 @@ export interface NewTableGridOptions {
   cells: NewTableCellSpec[][]
   /**
    * uniform cell borders; scope 'all' rules every edge, 'insideV' only the
-   * verticals between columns (rule-separated zones); absent = borderless
+   * verticals between columns, 'insideH' only the horizontals between rows
+   * (rule-separated zones); absent = borderless
    */
-  border?: { color: string; widthEmu: number; scope?: 'all' | 'insideV' }
+  border?: { color: string; widthEmu: number; scope?: 'all' | 'insideV' | 'insideH' }
 }
 
 function tableCellXml(
   cell: NewTableCellSpec,
   colIdx: number,
   border: NewTableGridOptions['border'],
+  rowIdx: number,
 ): string {
   const attrs: string[] = []
   if ((cell.gridSpan ?? 1) > 1) attrs.push(`gridSpan="${Math.floor(cell.gridSpan!)}"`)
@@ -319,9 +332,12 @@ function tableCellXml(
       `<a:${tag} w="${w}" cap="flat"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:${tag}>`
     if ((border.scope ?? 'all') === 'all') {
       lines = ln('lnL') + ln('lnR') + ln('lnT') + ln('lnB')
-    } else if (colIdx > 0 && !cell.hMerge) {
-      // insideV: only the left edge of non-first columns carries the rule
-      lines = ln('lnL')
+    } else if (border.scope === 'insideV') {
+      // only the left edge of non-first columns carries the rule
+      if (colIdx > 0 && !cell.hMerge) lines = ln('lnL')
+    } else {
+      // insideH: only the top edge of non-first rows carries the rule
+      if (rowIdx > 0 && !cell.vMerge) lines = ln('lnT')
     }
   }
   const fill = cell.fillColor
@@ -354,7 +370,7 @@ export function buildTableGridXml(slide: Slide, opts: NewTableGridOptions): stri
     .map((row, r) => {
       const h = Math.max(1, Math.round(opts.rowHeightsEmu[r] ?? 1))
       // one <a:tc> per grid column (covered columns keep their own hMerge tc)
-      const tcs = row.map((cell, colIdx) => tableCellXml(cell, colIdx, opts.border)).join('')
+      const tcs = row.map((cell, colIdx) => tableCellXml(cell, colIdx, opts.border, r)).join('')
       return `<a:tr h="${h}">${tcs}</a:tr>`
     })
     .join('')

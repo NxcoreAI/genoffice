@@ -342,7 +342,7 @@ function patchRunProps(runXml: string, run: TextRun): string {
     // so inheritance applies)
     const attrs = buildRPrAttrs(run)
     const color = run.color
-      ? `<a:solidFill><a:srgbClr val="${hex6(run.color)}"/></a:solidFill>`
+      ? `<a:solidFill><a:srgbClr val="${hex6(run.color)}">${alphaXml(run.color)}</a:srgbClr></a:solidFill>`
       : ''
     const font =
       run.fontFamily && !run.fontImplicit && !run.latinFont && !run.eaFont
@@ -555,19 +555,26 @@ function patchRunFont(runXml: string, family: string): string {
 
 function patchRunColor(runXml: string, color: string): string {
   const hex = hex6(color)
-  // Existing solidFill/srgbClr → change val
+  const alpha = alphaXml(color)
+  const fill = `<a:solidFill><a:srgbClr val="${hex}">${alpha}</a:srgbClr></a:solidFill>`
+  // Existing solidFill/srgbClr → change val (whole-fill swap when an alpha child is needed)
   if (/<a:solidFill>\s*<a:srgbClr\b/.test(runXml)) {
+    if (alpha) {
+      return runXml.replace(
+        /<a:solidFill>\s*<a:srgbClr\b[^>]*?(?:\/>|>[\s\S]*?<\/a:srgbClr>)\s*<\/a:solidFill>/,
+        fill,
+      )
+    }
     return runXml.replace(/(<a:solidFill>\s*<a:srgbClr\b[^>]*?\bval=")[^"]*(")/, `$1${hex}$2`)
   }
   // Existing solidFill/schemeClr → swap to srgbClr (fixed as an explicit color after editing)
   if (/<a:solidFill>\s*<a:schemeClr\b/.test(runXml)) {
     return runXml.replace(
       /<a:solidFill>\s*<a:schemeClr\b[^>]*?(?:\/>|>[\s\S]*?<\/a:schemeClr>)\s*<\/a:solidFill>/,
-      `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`,
+      fill,
     )
   }
   // No solidFill: expand a self-closing rPr to a pair first, then inject at the start
-  const fill = `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`
   if (/<a:rPr\b[^>]*\/>/.test(runXml)) {
     return runXml.replace(/<a:rPr\b([^>]*?)\/>/, `<a:rPr$1>${fill}</a:rPr>`)
   }
@@ -739,7 +746,7 @@ function generateRunXml(r: TextRun): string {
   // explicit schemeClr is materialized as srgbClr to keep visuals (the rebuild path can't restore the original scheme reference)
   const color =
     r.color && !r.colorInherited
-      ? `<a:solidFill><a:srgbClr val="${hex6(r.color)}"/></a:solidFill>`
+      ? `<a:solidFill><a:srgbClr val="${hex6(r.color)}">${alphaXml(r.color)}</a:srgbClr></a:solidFill>`
       : ''
   // Text highlight (CT_TextCharacterProperties order: after the fill group, before the font slots)
   const highlight = r.highlight
