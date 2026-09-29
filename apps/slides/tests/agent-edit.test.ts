@@ -33,7 +33,7 @@ vi.mock('../src/main/slides-main', () => ({
   syncAutofitScale: (_s: unknown, _i: number, _id: string, rendered: unknown) => rendered,
 }))
 
-import { applyAgentDeckOps, describeAgentDeck } from '../src/main/agent-edit'
+import { applyAgentDeckOps, applyAgentDeckPage, describeAgentDeck } from '../src/main/agent-edit'
 import { sessions, type Session } from '../src/main/session-state'
 
 const WC_ID = 41001
@@ -146,6 +146,52 @@ describe('applyAgentDeckOps', () => {
     session.path = '/tmp/agent-edit-deck.pptx'
     const r3 = await applyAgentDeckOps(WC_ID, [])
     expect(r3.ok).toBe(false)
+    sessions.delete(WC_ID)
+  })
+})
+
+const PAGE_SPEC = JSON.stringify({
+  background: '#FFFFFF',
+  elements: [
+    {
+      type: 'text', x: 80, y: 300, w: 800, h: 72,
+      paragraphs: [{ runs: [{ text: 'Generated page', sizePt: 32, bold: true }] }],
+    },
+  ],
+})
+
+describe('applyAgentDeckPage', () => {
+  it('replaces an existing page in place (slideIndex < page count)', async () => {
+    await makeSession()
+    const r = await applyAgentDeckPage(WC_ID, { slideIndex: 0, specJson: PAGE_SPEC })
+    expect(r.ok).toBe(true)
+    expect(r.applied).toBe(true)
+    expect(r.outline).toContain('Generated page')
+    expect(sends).toHaveLength(1)
+    const payload = sends[0]!.payload as { slides: unknown[] }
+    expect(payload.slides.length).toBe(1)
+    expect(persistCalls).toHaveLength(1)
+    sessions.delete(WC_ID)
+  })
+
+  it('appends a new last page when slideIndex === page count (page-by-page growth)', async () => {
+    await makeSession()
+    const r = await applyAgentDeckPage(WC_ID, { slideIndex: 1, specJson: PAGE_SPEC })
+    expect(r.ok).toBe(true)
+    expect(r.applied).toBe(true)
+    const payload = sends[0]!.payload as { slides: unknown[] }
+    expect(payload.slides.length).toBe(2)
+    expect(persistCalls).toHaveLength(1)
+    sessions.delete(WC_ID)
+  })
+
+  it('rejects slideIndex beyond page count with no broadcast or save', async () => {
+    await makeSession()
+    const r = await applyAgentDeckPage(WC_ID, { slideIndex: 2, specJson: PAGE_SPEC })
+    expect(r.ok).toBe(false)
+    expect((r as { error?: string }).error).toContain('between 0 and 1')
+    expect(sends).toHaveLength(0)
+    expect(persistCalls).toHaveLength(0)
     sessions.delete(WC_ID)
   })
 })

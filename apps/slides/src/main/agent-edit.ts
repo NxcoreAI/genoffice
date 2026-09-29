@@ -199,11 +199,14 @@ export async function applyAgentDeckOps(
 /**
  * Fill one page of the LIVE session from a PageSpec: the same tolerant parser
  * and single-page builder as whole-deck generation, landed as one
- * insertSlidePptx{at, replace} transaction — the identical pipeline the
- * renderer's regenerate_slide uses — so a filled page is pixel-for-pixel what
- * generation would have produced. One history push = one undo step; the fresh
- * render state goes to every attached view, then the silent save fires the
- * host's fileSaved hook (version-chain re-import).
+ * insertSlidePptx transaction — the identical pipeline the renderer's
+ * regenerate_slide uses — so a filled page is pixel-for-pixel what generation
+ * would have produced. slideIndex < page count replaces that page in place;
+ * slideIndex === page count APPENDS a new last page (the deck grows one page
+ * per call — page-by-page generation leaves no unfilled skeleton tail).
+ * One history push = one undo step; the fresh render state goes to every
+ * attached view, then the silent save fires the host's fileSaved hook
+ * (version-chain re-import).
  */
 export async function applyAgentDeckPage(
   wcId: number,
@@ -214,8 +217,8 @@ export async function applyAgentDeckPage(
   if (!session.path) return { ok: false, error: 'the deck has no file path yet' }
   const total = session.opened.deck.slides.length
   const at = req.slideIndex
-  if (!Number.isInteger(at) || at < 0 || at >= total) {
-    return { ok: false, error: `slideIndex must be an integer between 0 and ${total - 1}` }
+  if (!Number.isInteger(at) || at < 0 || at > total) {
+    return { ok: false, error: `slideIndex must be an integer between 0 and ${total} (${total} = append as a new last page)` }
   }
   const parsed = parsePageSpec(String(req.specJson ?? ''))
   if (!parsed.ok) return { ok: false, error: `page ${at + 1}: ${parsed.error}` }
@@ -230,7 +233,7 @@ export async function applyAgentDeckPage(
   if (!source) return { ok: false, error: `page ${at + 1}: the page could not be merged into this deck` }
 
   pushHistory(session)
-  const r = runTxn(session.opened, { ops: [{ op: 'insertSlidePptx', source, at, replace: true } as Op] })
+  const r = runTxn(session.opened, { ops: [{ op: 'insertSlidePptx', source, at, replace: at < total } as Op] })
   if (!r.applied) {
     session.undoStack.pop() // The executor already restored the deck
     return {
