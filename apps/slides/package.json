@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "dist:mac": "electron-vite build && electron-builder --mac",
     "dist:win": "electron-vite build && electron-builder --win",
-    "dist:dir": "electron-vite build && electron-builder --dir"
+    "dist:dir": "electron-vite build && electron-builder --dir",
+    "bake:icons": "node scripts/bake-icons.mjs"
   },
   "devDependencies": {
     "@genoffice/agent-core": "*",
@@ -41,6 +42,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-konva": "^19.0.10",
+    "svgpath": "^2.6.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vitest": "^4.1.0"
