@@ -38,10 +38,21 @@ export interface AgentDeckResult {
 
 const MAX_AGENT_PAGES = 24
 
-export function agentPageDeps() {
+/**
+ * everroom-material:// 素材引用回源器：由 embed 宿主（EverRoom 桌面端）注入，
+ * 从其本地素材库取字节；返回 null 按图片下载失败处理（跳过 + imageFailures）。
+ */
+export interface AgentDeckImageResolver {
+  resolveMaterial?: (url: string) => Promise<{ bytes: Uint8Array; ext: string } | null>
+}
+
+export function agentPageDeps(imageResolver?: AgentDeckImageResolver) {
   return {
     fontMetrics: getFontMetrics(),
     fetchImage: async (url: string): Promise<{ bytes: Uint8Array; ext: string } | null> => {
+      if (url.startsWith('everroom-material://')) {
+        return imageResolver?.resolveMaterial?.(url) ?? null
+      }
       const resp = await fetchRemoteImage(url)
       if (!resp || !resp.ok) return null
       const buf = new Uint8Array(await resp.arrayBuffer())
@@ -75,6 +86,7 @@ export function agentPageDeps() {
  */
 export async function buildAgentDeckPptx(
   pageSpecJsons: string[],
+  imageResolver?: AgentDeckImageResolver,
 ): Promise<{ ok: true; deck: AgentDeckResult } | { ok: false; error: string }> {
   if (!Array.isArray(pageSpecJsons) || pageSpecJsons.length === 0) {
     return { ok: false, error: 'at least one page spec is required' }
@@ -92,7 +104,7 @@ export async function buildAgentDeckPptx(
       return { ok: false, error: `page ${index + 1}: ${parsed.error}` }
     }
     try {
-      const built = await buildPagePptx(parsed.spec, agentPageDeps())
+      const built = await buildPagePptx(parsed.spec, agentPageDeps(imageResolver))
       pages.push(built.bytes)
       if (parsed.warnings.length > 0) {
         warnings.push({ page: index + 1, messages: parsed.warnings })

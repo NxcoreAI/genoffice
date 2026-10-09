@@ -687,3 +687,47 @@ describe('buildPagePptx dense-page rejection and contain-fit images', () => {
     expect(pic.srcRect ?? undefined).toBeUndefined()
   })
 })
+
+describe('card text cluster centering', () => {
+  const card = { type: 'shape', shape: 'roundRect', x: 60, y: 140, w: 1160, h: 160, fill: '#F5F1E8' }
+  const chipText = (text: string, y: number, h = 29, sizePt = 14) =>
+    textSpec(text, { x: 80, y, w: 240, h, paragraphs: [{ runs: [{ text, sizePt }] }] })
+
+  it('shifts a top-packed text cluster down so the card pads balance', () => {
+    // 卡 140..300：簇墨迹约 155..244 —— 上留白 ~15px、下留白 ~56px（真实 deck 第 9 页形态）
+    const r = parsePageSpec(JSON.stringify({
+      elements: [card, chipText('明 代 以 前', 155), chipText('龙团凤饼贡茶鼎盛', 190, 24), chipText('宋代点茶以团茶为原料', 220, 24)],
+    }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const texts = r.spec.elements.filter((e) => e.type === 'text')
+    const shifted = texts.map((e) => e.y)
+    // 全簇同幅下移：间距不变，只有整体位置变
+    expect(shifted[1]! - shifted[0]!).toBeCloseTo(190 - 155, 0)
+    expect(shifted[2]! - shifted[1]!).toBeCloseTo(220 - 190, 0)
+    // 墨迹簇（近似取首个元素框顶、末元素框底）上下留白基本均衡
+    const lastBottom = shifted[2]! + 24
+    const padTop = shifted[0]! - 140
+    const padBottom = 300 - lastBottom
+    expect(Math.abs(padTop - padBottom)).toBeLessThanOrEqual(12) // 墨迹估算 vs 元素框口径差 ≤ 数px
+    expect(padTop).toBeGreaterThan(15) // 确实发生了下移
+  })
+
+  it('leaves balanced clusters and image-bearing cards untouched', () => {
+    const r = parsePageSpec(JSON.stringify({
+      elements: [
+        card,
+        chipText('居中标题', 200), // 200..229 in 140..300：pad 60/71 — 差 11px，不触发
+        { type: 'shape', shape: 'roundRect', x: 60, y: 340, w: 1160, h: 160, fill: '#EEEEEE' },
+        { type: 'image', url: 'https://ok.example/a.png', x: 80, y: 360, w: 300, h: 120 },
+        chipText('图旁文字', 366, 24, 12),
+      ],
+    }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const [, balanced, , ] = r.spec.elements
+    expect(balanced!.y).toBe(200) // 均衡卡不动
+    const imageCardText = r.spec.elements[4]!
+    expect(imageCardText!.y).toBe(366) // 图文混排卡不处理
+  })
+})

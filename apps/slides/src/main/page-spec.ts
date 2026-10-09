@@ -307,6 +307,66 @@ function estimateTextInk(
   return { idx, x: el.x, y: top, w: el.w, h: contentH, label: label.trim().slice(0, 20) }
 }
 
+/** 卡片内文本簇垂直居中的判定阈值：卡片最小尺寸、簇内留白差触发线。 */
+const CARD_MIN_W_PX = 140
+const CARD_MIN_H_PX = 90
+const CLUSTER_PAD_DIFF_PX = 24
+const CLUSTER_PAD_DIFF_RATIO = 0.18
+const CLUSTER_CONTAIN_TOL_PX = 3
+
+/**
+ * 卡片内文本簇垂直居中：规划代理常把卡片拉高去填满版面分区，内容却从卡顶
+ * 紧排——卡片底部留出一大条空白（真实 deck 第 4/9 页"卡片内文字偏移严重"
+ * 的主诉）。对每张卡（较大的 shape）收集完全落于卡内的文本元素，按墨迹
+ * 估算求簇顶/簇底；上下留白差超过阈值时整簇下移差值的一半，使上下留白
+ * 均衡。只平移 y、不改簇内相对间距；inkBoxes 同步平移，保证其后的墨迹
+ * 重叠校验看到的就是最终几何。图文混排的卡不动（基线模型不同，保守起见）。
+ */
+function centerTextClustersInCards(elements: SpecElement[], inkBoxes: TextInkBox[]): void {
+  const cards = elements.filter((el): el is SpecShape =>
+    el.type === 'shape' && el.w >= CARD_MIN_W_PX && el.h >= CARD_MIN_H_PX)
+  const inkByIdx = new Map(inkBoxes.map((box) => [box.idx, box]))
+  for (const card of cards) {
+    // 嵌套卡片（大卡里的小卡/色条）不作为独立卡片处理，避免双重平移。
+    const nested = cards.some((other) => other !== card
+      && other.x <= card.x && other.y <= card.y
+      && other.x + other.w >= card.x + card.w && other.y + other.h >= card.y + card.h
+      && (other.w > card.w || other.h > card.h))
+    if (nested) continue
+    const contained = elements.filter((el) => el !== card
+      && el.x >= card.x - CLUSTER_CONTAIN_TOL_PX
+      && el.y >= card.y - CLUSTER_CONTAIN_TOL_PX
+      && el.x + el.w <= card.x + card.w + CLUSTER_CONTAIN_TOL_PX
+      && el.y + el.h <= card.y + card.h + CLUSTER_CONTAIN_TOL_PX)
+    // 图/表等有基线语义的子元素存在时不动（居中整簇可能拆散图文对应）；
+    // 色条/强调块等 shape 装饰不挡（真实 deck 的"大卡+色条+文字"形态）。
+    if (contained.some((el) => el.type === 'image' || el.type === 'chart' || el.type === 'table')) continue
+    const innerCards = cards.filter((other) => other !== card
+      && other.x >= card.x && other.y >= card.y
+      && other.x + other.w <= card.x + card.w && other.y + other.h <= card.y + card.h)
+    const inInner = (el: SpecElement): boolean => innerCards.some((inner) =>
+      el.x >= inner.x - CLUSTER_CONTAIN_TOL_PX
+      && el.y >= inner.y - CLUSTER_CONTAIN_TOL_PX
+      && el.x + el.w <= inner.x + inner.w + CLUSTER_CONTAIN_TOL_PX
+      && el.y + el.h <= inner.y + inner.h + CLUSTER_CONTAIN_TOL_PX)
+    const members = contained.filter((el): el is SpecText => el.type === 'text' && !inInner(el))
+    if (members.length === 0) continue
+    const inks = members
+      .map((el) => inkByIdx.get(elements.indexOf(el)))
+      .filter((box): box is TextInkBox => box !== undefined)
+    if (inks.length === 0) continue
+    const clusterTop = Math.min(...inks.map((box) => box.y))
+    const clusterBottom = Math.max(...inks.map((box) => box.y + box.h))
+    const padTop = clusterTop - card.y
+    const padBottom = card.y + card.h - clusterBottom
+    const diff = padBottom - padTop
+    if (diff <= Math.max(CLUSTER_PAD_DIFF_PX, card.h * CLUSTER_PAD_DIFF_RATIO)) continue
+    const shift = Math.round(diff / 2)
+    for (const el of members) el.y += shift
+    for (const box of inks) box.y += shift
+  }
+}
+
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
 }
@@ -459,8 +519,11 @@ export function parsePageSpec(
 
     if (type === 'image') {
       const url = typeof el.url === 'string' ? el.url.trim() : ''
-      if (!/^https?:\/\//.test(url)) {
-        warnings.push(`element ${i}: image url must be http(s), dropped`)
+      // everroom-material://<sha256> 引用宿主（EverRoom）本地素材库，打包时由
+      // 注入的 resolveMaterial 回源；其余仍必须 http(s) 直链。
+      const materialRef = /^everroom-material:\/\/([a-f0-9]{64})$/.exec(url)
+      if (!materialRef && !/^https?:\/\//.test(url)) {
+        warnings.push(`element ${i}: image url must be http(s) or everroom-material://, dropped`)
         continue
       }
       if (images >= MAX_IMAGES) {
@@ -486,7 +549,7 @@ export function parsePageSpec(
         warnings.push(`element ${i}: text element without any text, dropped`)
         continue
       }
-      const valign = el.valign
+      const valignRaw = el.valign
       const shadow = parseShadowTier(el.shadow)
       if (el.shadow !== undefined && !shadow) {
         warnings.push(`element ${i}: shadow must be soft|medium|strong, ignored`)
@@ -494,7 +557,17 @@ export function parsePageSpec(
       for (const emoji of emojiCodePoints(paragraphText(paragraphs))) {
         emojiProblems.push(`element ${i}: text contains emoji ${emoji}`)
       }
-      inkBoxes.push(estimateTextInk(base, paragraphs, i, 'top'))
+      // 未声明对齐且墨迹明显小于框高（≥40px 的框、内容不足 55%）时按垂直
+      // 居中处理：规划代理常给单行/短文本开出成倍高的框，顶部锚定会让文字
+      // 系统性浮在高处（真实 deck 时间轴文字与节点错位的主诉）。显式声明
+      // valign 的元素尊重作者意图，不动。
+      let valign: 'top' | 'middle' | 'bottom' | undefined
+        = valignRaw === 'top' || valignRaw === 'middle' || valignRaw === 'bottom' ? valignRaw : undefined
+      if (valign === undefined) {
+        const ink = estimateTextInk(base, paragraphs, i, 'top')
+        if (base.h >= 40 && ink.h <= base.h * 0.55) valign = 'middle'
+      }
+      inkBoxes.push(estimateTextInk(base, paragraphs, i, valign === 'middle' ? 'middle' : 'top'))
       elements.push({
         type: 'text',
         ...base,
@@ -745,6 +818,8 @@ export function parsePageSpec(
 
     warnings.push(`element ${i}: unknown type "${String(type)}", dropped`)
   }
+
+  centerTextClustersInCards(elements, inkBoxes)
 
   if (elements.length === 0) {
     return {

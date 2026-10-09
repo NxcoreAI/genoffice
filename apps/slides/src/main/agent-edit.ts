@@ -10,7 +10,7 @@ import { webContents } from 'electron'
 
 import { extractMergeSlideSource, slideDurableId, materializeSlide } from '@genoffice/pptx-engine'
 
-import { agentPageDeps } from './agent-deck'
+import { agentPageDeps, type AgentDeckImageResolver } from './agent-deck'
 import { buildAgentDeckOutline } from '../shared/deck-outline'
 import { opVocabulary } from '../shared/op-docs'
 import { buildPagePptx, parsePageSpec } from './page-spec'
@@ -211,6 +211,7 @@ export async function applyAgentDeckOps(
 export async function applyAgentDeckPage(
   wcId: number,
   req: { slideIndex: number; specJson: string },
+  imageResolver?: AgentDeckImageResolver,
 ): Promise<AgentApplyResult> {
   const session = sessions.get(wcId)
   if (!session) return { ok: false, error: 'no slides session for this view' }
@@ -225,7 +226,7 @@ export async function applyAgentDeckPage(
 
   let source: Awaited<ReturnType<typeof extractMergeSlideSource>>
   try {
-    const built = await buildPagePptx(parsed.spec, agentPageDeps())
+    const built = await buildPagePptx(parsed.spec, agentPageDeps(imageResolver))
     source = await extractMergeSlideSource(built.bytes)
   } catch (err) {
     return { ok: false, error: `page ${at + 1}: ${err instanceof Error ? err.message : String(err)}` }

@@ -19,6 +19,14 @@ vi.mock('@genoffice/electron-utils', () => ({
 
 import { buildAgentDeckPptx } from '../src/main/agent-deck'
 
+const PNG_1PX = Uint8Array.from(
+  atob(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  ),
+  (c) => c.charCodeAt(0),
+)
+const MATERIAL_HASH = 'a'.repeat(64)
+
 const pageSpec = (text: string, background = '#FFFFFF') =>
   JSON.stringify({
     background,
@@ -80,5 +88,29 @@ describe('buildAgentDeckPptx', () => {
     expect(r.deck.warnings[0]!.messages.join(' ')).toContain('48')
     const opened = await openPptx(r.deck.bytes)
     expect(opened.deck.slides[0]!.elements).toHaveLength(48)
+  })
+
+  it('resolves everroom-material:// refs through the injected resolver; without one they fail like dead downloads', async () => {
+    const spec = JSON.stringify({
+      elements: [
+        { type: 'image', url: `everroom-material://${MATERIAL_HASH}`, x: 0, y: 0, w: 640, h: 720 },
+      ],
+    })
+    const withResolver = await buildAgentDeckPptx([spec], {
+      resolveMaterial: async () => ({ bytes: PNG_1PX, ext: 'png' }),
+    })
+    expect(withResolver.ok).toBe(true)
+    if (!withResolver.ok) return
+    expect(withResolver.deck.imageFailures).toEqual([])
+    const opened = await openPptx(withResolver.deck.bytes)
+    const pics = opened.deck.slides[0]!.elements.filter((e) => e.type === 'picture')
+    expect(pics).toHaveLength(1)
+
+    const withoutResolver = await buildAgentDeckPptx([spec])
+    expect(withoutResolver.ok).toBe(true)
+    if (!withoutResolver.ok) return
+    expect(withoutResolver.deck.imageFailures).toEqual([
+      { page: 1, url: `everroom-material://${MATERIAL_HASH}` },
+    ])
   })
 })
