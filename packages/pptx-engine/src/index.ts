@@ -639,10 +639,18 @@ export async function savePptx(opened: OpenedPptx): Promise<Uint8Array> {
  *
  * Prefer this for anything that lands on disk: savePptx has to assemble the whole
  * package into one contiguous buffer, which on a large deck fails outright with
- * "Array buffer allocation failed". Streaming keeps peak memory to a chunk at a
- * time. JSZip throws stream errors from inside its own scheduled callbacks, so the
- * stream's 'error' event — not just the returned promise — has to be handled or the
- * throw escapes as an uncaught exception and takes the process down.
+ * "Array buffer allocation failed". Streaming keeps peak memory to the largest
+ * single entry at a time. JSZip throws stream errors from inside its own scheduled
+ * callbacks, so the stream's 'error' event — not just the returned promise — has
+ * to be handled or the throw escapes as an uncaught exception and takes the
+ * process down.
+ *
+ * streamFiles must stay off: it writes every entry with a data descriptor
+ * (general-purpose flag bit 3, sizes zeroed in the local header). LibreOffice
+ * fails to load such a package outright once it contains STORED entries — i.e.
+ * any media — with "source file could not be loaded". The default (false)
+ * generates each entry fully in memory before streaming it out, so local headers
+ * carry real sizes and no descriptors.
  */
 export async function savePptxToFile(opened: OpenedPptx, filePath: string): Promise<void> {
   const { createWriteStream } = await import('node:fs')
@@ -651,7 +659,6 @@ export async function savePptxToFile(opened: OpenedPptx, filePath: string): Prom
     type: 'nodebuffer',
     compression: 'DEFLATE',
     compressionOptions: { level: 6 },
-    streamFiles: true,
   })
   await pipeline(source, createWriteStream(filePath))
 }
