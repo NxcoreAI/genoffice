@@ -111,3 +111,9 @@ export {
   type ListItemRef,
   type ListMarkerInfo,
 } from './list-markers'
+export {
+  buildThesisDocx,
+  describeThesisBlocks,
+  type ThesisFormatCardInput,
+  type ThesisBindingSpecInput,
+} from './thesis-binder'

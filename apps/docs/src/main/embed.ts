@@ -16,3 +16,4 @@ export {
   setDocsShellWindow,
   teardownDocsRenderer,
 } from './docs-main'
+export { buildThesisDocx, describeThesisBlocks } from '@genoffice/docx-engine'

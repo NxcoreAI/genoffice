@@ -1984,9 +1984,9 @@ export interface TocEntry {
  * marked dirty so Word recalculates entries and page numbers on open; the
  * static entry texts serve as the visible result until then.
  */
-export function generateTocFieldXml(entries: TocEntry[]): string[] {
+export function generateTocFieldXml(entries: TocEntry[], levelsHint?: number): string[] {
   if (entries.length === 0) return []
-  const maxLevel = Math.min(Math.max(...entries.map((e) => e.level), 1), 9)
+  const maxLevel = levelsHint ?? Math.min(Math.max(...entries.map((e) => e.level), 1), 9)
   const pPr = (level: number) =>
     `<w:pPr><w:pStyle w:val="TOC${Math.min(Math.max(level, 1), 9)}"/>` +
     '<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9350"/></w:tabs>' +
