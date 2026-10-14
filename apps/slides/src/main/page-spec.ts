@@ -11,25 +11,34 @@
  * this module stays testable in plain Node.
  */
 import {
+  addChart,
   addElement,
   addPicture,
+  appendRawElements,
+  buildTableGridXml,
   createBlankPptx,
   editPictureSrcRect,
   openPptx,
   promoteSlideBackground,
   savePptx,
+  setElementEffects,
+  setElementFill,
   type Paragraph,
+  type TableElement,
   type TextElement,
   type TextRun,
 } from '@genoffice/pptx-engine'
 import { buildRenderSlide, EMU_PER_PX_96, type FontMetricsProvider } from '@genoffice/pptx-render'
 import { coverCropFractions } from '../shared/cover-crop'
+import { MAX_PATH_D_CHARS, svgDToPathLst } from './free-path'
+import { ICON_PATH_LST } from './icon-registry.generated'
 
 export const SPEC_CANVAS_W = 1280
 export const SPEC_CANVAS_H = 720
 
 const MAX_ELEMENTS = 48
 const MAX_IMAGES = 8
+const MAX_PATHS = 4
 const MAX_TEXT_LEN = 4000
 
 /** Preset geometries the spec may use; unknown kinds fall back to rect instead of emitting invalid prst XML. */
@@ -66,6 +75,40 @@ export interface SpecRun {
   font?: string
 }
 
+/** Preset shadow tiers; parameters are fixed so the model cannot dial in garish effects. */
+export type SpecShadowTier = 'soft' | 'medium' | 'strong'
+
+const SHADOW_PRESETS: Record<
+  SpecShadowTier,
+  { color: string; blurRad: number; dist: number; dirDeg: number }
+> = {
+  soft: { color: '#0000003D', blurRad: 114300, dist: 25400, dirDeg: 90 },
+  medium: { color: '#00000059', blurRad: 152400, dist: 50800, dirDeg: 90 },
+  strong: { color: '#00000080', blurRad: 254000, dist: 76200, dirDeg: 90 },
+}
+
+export interface SpecGradient {
+  stops: Array<{ pos: number; color: string }>
+  /** Linear angle, degrees clockwise (0 = left→right, 90 = top→bottom). */
+  angle?: number
+}
+
+const GRADIENT_MAX_STOPS = 3
+const CHART_KINDS = new Set<string>([
+  'bar',
+  'barStacked',
+  'line',
+  'pie',
+  'doughnut',
+  'scatter',
+  'comboBarLine',
+])
+const MAX_CHART_CATEGORIES = 24
+const MAX_CHART_SERIES = 6
+const MAX_TABLE_ROWS = 12
+const MAX_TABLE_COLS = 8
+const ICON_DEFAULT_COLOR = '#000000'
+
 export interface SpecParagraph {
   runs: SpecRun[]
   align?: 'left' | 'center' | 'right' | 'justify'
@@ -86,23 +129,114 @@ export interface SpecShape extends SpecBase {
   type: 'shape'
   shape: string
   fill?: string
+  /** Linear gradient fill; replaces the solid fill when present. */
+  gradient?: SpecGradient
   stroke?: { color: string; widthPt: number }
   paragraphs?: SpecParagraph[]
   valign?: 'top' | 'middle' | 'bottom'
+  shadow?: SpecShadowTier
 }
 
 export interface SpecText extends SpecBase {
   type: 'text'
   paragraphs: SpecParagraph[]
   valign?: 'top' | 'middle' | 'bottom'
+  shadow?: SpecShadowTier
 }
 
 export interface SpecImage extends SpecBase {
   type: 'image'
   url: string
+  /**
+   * How the image fills its frame. 'cover' (default) center-crops to fill —
+   * portrait photos lose their top/bottom. 'contain' fits the whole image
+   * inside the frame, centered (letterboxed); use it for product shots whose
+   * subject must stay whole on a matching background.
+   */
+  fit?: 'cover' | 'contain'
+  shadow?: SpecShadowTier
 }
 
-export type SpecElement = SpecShape | SpecText | SpecImage
+export type SpecChartKind =
+  | 'bar'
+  | 'barStacked'
+  | 'line'
+  | 'pie'
+  | 'doughnut'
+  /** XY scatter: x from numeric categories, y from series values */
+  | 'scatter'
+  /** Combo: all series but the last as clustered columns, the last as a line on a secondary axis */
+  | 'comboBarLine'
+
+/** Native chart element — a real c:chart part, editable and data-proportional. */
+export interface SpecChart extends SpecBase {
+  type: 'chart'
+  chart: SpecChartKind
+  title?: string
+  categories: string[]
+  series: Array<{ name: string; values: number[] }>
+  /** Series colors (pie/doughnut: per-point); omit for theme defaults. */
+  colors?: string[]
+  legend?: boolean
+  dataLabels?: boolean
+  gridlines?: boolean
+}
+
+/** Baked vector icon (Heroicons solid) rendered as a custom-geometry shape. */
+export interface SpecIcon extends SpecBase {
+  type: 'icon'
+  icon: string
+  color?: string
+}
+
+/**
+ * Free vector path: the LLM writes an SVG path `d`, converted at parse time
+ * into an OOXML custGeom pathLst. PowerPoint stretches the path's normalized
+ * bounding box onto the element box (aspect not preserved).
+ */
+export interface SpecPath extends SpecBase {
+  type: 'path'
+  /** Prebuilt <a:pathLst> XML (from d at parse time; d itself is not kept) */
+  pathLst: string
+  fill?: string
+  stroke?: { color: string; widthPt: number }
+  shadow?: SpecShadowTier
+}
+
+export interface SpecTableCell {
+  text?: string
+  bold?: boolean
+  color?: string
+  /** cell shading */
+  fill?: string
+  align?: 'left' | 'center' | 'right'
+  /** columns this cell spans (default 1) */
+  span?: number
+}
+
+/** Native table element — a real a:tbl graphicFrame with explicit grid geometry. */
+export interface SpecTable extends SpecBase {
+  type: 'table'
+  /** row-major cells; every row must span the same number of columns (string = plain cell) */
+  rows: Array<Array<SpecTableCell | string>>
+  /** relative column widths; omitted = equal columns */
+  colWidths?: number[]
+  /** relative row heights; omitted = equal rows */
+  rowHeights?: number[]
+  /** base run size for all cells (default 13) */
+  fontSize?: number
+  borderColor?: string
+  /** only the vertical rules between columns; default = all edges */
+  verticalBordersOnly?: boolean
+  /** only the horizontal rules between rows (rule-separated consulting style) */
+  horizontalBordersOnly?: boolean
+  /** border weight in points, 0.25~3 (default 0.75) */
+  borderWidthPt?: number
+  /** alternating row shading for body rows whose cells carry no explicit fill */
+  zebra?: string
+}
+
+export type SpecElement = SpecShape | SpecText | SpecImage | SpecChart | SpecIcon | SpecPath | SpecTable
 
 export interface PageSpec {
   background?: string
@@ -160,7 +294,7 @@ interface TextInkBox {
  * same heuristic the agent prompt documents (line ≈ sizePt*1.8px at 110%
  * spacing, CJK char ≈ sizePt*1.35px, latin ≈ sizePt*0.7px). Content taller than
  * the box extends past it in the anchor direction — that is where the rendered
- * glyphs go (and where growTextBoxesToContent later grows the box to).
+ * glyphs go (and where growTextBoxesAndValidate later grows the box to).
  */
 function estimateTextInk(
   el: { x: number; y: number; w: number; h: number; valign?: 'top' | 'middle' | 'bottom' },
@@ -189,6 +323,66 @@ function estimateTextInk(
   return { idx, x: el.x, y: top, w: el.w, h: contentH, label: label.trim().slice(0, 20) }
 }
 
+/** 卡片内文本簇垂直居中的判定阈值：卡片最小尺寸、簇内留白差触发线。 */
+const CARD_MIN_W_PX = 140
+const CARD_MIN_H_PX = 90
+const CLUSTER_PAD_DIFF_PX = 24
+const CLUSTER_PAD_DIFF_RATIO = 0.18
+const CLUSTER_CONTAIN_TOL_PX = 3
+
+/**
+ * 卡片内文本簇垂直居中：规划代理常把卡片拉高去填满版面分区，内容却从卡顶
+ * 紧排——卡片底部留出一大条空白（真实 deck 第 4/9 页"卡片内文字偏移严重"
+ * 的主诉）。对每张卡（较大的 shape）收集完全落于卡内的文本元素，按墨迹
+ * 估算求簇顶/簇底；上下留白差超过阈值时整簇下移差值的一半，使上下留白
+ * 均衡。只平移 y、不改簇内相对间距；inkBoxes 同步平移，保证其后的墨迹
+ * 重叠校验看到的就是最终几何。图文混排的卡不动（基线模型不同，保守起见）。
+ */
+function centerTextClustersInCards(elements: SpecElement[], inkBoxes: TextInkBox[]): void {
+  const cards = elements.filter((el): el is SpecShape =>
+    el.type === 'shape' && el.w >= CARD_MIN_W_PX && el.h >= CARD_MIN_H_PX)
+  const inkByIdx = new Map(inkBoxes.map((box) => [box.idx, box]))
+  for (const card of cards) {
+    // 嵌套卡片（大卡里的小卡/色条）不作为独立卡片处理，避免双重平移。
+    const nested = cards.some((other) => other !== card
+      && other.x <= card.x && other.y <= card.y
+      && other.x + other.w >= card.x + card.w && other.y + other.h >= card.y + card.h
+      && (other.w > card.w || other.h > card.h))
+    if (nested) continue
+    const contained = elements.filter((el) => el !== card
+      && el.x >= card.x - CLUSTER_CONTAIN_TOL_PX
+      && el.y >= card.y - CLUSTER_CONTAIN_TOL_PX
+      && el.x + el.w <= card.x + card.w + CLUSTER_CONTAIN_TOL_PX
+      && el.y + el.h <= card.y + card.h + CLUSTER_CONTAIN_TOL_PX)
+    // 图/表等有基线语义的子元素存在时不动（居中整簇可能拆散图文对应）；
+    // 色条/强调块等 shape 装饰不挡（真实 deck 的"大卡+色条+文字"形态）。
+    if (contained.some((el) => el.type === 'image' || el.type === 'chart' || el.type === 'table')) continue
+    const innerCards = cards.filter((other) => other !== card
+      && other.x >= card.x && other.y >= card.y
+      && other.x + other.w <= card.x + card.w && other.y + other.h <= card.y + card.h)
+    const inInner = (el: SpecElement): boolean => innerCards.some((inner) =>
+      el.x >= inner.x - CLUSTER_CONTAIN_TOL_PX
+      && el.y >= inner.y - CLUSTER_CONTAIN_TOL_PX
+      && el.x + el.w <= inner.x + inner.w + CLUSTER_CONTAIN_TOL_PX
+      && el.y + el.h <= inner.y + inner.h + CLUSTER_CONTAIN_TOL_PX)
+    const members = contained.filter((el): el is SpecText => el.type === 'text' && !inInner(el))
+    if (members.length === 0) continue
+    const inks = members
+      .map((el) => inkByIdx.get(elements.indexOf(el)))
+      .filter((box): box is TextInkBox => box !== undefined)
+    if (inks.length === 0) continue
+    const clusterTop = Math.min(...inks.map((box) => box.y))
+    const clusterBottom = Math.max(...inks.map((box) => box.y + box.h))
+    const padTop = clusterTop - card.y
+    const padBottom = card.y + card.h - clusterBottom
+    const diff = padBottom - padTop
+    if (diff <= Math.max(CLUSTER_PAD_DIFF_PX, card.h * CLUSTER_PAD_DIFF_RATIO)) continue
+    const shift = Math.round(diff / 2)
+    for (const el of members) el.y += shift
+    for (const box of inks) box.y += shift
+  }
+}
+
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
 }
@@ -199,6 +393,31 @@ function normColor(v: unknown): string | undefined {
   let hex = v.trim().replace(/^#/, '').toUpperCase()
   if (/^[0-9A-F]{3}$/.test(hex)) hex = [...hex].map((c) => c + c).join('')
   return /^[0-9A-F]{6}([0-9A-F]{2})?$/.test(hex) ? `#${hex}` : undefined
+}
+
+function parseShadowTier(v: unknown): SpecShadowTier | undefined {
+  return v === 'soft' || v === 'medium' || v === 'strong' ? v : undefined
+}
+
+/** Gradient with fewer than 2 usable stops → undefined (caller falls back to the solid fill). */
+function parseGradient(v: unknown): SpecGradient | undefined {
+  const rec = asRecord(v)
+  const stopsRaw = Array.isArray(rec.stops) ? rec.stops : []
+  const stops: Array<{ pos: number; color: string }> = []
+  for (const s of stopsRaw) {
+    const sr = asRecord(s)
+    const pos = num(sr.pos)
+    const color = normColor(sr.color)
+    if (pos === undefined || !color) continue
+    stops.push({ pos: Math.min(Math.max(pos, 0), 1), color })
+  }
+  if (stops.length < 2) return undefined
+  stops.sort((a, b) => a.pos - b.pos)
+  const angle = num(rec.angle)
+  return {
+    stops: stops.slice(0, GRADIENT_MAX_STOPS),
+    ...(angle !== undefined ? { angle: Math.min(Math.max(angle, 0), 359) } : {}),
+  }
 }
 
 function num(v: unknown): number | undefined {
@@ -234,8 +453,11 @@ export function parsePageSpec(
   const warnings: string[] = []
   const elements: SpecElement[] = []
   const emojiProblems: string[] = []
+  const chartProblems: string[] = []
+  const tableProblems: string[] = []
   const inkBoxes: TextInkBox[] = []
   let images = 0
+  let paths = 0
 
   const parseParagraphs = (v: unknown): SpecParagraph[] => {
     if (!Array.isArray(v)) return []
@@ -314,16 +536,27 @@ export function parsePageSpec(
 
     if (type === 'image') {
       const url = typeof el.url === 'string' ? el.url.trim() : ''
-      if (!/^https?:\/\//.test(url)) {
-        warnings.push(`element ${i}: image url must be http(s), dropped`)
+      // everroom-material://<sha256> 引用宿主（EverRoom）本地素材库，打包时由
+      // 注入的 resolveMaterial 回源；其余仍必须 http(s) 直链。
+      const materialRef = /^everroom-material:\/\/([a-f0-9]{64})$/.exec(url)
+      if (!materialRef && !/^https?:\/\//.test(url)) {
+        warnings.push(`element ${i}: image url must be http(s) or everroom-material://, dropped`)
         continue
       }
       if (images >= MAX_IMAGES) {
         warnings.push(`element ${i}: image cap ${MAX_IMAGES} reached, dropped`)
         continue
       }
+      const shadow = parseShadowTier(el.shadow)
+      if (el.shadow !== undefined && !shadow) {
+        warnings.push(`element ${i}: shadow must be soft|medium|strong, ignored`)
+      }
+      const fit = el.fit === 'contain' ? 'contain' : 'cover'
+      if (el.fit !== undefined && el.fit !== 'cover' && el.fit !== 'contain') {
+        warnings.push(`element ${i}: image fit must be cover|contain, ignored`)
+      }
       images += 1
-      elements.push({ type: 'image', url, ...base })
+      elements.push({ type: 'image', url, fit, ...base, ...(shadow ? { shadow } : {}) })
       continue
     }
 
@@ -333,16 +566,31 @@ export function parsePageSpec(
         warnings.push(`element ${i}: text element without any text, dropped`)
         continue
       }
-      const valign = el.valign
+      const valignRaw = el.valign
+      const shadow = parseShadowTier(el.shadow)
+      if (el.shadow !== undefined && !shadow) {
+        warnings.push(`element ${i}: shadow must be soft|medium|strong, ignored`)
+      }
       for (const emoji of emojiCodePoints(paragraphText(paragraphs))) {
         emojiProblems.push(`element ${i}: text contains emoji ${emoji}`)
       }
-      inkBoxes.push(estimateTextInk(base, paragraphs, i, 'top'))
+      // 未声明对齐且墨迹明显小于框高（≥40px 的框、内容不足 55%）时按垂直
+      // 居中处理：规划代理常给单行/短文本开出成倍高的框，顶部锚定会让文字
+      // 系统性浮在高处（真实 deck 时间轴文字与节点错位的主诉）。显式声明
+      // valign 的元素尊重作者意图，不动。
+      let valign: 'top' | 'middle' | 'bottom' | undefined
+        = valignRaw === 'top' || valignRaw === 'middle' || valignRaw === 'bottom' ? valignRaw : undefined
+      if (valign === undefined) {
+        const ink = estimateTextInk(base, paragraphs, i, 'top')
+        if (base.h >= 40 && ink.h <= base.h * 0.55) valign = 'middle'
+      }
+      inkBoxes.push(estimateTextInk(base, paragraphs, i, valign === 'middle' ? 'middle' : 'top'))
       elements.push({
         type: 'text',
         ...base,
         paragraphs,
         ...(valign === 'top' || valign === 'middle' || valign === 'bottom' ? { valign } : {}),
+        ...(shadow ? { shadow } : {}),
       })
       continue
     }
@@ -354,6 +602,14 @@ export function parsePageSpec(
         shape = 'rect'
       }
       const fill = normColor(el.fill)
+      const gradient = parseGradient(el.gradient)
+      if (el.gradient !== undefined && !gradient) {
+        warnings.push(`element ${i}: gradient needs 2-3 stops with valid colors, using solid fill`)
+      }
+      const shadow = parseShadowTier(el.shadow)
+      if (el.shadow !== undefined && !shadow) {
+        warnings.push(`element ${i}: shadow must be soft|medium|strong, ignored`)
+      }
       const strokeRec = asRecord(el.stroke)
       const strokeColor = normColor(strokeRec.color)
       const strokeWidth = num(strokeRec.widthPt)
@@ -361,7 +617,7 @@ export function parsePageSpec(
         ? { color: strokeColor, widthPt: Math.min(Math.max(strokeWidth ?? 1, 0.25), 24) }
         : undefined
       const isLine = shape === 'line' || shape === 'lineArrow'
-      if (!fill && !stroke && !isLine) {
+      if (!fill && !gradient && !stroke && !isLine) {
         warnings.push(`element ${i}: shape without fill or stroke, dropped`)
         continue
       }
@@ -379,15 +635,254 @@ export function parsePageSpec(
         shape,
         ...base,
         ...(fill ? { fill } : {}),
+        ...(gradient ? { gradient } : {}),
         ...(stroke ? { stroke } : {}),
         ...(hasText ? { paragraphs } : {}),
         ...(valign === 'top' || valign === 'middle' || valign === 'bottom' ? { valign } : {}),
+        ...(shadow ? { shadow } : {}),
+      })
+      continue
+    }
+
+    if (type === 'chart') {
+      const kind = typeof el.chart === 'string' ? el.chart.trim() : ''
+      if (!CHART_KINDS.has(kind)) {
+        warnings.push(`element ${i}: unknown chart "${kind}", dropped`)
+        continue
+      }
+      const title = typeof el.title === 'string' ? el.title.trim().slice(0, 80) : ''
+      const categories = (Array.isArray(el.categories) ? el.categories : []).map((c) =>
+        typeof c === 'string' ? c.trim().slice(0, 40) : '',
+      )
+      if (categories.length < 2 || categories.length > MAX_CHART_CATEGORIES) {
+        chartProblems.push(
+          `element ${i}: chart needs 2-${MAX_CHART_CATEGORIES} categories, got ${categories.length}`,
+        )
+        continue
+      }
+      const seriesRaw = Array.isArray(el.series) ? el.series : []
+      if (seriesRaw.length < 1 || seriesRaw.length > MAX_CHART_SERIES) {
+        chartProblems.push(
+          `element ${i}: chart needs 1-${MAX_CHART_SERIES} series, got ${seriesRaw.length}`,
+        )
+        continue
+      }
+      const series: Array<{ name: string; values: number[] }> = []
+      let seriesOk = true
+      for (const [si, s] of seriesRaw.entries()) {
+        const sr = asRecord(s)
+        const name = typeof sr.name === 'string' ? sr.name.trim().slice(0, 60) : ''
+        const valuesRaw = Array.isArray(sr.values) ? sr.values : []
+        const values = valuesRaw.map(num)
+        if (values.length !== categories.length || values.some((v) => v === undefined)) {
+          chartProblems.push(
+            `element ${i} series ${si} ("${name || 'unnamed'}"): needs exactly ${categories.length} finite numbers, one per category`,
+          )
+          seriesOk = false
+          break
+        }
+        series.push({ name, values: values as number[] })
+      }
+      if (!seriesOk) continue
+      if (kind === 'comboBarLine' && series.length < 2) {
+        chartProblems.push(
+          `element ${i}: comboBarLine needs 2-${MAX_CHART_SERIES} series (the last one is the line), got ${series.length}`,
+        )
+        continue
+      }
+      const colors = (Array.isArray(el.colors) ? el.colors : [])
+        .map(normColor)
+        .filter((c): c is string => !!c)
+        .slice(0, 8)
+      elements.push({
+        type: 'chart',
+        chart: kind as SpecChartKind,
+        ...base,
+        ...(title ? { title } : {}),
+        categories,
+        series,
+        ...(colors.length ? { colors } : {}),
+        ...(el.legend === true || el.legend === false ? { legend: el.legend } : {}),
+        ...(el.dataLabels === true ? { dataLabels: true } : {}),
+        ...(el.gridlines === true ? { gridlines: true } : {}),
+      })
+      continue
+    }
+
+    if (type === 'icon') {
+      const name = typeof el.icon === 'string' ? el.icon.trim() : ''
+      if (!(name in ICON_PATH_LST)) {
+        warnings.push(`element ${i}: unknown icon "${name}", dropped`)
+        continue
+      }
+      elements.push({
+        type: 'icon',
+        icon: name,
+        color: normColor(el.color) ?? ICON_DEFAULT_COLOR,
+        ...base,
+      })
+      continue
+    }
+
+    if (type === 'path') {
+      if (paths >= MAX_PATHS) {
+        warnings.push(`element ${i}: path cap ${MAX_PATHS} reached, dropped`)
+        continue
+      }
+      const d = typeof el.d === 'string' ? el.d.trim() : ''
+      if (!d || d.length > MAX_PATH_D_CHARS) {
+        warnings.push(`element ${i}: path d missing or over ${MAX_PATH_D_CHARS} chars, dropped`)
+        continue
+      }
+      const fillRule = el.fillRule === 'evenodd' ? 'evenodd' : 'nonzero'
+      if (el.fillRule !== undefined && el.fillRule !== 'evenodd' && el.fillRule !== 'nonzero') {
+        warnings.push(`element ${i}: fillRule must be nonzero|evenodd, using nonzero`)
+      }
+      const fill = normColor(el.fill)
+      const strokeRec = asRecord(el.stroke)
+      const strokeColor = normColor(strokeRec.color)
+      const strokeWidth = num(strokeRec.widthPt)
+      const stroke = strokeColor
+        ? { color: strokeColor, widthPt: Math.min(Math.max(strokeWidth ?? 1, 0.25), 24) }
+        : undefined
+      const shadow = parseShadowTier(el.shadow)
+      if (el.shadow !== undefined && !shadow) {
+        warnings.push(`element ${i}: shadow must be soft|medium|strong, ignored`)
+      }
+      if (!fill && !stroke) {
+        warnings.push(`element ${i}: path without fill or stroke, dropped`)
+        continue
+      }
+      const pathLst = svgDToPathLst(d, fillRule)
+      if (!pathLst) {
+        warnings.push(`element ${i}: path d invalid or too complex, dropped`)
+        continue
+      }
+      paths += 1
+      elements.push({
+        type: 'path',
+        pathLst,
+        ...base,
+        ...(fill ? { fill } : {}),
+        ...(stroke ? { stroke } : {}),
+        ...(shadow ? { shadow } : {}),
+      })
+      continue
+    }
+
+    if (type === 'table') {
+      const rowsRaw = Array.isArray(el.rows) ? el.rows : []
+      if (rowsRaw.length < 1 || rowsRaw.length > MAX_TABLE_ROWS) {
+        tableProblems.push(
+          `element ${i}: table needs 1-${MAX_TABLE_ROWS} rows, got ${rowsRaw.length}`,
+        )
+        continue
+      }
+      const rows: SpecTableCell[][] = []
+      let shapeOk = true
+      for (const [ri, rowRaw] of rowsRaw.entries()) {
+        const cellsRaw = Array.isArray(rowRaw) ? rowRaw : []
+        if (cellsRaw.length < 1 || cellsRaw.length > MAX_TABLE_COLS) {
+          tableProblems.push(
+            `element ${i} row ${ri}: needs 1-${MAX_TABLE_COLS} cells, got ${cellsRaw.length}`,
+          )
+          shapeOk = false
+          break
+        }
+        rows.push(
+          cellsRaw.map((c) => {
+            if (typeof c === 'string') return { text: c.slice(0, 60) }
+            const cr = asRecord(c)
+            const align = cr.align
+            const span = num(cr.span)
+            return {
+              ...(typeof cr.text === 'string' ? { text: cr.text.slice(0, 60) } : {}),
+              ...(cr.bold === true ? { bold: true } : {}),
+              ...(normColor(cr.color) ? { color: normColor(cr.color)! } : {}),
+              ...(normColor(cr.fill) ? { fill: normColor(cr.fill)! } : {}),
+              ...(align === 'left' || align === 'center' || align === 'right'
+                ? { align }
+                : {}),
+              ...(span !== undefined && span >= 2 && span <= MAX_TABLE_COLS
+                ? { span: Math.floor(span) }
+                : {}),
+            }
+          }),
+        )
+      }
+      if (!shapeOk) continue
+      const spanOf = (row: SpecTableCell[]) =>
+        row.reduce((a, c) => a + Math.max(1, Math.floor(c.span ?? 1)), 0)
+      const cols = spanOf(rows[0]!)
+      if (rows.some((row) => spanOf(row) !== cols)) {
+        tableProblems.push(
+          `element ${i}: every row must span the same number of columns (first row spans ${cols})`,
+        )
+        continue
+      }
+      const fontSizeRaw = num(el.fontSize)
+      const fontSize =
+        fontSizeRaw !== undefined
+          ? Math.max(9, Math.min(24, Math.round(fontSizeRaw)))
+          : 13
+      const colWidthsRaw = Array.isArray(el.colWidths) ? el.colWidths.map(num) : []
+      if (colWidthsRaw.length !== 0 && colWidthsRaw.length !== cols) {
+        tableProblems.push(
+          `element ${i}: colWidths needs ${cols} entries, got ${colWidthsRaw.length}`,
+        )
+        continue
+      }
+      if (colWidthsRaw.some((v) => v === undefined || v <= 0)) {
+        tableProblems.push(`element ${i}: colWidths entries must be positive numbers`)
+        continue
+      }
+      const rowHeightsRaw = Array.isArray(el.rowHeights) ? el.rowHeights.map(num) : []
+      if (rowHeightsRaw.length !== 0 && rowHeightsRaw.length !== rows.length) {
+        tableProblems.push(
+          `element ${i}: rowHeights needs ${rows.length} entries, got ${rowHeightsRaw.length}`,
+        )
+        continue
+      }
+      if (rowHeightsRaw.some((v) => v === undefined || v <= 0)) {
+        tableProblems.push(`element ${i}: rowHeights entries must be positive numbers`)
+        continue
+      }
+      for (const [ri, row] of rows.entries()) {
+        for (const [ci, c] of row.entries()) {
+          if (c.text) {
+            for (const emoji of emojiCodePoints(c.text)) {
+              emojiProblems.push(`element ${i} cell ${ri},${ci}: text contains emoji ${emoji}`)
+            }
+          }
+        }
+      }
+      const borderColor = normColor(el.borderColor)
+      const zebra = normColor(el.zebra)
+      const borderWidthRaw = num(el.borderWidthPt)
+      const borderWidth =
+        borderWidthRaw !== undefined
+          ? Math.max(0.25, Math.min(3, borderWidthRaw))
+          : undefined
+      elements.push({
+        type: 'table',
+        rows,
+        ...base,
+        fontSize,
+        ...(colWidthsRaw.length ? { colWidths: colWidthsRaw as number[] } : {}),
+        ...(rowHeightsRaw.length ? { rowHeights: rowHeightsRaw as number[] } : {}),
+        ...(borderColor ? { borderColor } : {}),
+        ...(el.verticalBordersOnly === true ? { verticalBordersOnly: true } : {}),
+        ...(el.horizontalBordersOnly === true ? { horizontalBordersOnly: true } : {}),
+        ...(borderWidth !== undefined ? { borderWidthPt: borderWidth } : {}),
+        ...(zebra ? { zebra } : {}),
       })
       continue
     }
 
     warnings.push(`element ${i}: unknown type "${String(type)}", dropped`)
   }
+
+  centerTextClustersInCards(elements, inkBoxes)
 
   if (elements.length === 0) {
     return {
@@ -396,9 +891,29 @@ export function parsePageSpec(
     }
   }
 
+  // Chart data gates: wrong-shaped data renders as a lie (truncated series,
+  // mismatched axes), so the page is rejected for a corrected retry.
+  if (chartProblems.length > 0) {
+    return {
+      ok: false,
+      error:
+        `page rejected — ${chartProblems.join('; ')}. ` +
+        `Every chart series needs exactly one finite number per category ` +
+        `(2-${MAX_CHART_CATEGORIES} categories, 1-${MAX_CHART_SERIES} series).`,
+    }
+  }
+
+  // Table shape gates: a ragged grid renders as a lie, same as chart data.
+  if (tableProblems.length > 0) {
+    return {
+      ok: false,
+      error: `page rejected — ${tableProblems.join('; ')}.`,
+    }
+  }
+
   // Hard layout gates: the page is rejected and the model retries. These two
   // defects (emoji glyphs, colliding text) cannot be auto-fixed downstream —
-  // growTextBoxesToContent only stretches single boxes and would worsen a
+  // growTextBoxesAndValidate only stretches single boxes and would worsen a
   // collision — so they must never land in the deck.
   const problems: string[] = [...emojiProblems]
   for (let a = 0; a < inkBoxes.length; a++) {
@@ -445,17 +960,48 @@ export interface BuildPageDeps {
   fontMetrics?: FontMetricsProvider
 }
 
+/** Tolerance before a table's measured content height counts as overflowing its frame. */
+const TABLE_OVERFLOW_TOL_PX = 4
+/** Tolerance before grown text counts as running off the slide bottom. */
+const CANVAS_BOTTOM_TOL_PX = 2
+/** Waste before a declared text box counts as grossly oversized and hugs its content. */
+const SHRINK_MIN_WASTE_PX = 32
+/**
+ * Moderate padding (a 100px box around 64px of text) is design intent and stays;
+ * only boxes whose waste exceeds this ratio of the content shrink.
+ */
+const SHRINK_WASTE_RATIO = 0.6
+
+function firstCellText(el: TableElement): string {
+  for (const row of el.rows) {
+    for (const cell of row) {
+      const t = cell.text?.paragraphs.flatMap((p) => p.runs.map((r) => r.text)).join('').trim()
+      if (t) return t.slice(0, 20)
+    }
+  }
+  return 'table'
+}
+
 /**
  * The LLM sizes text boxes from a rough chars-per-line heuristic, which routinely
  * undersizes big CJK titles; the box has no autofit, so the canvas draws the overflow
  * past the selection frame (and PowerPoint past the shape). Re-measure every text box
  * with the real layout engine — on the reopened (parsed) model, the exact input the
  * landed page will render from — and grow too-short boxes to their content height.
- * Grow-only, plain text boxes only (shape label boxes are design intent); middle/bottom
- * anchored boxes shift up so the rendered glyphs stay exactly where they were.
+ * Plain text boxes only (shape label boxes are design intent); middle/bottom
+ * anchored boxes shift so the rendered glyphs stay exactly where they were.
+ * The same pass shrinks grossly oversized boxes (waste beyond SHRINK_MIN_WASTE_PX
+ * and SHRINK_WASTE_RATIO) down to the measured content — moderate padding is
+ * design intent and stays.
+ *
+ * The same render pass measures tables: rows whose wrapped cells need more height than
+ * declared grow at render time (PowerPoint semantics), spilling the table over
+ * everything below it — dense data pages are rejected here instead, with numbers the
+ * model can act on. Text grown past the slide bottom is rejected for the same reason.
  * Returns the re-saved bytes, or null when every box already fits.
+ * Throws `page rejected — …` when a table overflows its frame or text leaves the canvas.
  */
-async function growTextBoxesToContent(
+async function growTextBoxesAndValidate(
   bytes: Uint8Array,
   metrics: FontMetricsProvider,
 ): Promise<Uint8Array | null> {
@@ -463,24 +1009,73 @@ async function growTextBoxesToContent(
   const slide = opened.deck.slides[0]
   if (!slide) return null
   const baseWidthPx = opened.deck.size.cx / EMU_PER_PX_96 // native px → vp.scale = 1
+  const slideHpx = opened.deck.size.cy / EMU_PER_PX_96
   const rendered = buildRenderSlide(slide, opened.deck.size, { fitWidthPx: baseWidthPx, metrics })
+  const problems: string[] = []
   let changed = false
   for (const node of rendered.nodes) {
+    if (node.type === 'table') {
+      const idx = slide.elements.findIndex((e) => e.id === node.sourceId)
+      if (idx < 0) continue
+      const el = slide.elements[idx]!
+      // buildTable already grew the rows to the measured content height, so a
+      // node taller than the declared frame means wrapped cells overflow it.
+      const declaredH = el.transform.offset.cy / EMU_PER_PX_96
+      if (node.box.h > declaredH + TABLE_OVERFLOW_TOL_PX) {
+        const label =
+          el.type === 'table' ? firstCellText(el) : 'table'
+        problems.push(
+          `element ${idx} ("${label}"): table content needs ${Math.round(node.box.h)}px but the frame is ${Math.round(declaredH)}px` +
+            ' — rows wrap taller than declared; cut rows, shorten cell text, enlarge the table, or split it across pages',
+        )
+      }
+      if (node.box.y + node.box.h > slideHpx + CANVAS_BOTTOM_TOL_PX) {
+        problems.push(
+          `element ${idx}: table bottom reaches ${Math.round(node.box.y + node.box.h)}px, past the ${Math.round(slideHpx)}px canvas — enlarge the frame less, cut rows, or move the table up`,
+        )
+      }
+      continue
+    }
     if (node.type !== 'text' || !node.text) continue
     const el = slide.elements.find((e) => e.id === node.sourceId)
     if (el?.type !== 'text') continue
     const t = node.text
     const needH = Math.max(t.contentHeight, t.inkBottom ?? 0) + t.insets.t + t.insets.b
     const growPx = needH - node.box.h
-    if (growPx < 0.5) continue
-    const tel = el as TextElement
-    const offset = { ...tel.transform.offset, cy: Math.max(1, Math.round(needH * EMU_PER_PX_96)) }
-    if (t.anchor === 'middle') offset.y -= Math.round((growPx / 2) * EMU_PER_PX_96)
-    else if (t.anchor === 'bottom') offset.y -= Math.round(growPx * EMU_PER_PX_96)
-    tel.transform = { ...tel.transform, offset }
-    tel.dirtyTransform = true
-    changed = true
+    if (growPx >= 0.5) {
+      const tel = el as TextElement
+      const offset = { ...tel.transform.offset, cy: Math.max(1, Math.round(needH * EMU_PER_PX_96)) }
+      if (t.anchor === 'middle') offset.y -= Math.round((growPx / 2) * EMU_PER_PX_96)
+      else if (t.anchor === 'bottom') offset.y -= Math.round(growPx * EMU_PER_PX_96)
+      tel.transform = { ...tel.transform, offset }
+      tel.dirtyTransform = true
+      changed = true
+      const bottomPx = (offset.y + offset.cy) / EMU_PER_PX_96
+      if (bottomPx > slideHpx + CANVAS_BOTTOM_TOL_PX) {
+        const label =
+          t.lines.flatMap((l) => l.runs.map((r) => r.text)).join('').trim().slice(0, 20) || 'text'
+        problems.push(
+          `element ${slide.elements.indexOf(el)} ("${label}"): text grows to ${Math.round(bottomPx)}px, past the ${Math.round(slideHpx)}px canvas — shorten the text, drop the font size, or move the box up`,
+        )
+      }
+      continue
+    }
+    // Grossly oversized box (the model budgeted several lines but wrote one):
+    // shrink to the measured content so the frame stops tripping overlap checks
+    // against neighbors and stops reading as empty space in the editor. Anchor
+    // compensation mirrors the grow branch — glyphs stay exactly where they were.
+    const shrinkPx = node.box.h - needH
+    if (shrinkPx > Math.max(SHRINK_MIN_WASTE_PX, needH * SHRINK_WASTE_RATIO)) {
+      const tel = el as TextElement
+      const offset = { ...tel.transform.offset, cy: Math.max(1, Math.round(needH * EMU_PER_PX_96)) }
+      if (t.anchor === 'middle') offset.y += Math.round((shrinkPx / 2) * EMU_PER_PX_96)
+      else if (t.anchor === 'bottom') offset.y += Math.round(shrinkPx * EMU_PER_PX_96)
+      tel.transform = { ...tel.transform, offset }
+      tel.dirtyTransform = true
+      changed = true
+    }
   }
+  if (problems.length > 0) throw new Error(`page rejected — ${problems.join('; ')}`)
   return changed ? savePptx(opened) : null
 }
 
@@ -518,7 +1113,7 @@ export async function buildPagePptx(
   canvasW = SPEC_CANVAS_W,
 ): Promise<{ bytes: Uint8Array; imageFailures: string[] }> {
   const opened = await openPptx(await createBlankPptx())
-  const slide = opened.deck.slides[0]!
+  let slide = opened.deck.slides[0]!
   const scale = opened.deck.size.cx / canvasW
   const toEmu = (px: number) => Math.round(px * scale)
   const anchorOf = (
@@ -528,6 +1123,17 @@ export async function buildPagePptx(
   // Zero insets: the spec's boxes are exact; PowerPoint's default 0.1in/0.05in
   // insets would shift every text off its planned spot.
   const zeroInsets = { l: 0, t: 0, r: 0, b: 0 }
+  // Applied immediately after insertion: addChart reparses the slide and
+  // refreshes every element id, so ids captured earlier would go stale.
+  const applyGradient = (id: string, gradient: SpecGradient) => {
+    setElementFill(opened, slide, id, {
+      stops: gradient.stops,
+      ...(gradient.angle != null ? { angle: Math.round(gradient.angle * 60000) } : {}),
+    })
+  }
+  const applyShadow = (id: string, tier: SpecShadowTier) => {
+    setElementEffects(slide, id, { shadow: SHADOW_PRESETS[tier] })
+  }
 
   const imageFailures: string[] = []
   const fetched = new Map<string, { bytes: Uint8Array; ext: string } | null>()
@@ -564,31 +1170,170 @@ export async function buildPagePptx(
         imageFailures.push(el.url)
         continue
       }
-      const pic = addPicture(opened, slide, { bytes: img.bytes, ext: img.ext, offset })
+      const dims = deps.imageDims?.(img.bytes) ?? null
+      // 'contain' fits the whole image inside the frame (letterboxed, centered)
+      // instead of center-cropping: product shots stay whole when the frame
+      // aspect differs. With unknown dims (or 'cover') the frame is used as-is.
+      let placeAt = offset
+      if (el.fit === 'contain' && dims) {
+        const scale = Math.min(offset.cx / dims.width, offset.cy / dims.height)
+        const w = Math.max(1, Math.min(offset.cx, Math.round(dims.width * scale)))
+        const h = Math.max(1, Math.min(offset.cy, Math.round(dims.height * scale)))
+        placeAt = {
+          x: offset.x + Math.round((offset.cx - w) / 2),
+          y: offset.y + Math.round((offset.cy - h) / 2),
+          cx: w,
+          cy: h,
+        }
+      }
+      const pic = addPicture(opened, slide, { bytes: img.bytes, ext: img.ext, offset: placeAt })
       if (!pic) {
         imageFailures.push(el.url)
         continue
       }
-      const dims = deps.imageDims?.(img.bytes) ?? null
-      if (dims) {
+      if (el.shadow) applyShadow(pic.id, el.shadow)
+      if (el.fit !== 'contain' && dims) {
         const crop = coverCropFractions(dims.width, dims.height, el.w, el.h)
         if (crop) editPictureSrcRect(slide, pic.id, crop)
       }
       continue
     }
     if (el.type === 'text') {
-      addElement(slide, {
+      const added = addElement(slide, {
         kind: 'textbox',
         offset,
         paragraphs: toEngineParagraphs(el.paragraphs),
         bodyPr: { wrap: 'square', anchor: anchorOf(el.valign, 't'), insetsEmu: zeroInsets },
       })
+      if (el.shadow) applyShadow(added.id, el.shadow)
       continue
     }
-    addElement(slide, {
+    if (el.type === 'chart') {
+      const isPieLike = el.chart === 'pie' || el.chart === 'doughnut'
+      const wantLegend =
+        el.legend === true || (el.legend !== false && (isPieLike || el.series.length > 1))
+      const r = addChart(opened, 0, {
+        kind: el.chart,
+        ...(el.title ? { title: el.title } : {}),
+        categories: el.categories,
+        series: el.series,
+        offset,
+        ...(el.colors?.length
+          ? {
+              seriesColors: el.colors,
+              ...(isPieLike ? { pointColors: [el.colors] } : {}),
+            }
+          : {}),
+        legendPos: wantLegend ? 'b' : 'none',
+        ...(el.dataLabels ? { dataLabels: true } : {}),
+        ...(el.gridlines ? { gridlines: true } : {}),
+      })
+      if (r) slide = r.slide
+      continue
+    }
+    if (el.type === 'icon') {
+      addElement(slide, {
+        kind: 'icon',
+        offset,
+        custGeomPathLst: ICON_PATH_LST[el.icon]!,
+        fillColor: el.color,
+      })
+      continue
+    }
+    if (el.type === 'path') {
+      const added = addElement(slide, {
+        kind: 'shape',
+        offset,
+        name: 'Path',
+        custGeomPathLst: el.pathLst,
+        // 无 fill 时用全透明占位：custGeom 形状不写 solidFill 会继承主题蓝底
+        fillColor: el.fill ?? '#00000000',
+        ...(el.stroke
+          ? {
+              stroke: {
+                color: el.stroke.color,
+                widthEmu: Math.round(el.stroke.widthPt * EMU_PER_PT),
+              },
+            }
+          : {}),
+      })
+      if (el.shadow) applyShadow(added.id, el.shadow)
+      continue
+    }
+    if (el.type === 'table') {
+      const gridCols = el.rows[0]!.reduce(
+        (a, c) => a + Math.max(1, Math.floor(typeof c === 'string' ? 1 : (c.span ?? 1))),
+        0,
+      )
+      const colRatios = el.colWidths?.length ? el.colWidths : Array.from({ length: gridCols }, () => 1)
+      const colSum = colRatios.reduce((a, b) => a + b, 0)
+      const rowRatios =
+        el.rowHeights?.length ? el.rowHeights : Array.from({ length: el.rows.length }, () => 1)
+      const rowSum = rowRatios.reduce((a, b) => a + b, 0)
+      const r = appendRawElements(opened, 0, [
+        buildTableGridXml(slide, {
+          offset,
+          colWidthsEmu: colRatios.map((v) => Math.max(1, Math.round((v / colSum) * offset.cx))),
+          rowHeightsEmu: rowRatios.map((v) => Math.max(1, Math.round((v / rowSum) * offset.cy))),
+          cells: el.rows.map((row, ri) =>
+            row.flatMap((raw) => {
+              const c: SpecTableCell = typeof raw === 'string' ? { text: raw } : raw
+              const zebraFill =
+                el.zebra && ri >= 2 && ri % 2 === 0 && !c.fill ? el.zebra : undefined
+              const origin = {
+                ...(c.text !== undefined
+                  ? {
+                      paragraphs: [
+                        {
+                          ...(c.align ? { align: c.align } : {}),
+                          runs: [
+                            {
+                              text: c.text,
+                              fontSize: el.fontSize ?? 13,
+                              ...(c.bold ? { bold: true } : {}),
+                              ...(c.color ? { color: c.color } : {}),
+                            },
+                          ],
+                        },
+                      ],
+                    }
+                  : {}),
+                ...((c.fill ?? zebraFill) ? { fillColor: c.fill ?? zebraFill! } : {}),
+                ...(c.span && c.span > 1 ? { gridSpan: c.span } : {}),
+                anchor: 'ctr' as const,
+              }
+              // OOXML requires one <a:tc> per grid column: a gridSpan origin cell
+              // must be followed by covered hMerge cells or LibreOffice/WPS
+              // mis-render the spanned area.
+              const covered = Array.from(
+                { length: Math.max(0, (c.span ?? 1) - 1) },
+                () => ({ hMerge: true, anchor: 'ctr' as const }),
+              )
+              return [origin, ...covered]
+            }),
+          ),
+          ...(el.borderColor
+            ? {
+                border: {
+                  color: el.borderColor,
+                  widthEmu: Math.round((el.borderWidthPt ?? 0.75) * 12700),
+                  ...(el.verticalBordersOnly
+                    ? { scope: 'insideV' as const }
+                    : el.horizontalBordersOnly
+                      ? { scope: 'insideH' as const }
+                      : {}),
+                },
+              }
+            : {}),
+        }),
+      ])
+      if (r) slide = r.slide
+      continue
+    }
+    const added = addElement(slide, {
       kind: el.shape,
       offset,
-      ...(el.fill ? { fillColor: el.fill } : {}),
+      ...(el.fill && !el.gradient ? { fillColor: el.fill } : {}),
       ...(el.stroke
         ? {
             stroke: {
@@ -602,10 +1347,12 @@ export async function buildPagePptx(
         ? { bodyPr: { wrap: 'square', anchor: anchorOf(el.valign, 'ctr'), insetsEmu: zeroInsets } }
         : {}),
     })
+    if (el.gradient) applyGradient(added.id, el.gradient)
+    if (el.shadow) applyShadow(added.id, el.shadow)
   }
 
   promoteSlideBackground(slide, opened.deck.size)
   let bytes = await savePptx(opened)
-  if (deps.fontMetrics) bytes = (await growTextBoxesToContent(bytes, deps.fontMetrics)) ?? bytes
+  if (deps.fontMetrics) bytes = (await growTextBoxesAndValidate(bytes, deps.fontMetrics)) ?? bytes
   return { bytes, imageFailures }
 }

@@ -639,10 +639,18 @@ export async function savePptx(opened: OpenedPptx): Promise<Uint8Array> {
  *
  * Prefer this for anything that lands on disk: savePptx has to assemble the whole
  * package into one contiguous buffer, which on a large deck fails outright with
- * "Array buffer allocation failed". Streaming keeps peak memory to a chunk at a
- * time. JSZip throws stream errors from inside its own scheduled callbacks, so the
- * stream's 'error' event — not just the returned promise — has to be handled or the
- * throw escapes as an uncaught exception and takes the process down.
+ * "Array buffer allocation failed". Streaming keeps peak memory to the largest
+ * single entry at a time. JSZip throws stream errors from inside its own scheduled
+ * callbacks, so the stream's 'error' event — not just the returned promise — has
+ * to be handled or the throw escapes as an uncaught exception and takes the
+ * process down.
+ *
+ * streamFiles must stay off: it writes every entry with a data descriptor
+ * (general-purpose flag bit 3, sizes zeroed in the local header). LibreOffice
+ * fails to load such a package outright once it contains STORED entries — i.e.
+ * any media — with "source file could not be loaded". The default (false)
+ * generates each entry fully in memory before streaming it out, so local headers
+ * carry real sizes and no descriptors.
  */
 export async function savePptxToFile(opened: OpenedPptx, filePath: string): Promise<void> {
   const { createWriteStream } = await import('node:fs')
@@ -651,7 +659,6 @@ export async function savePptxToFile(opened: OpenedPptx, filePath: string): Prom
     type: 'nodebuffer',
     compression: 'DEFLATE',
     compressionOptions: { level: 6 },
-    streamFiles: true,
   })
   await pipeline(source, createWriteStream(filePath))
 }
@@ -1809,6 +1816,9 @@ export function insertBlankSlide(opened: OpenedPptx, sourceIndex: number): Slide
 const IMAGE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image'
 const LAYOUT_REL_TYPE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout'
+const CHART_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart'
+const CHART_CONTENT_TYPE =
+  'application/vnd.openxmlformats-officedocument.drawingml.chart+xml'
 const MEDIA_REL_SUFFIXES = ['/image', '/video', '/audio', '/media']
 
 /** Next non-conflicting media path in the target archive (keeping the extension). */
@@ -1821,15 +1831,39 @@ function nextMediaPath(archive: PackageArchive, ext: string): string {
   return `ppt/media/merged${maxNum + 1}.${ext}`
 }
 
+/** Next non-conflicting chart part path in the target archive. */
+function nextChartPath(archive: PackageArchive): string {
+  let maxNum = 0
+  for (const path of archive.entries.keys()) {
+    const m = /^ppt\/charts\/chart(\d+)\.xml$/.exec(path)
+    if (m) maxNum = Math.max(maxNum, Number(m[1]))
+  }
+  return `ppt/charts/chart${maxNum + 1}.xml`
+}
+
+/** Ensure [Content_Types].xml has an Override for this chart part (charts have no per-extension Default). */
+function ensureChartOverride(archive: PackageArchive, partPath: string): void {
+  const ctPath = '[Content_Types].xml'
+  const ct = archive.readText(ctPath)
+  if (!ct || ct.includes(`PartName="/${partPath}"`)) return
+  const override = `<Override PartName="/${partPath}" ContentType="${CHART_CONTENT_TYPE}"/>`
+  archive.entries.set(ctPath, Buffer.from(ct.replace('</Types>', `${override}</Types>`), 'utf8'))
+}
+
 /** Ensure [Content_Types].xml has a Default for this extension (required for images/media). */
 function ensureDefaultContentType(archive: PackageArchive, ext: string, contentType: string): void {
   const ctPath = '[Content_Types].xml'
   const ct = archive.readText(ctPath)
   if (!ct) return
   if (new RegExp(`<Default\\s[^>]*Extension="${ext}"`, 'i').test(ct)) return
-  // Insert the Default after the root <Types …> open tag (after the first >)
+  // Insert the Default after the root <Types …> open tag. indexOf('>') would
+  // hit the `?>` of the XML declaration and put the element outside the root,
+  // producing malformed XML that LibreOffice/PowerPoint reject outright.
+  const rootOpen = ct.match(/<Types\b[^>]*>/)
+  const at = rootOpen && rootOpen.index !== undefined
+    ? rootOpen.index + rootOpen[0].length
+    : ct.indexOf('</Types>')
   const def = `<Default Extension="${ext}" ContentType="${contentType}"/>`
-  const at = ct.indexOf('>') + 1
   archive.entries.set(ctPath, Buffer.from(ct.slice(0, at) + def + ct.slice(at), 'utf8'))
 }
 
@@ -1880,6 +1914,8 @@ export interface MergeSlideSource {
   rels: Relationship[]
   /** Referenced media bytes keyed by their resolved source path */
   media: Array<{ path: string; bytes: Uint8Array }>
+  /** Referenced chart parts keyed by their resolved source path (optional: older journals predate charts) */
+  charts?: Array<{ path: string; bytes: Uint8Array }>
   /** Source layout→master→theme chain parts (used only when the target has no layout) */
   layoutChain: Array<{ path: string; bytes: Uint8Array; rels?: Uint8Array }>
 }
@@ -1896,11 +1932,17 @@ export async function extractMergeSlideSource(
   if (slideXml == null) return null
   const rels = [...src.readRels(srcSlidePath).values()]
   const media: MergeSlideSource['media'] = []
+  const charts: NonNullable<MergeSlideSource['charts']> = []
   for (const rel of rels) {
-    if (!MEDIA_REL_SUFFIXES.some((s) => rel.type.endsWith(s))) continue
-    const path = resolveTarget(srcSlidePath, rel.target)
-    const bytes = src.readBytes(path)
-    if (bytes) media.push({ path, bytes })
+    if (MEDIA_REL_SUFFIXES.some((s) => rel.type.endsWith(s))) {
+      const path = resolveTarget(srcSlidePath, rel.target)
+      const bytes = src.readBytes(path)
+      if (bytes) media.push({ path, bytes })
+    } else if (rel.type.endsWith('/chart')) {
+      const path = resolveTarget(srcSlidePath, rel.target)
+      const bytes = src.readBytes(path)
+      if (bytes) charts.push({ path, bytes })
+    }
   }
   const layoutChain: MergeSlideSource['layoutChain'] = []
   const chain = src.resolveSlideChain(srcSlidePath)
@@ -1911,7 +1953,7 @@ export async function extractMergeSlideSource(
     const relsBytes = src.readBytes(relsPathFor(p))
     layoutChain.push({ path: p, bytes, ...(relsBytes ? { rels: relsBytes } : {}) })
   }
-  return { srcSlidePath, slideXml, rels, media, layoutChain }
+  return { srcSlidePath, slideXml, rels, media, charts, layoutChain }
 }
 
 /** Sync half of the merge: land an extracted source into the target deck (appended at the end). */
@@ -1919,6 +1961,7 @@ export function mergeSlideFromSource(target: OpenedPptx, source: MergeSlideSourc
   const { deck, archive } = target
   let slideXml = source.slideXml
   const mediaByPath = new Map(source.media.map((m) => [m.path, m.bytes]))
+  const chartsByPath = new Map((source.charts ?? []).map((c) => [c.path, c.bytes]))
 
   // Relative Target of any existing target slide's slideLayout (the appended slide reuses the same layout)
   const anchorSlide = deck.slides[deck.slides.length - 1]
@@ -1952,6 +1995,23 @@ export function mergeSlideFromSource(target: OpenedPptx, source: MergeSlideSourc
       const relTarget = '../media/' + destPath.slice('ppt/media/'.length)
       newRelsLines.push(
         `<Relationship Id="${newRid}" Type="${IMAGE_REL_TYPE}" Target="${escapeXmlAttr(relTarget)}"/>`,
+      )
+    } else if (rel.type.endsWith('/chart')) {
+      // Chart part: move the bytes over under a non-conflicting name, add the
+      // Content_Types Override (charts have no per-extension Default) and remap
+      // the graphicFrame's r:id to the new rel id.
+      const srcChartPath = resolveTarget(source.srcSlidePath, rel.target)
+      const bytes = chartsByPath.get(srcChartPath)
+      if (!bytes) continue
+      const destPath = nextChartPath(archive)
+      archive.entries.set(destPath, bytes)
+      ensureChartOverride(archive, destPath)
+      const oldRid = rel.id
+      const newRid = nextRid()
+      slideXml = slideXml.replace(new RegExp(`(r:id=")${oldRid}(")`, 'g'), `$1${newRid}$2`)
+      const relTarget = '../charts/' + destPath.slice('ppt/charts/'.length)
+      newRelsLines.push(
+        `<Relationship Id="${newRid}" Type="${CHART_REL_TYPE}" Target="${escapeXmlAttr(relTarget)}"/>`,
       )
     } else if (rel.type.endsWith('/slideLayout')) {
       // Reuse the target's existing layout; the source slide XML doesn't reference the layout's rId (layout lives only in rels),
@@ -2666,8 +2726,9 @@ export function editChartElement(
     ...(gapWidthPct != null ? { gapWidthPct } : {}),
     ...(barDir ? { barDir } : {}),
     ...(pointColors.some((row) => row?.some((c) => c != null)) ? { pointColors } : {}),
+    ...(colorScheme ? { seriesColors: colorScheme } : {}),
   }
-  const newXml = buildChartSpaceXmlWithColors(opts, colorScheme)
+  const newXml = buildChartSpaceXml(opts)
   archive.entries.set(chartPath, Buffer.from(newXml, 'utf8'))
   slide.structureDirty = true
   return true
@@ -2695,26 +2756,6 @@ export function markChartEditable(slide: Slide, elementId: string): boolean {
   chartEl.descr = 'aislides-chart'
   slide.structureDirty = true
   return true
-}
-
-/** Chart XML build with colors (spPr solidFill on each series). */
-function buildChartSpaceXmlWithColors(opts: NewChartOptions, colorScheme?: string[]): string {
-  const base = buildChartSpaceXml(opts)
-  if (!colorScheme || !colorScheme.length) return base
-  // The last series of a combo chart is the line: write the color as an <a:ln> stroke (lines use stroke color, bars/pies use fill color)
-  const lineSerIdx =
-    opts.kind === 'comboBarLine' && opts.series.length >= 2 ? opts.series.length - 1 : -1
-  let serIndex = 0
-  return base.replace(/<c:ser>/g, () => {
-    const color = colorScheme[serIndex % colorScheme.length]!.replace('#', '').toUpperCase()
-    const fill = `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>`
-    const spPr =
-      serIndex === lineSerIdx
-        ? `<c:spPr><a:ln w="28575">${fill}</a:ln></c:spPr>`
-        : `<c:spPr>${fill}</c:spPr>`
-    serIndex++
-    return `<c:ser>${spPr}`
-  })
 }
 
 /** Escape RegExp special characters. */

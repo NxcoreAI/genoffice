@@ -6,11 +6,11 @@
  * the slides:apply-txn AI-panel surface (plan → history → journal → autofit
  * post-pass), plus the save the renderer path leaves to its user.
  */
-import { webContents } from 'electron'
+import { ipcMain, webContents } from 'electron'
 
 import { extractMergeSlideSource, slideDurableId, materializeSlide } from '@genoffice/pptx-engine'
 
-import { agentPageDeps } from './agent-deck'
+import { agentPageDeps, type AgentDeckImageResolver } from './agent-deck'
 import { buildAgentDeckOutline } from '../shared/deck-outline'
 import { opVocabulary } from '../shared/op-docs'
 import { buildPagePptx, parsePageSpec } from './page-spec'
@@ -27,6 +27,62 @@ import {
 import { applyAutofitResize, persistSession, syncAutofitScale } from './slides-main'
 
 const MAX_AGENT_OPS = 50
+
+// ── Host-driven page screenshot (visual QC) ─────────────────────────────────
+// The embed host's agent loop asks for a pixelRatio-1 PNG of one page right
+// after landing it. Main→renderer request via 'slides:render-page-request',
+// renderer rasterizes offscreen (same pipeline as export) and replies through
+// the 'slides:render-page-result' invoke registered in registerSlidesIpc.
+
+const pendingPageRenders = new Map<string, (pngBase64: string | null) => void>()
+let pageRenderSeq = 0
+
+/** Renderer reply hook; registered lazily (slides-main must not import this module — cycle). */
+export function resolveAgentPageRender(requestId: unknown, pngBase64: unknown): void {
+  if (typeof requestId !== 'string') return
+  const resolve = pendingPageRenders.get(requestId)
+  if (!resolve) return
+  pendingPageRenders.delete(requestId)
+  resolve(typeof pngBase64 === 'string' && pngBase64.length > 0 ? pngBase64 : null)
+}
+
+let renderResultIpcRegistered = false
+function ensureRenderResultIpc(): void {
+  if (renderResultIpcRegistered) return
+  renderResultIpcRegistered = true
+  ipcMain.handle('slides:render-page-result', (_e, payload: { requestId?: unknown; pngBase64?: unknown }) => {
+    resolveAgentPageRender(payload?.requestId, payload?.pngBase64)
+  })
+}
+
+const AGENT_PAGE_RENDER_TIMEOUT_MS = 20_000
+
+/** Ask the live view to rasterize one page (1x, vision-friendly size). */
+export async function renderAgentDeckPagePng(
+  wcId: number,
+  slideIndex: number,
+): Promise<{ pngBase64: string } | { error: string }> {
+  ensureRenderResultIpc()
+  const session = sessions.get(wcId)
+  if (!session) return { error: 'no slides session for this view' }
+  const total = session.opened.deck.slides.length
+  if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= total) {
+    return { error: `slideIndex must be an integer between 0 and ${total - 1}` }
+  }
+  const wc = webContents.fromId(wcId)
+  if (!wc || wc.isDestroyed()) return { error: 'the slides view is gone' }
+  const requestId = `page-render-${(pageRenderSeq += 1)}-${Date.now()}`
+  const png = await new Promise<string | null>((resolve) => {
+    pendingPageRenders.set(requestId, resolve)
+    wc.send('slides:render-page-request', { requestId, slideIndex })
+    setTimeout(() => {
+      if (pendingPageRenders.delete(requestId)) resolve(null)
+    }, AGENT_PAGE_RENDER_TIMEOUT_MS).unref?.()
+  })
+  if (png === null) return { error: 'the renderer did not return the page PNG in time' }
+  return { pngBase64: png }
+}
+
 
 /** Ops whose executor changes live only in archive entries (notes/sections) or sldIdLst —
  *  the dedicated IPC shims mark the session meta-dirty for them, so the agent path does too. */
@@ -199,30 +255,34 @@ export async function applyAgentDeckOps(
 /**
  * Fill one page of the LIVE session from a PageSpec: the same tolerant parser
  * and single-page builder as whole-deck generation, landed as one
- * insertSlidePptx{at, replace} transaction — the identical pipeline the
- * renderer's regenerate_slide uses — so a filled page is pixel-for-pixel what
- * generation would have produced. One history push = one undo step; the fresh
- * render state goes to every attached view, then the silent save fires the
- * host's fileSaved hook (version-chain re-import).
+ * insertSlidePptx transaction — the identical pipeline the renderer's
+ * regenerate_slide uses — so a filled page is pixel-for-pixel what generation
+ * would have produced. slideIndex < page count replaces that page in place;
+ * slideIndex === page count APPENDS a new last page (the deck grows one page
+ * per call — page-by-page generation leaves no unfilled skeleton tail).
+ * One history push = one undo step; the fresh render state goes to every
+ * attached view, then the silent save fires the host's fileSaved hook
+ * (version-chain re-import).
  */
 export async function applyAgentDeckPage(
   wcId: number,
   req: { slideIndex: number; specJson: string },
+  imageResolver?: AgentDeckImageResolver,
 ): Promise<AgentApplyResult> {
   const session = sessions.get(wcId)
   if (!session) return { ok: false, error: 'no slides session for this view' }
   if (!session.path) return { ok: false, error: 'the deck has no file path yet' }
   const total = session.opened.deck.slides.length
   const at = req.slideIndex
-  if (!Number.isInteger(at) || at < 0 || at >= total) {
-    return { ok: false, error: `slideIndex must be an integer between 0 and ${total - 1}` }
+  if (!Number.isInteger(at) || at < 0 || at > total) {
+    return { ok: false, error: `slideIndex must be an integer between 0 and ${total} (${total} = append as a new last page)` }
   }
   const parsed = parsePageSpec(String(req.specJson ?? ''))
   if (!parsed.ok) return { ok: false, error: `page ${at + 1}: ${parsed.error}` }
 
   let source: Awaited<ReturnType<typeof extractMergeSlideSource>>
   try {
-    const built = await buildPagePptx(parsed.spec, agentPageDeps())
+    const built = await buildPagePptx(parsed.spec, agentPageDeps(imageResolver))
     source = await extractMergeSlideSource(built.bytes)
   } catch (err) {
     return { ok: false, error: `page ${at + 1}: ${err instanceof Error ? err.message : String(err)}` }
@@ -230,7 +290,7 @@ export async function applyAgentDeckPage(
   if (!source) return { ok: false, error: `page ${at + 1}: the page could not be merged into this deck` }
 
   pushHistory(session)
-  const r = runTxn(session.opened, { ops: [{ op: 'insertSlidePptx', source, at, replace: true } as Op] })
+  const r = runTxn(session.opened, { ops: [{ op: 'insertSlidePptx', source, at, replace: at < total } as Op] })
   if (!r.applied) {
     session.undoStack.pop() // The executor already restored the deck
     return {

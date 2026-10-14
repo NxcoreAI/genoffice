@@ -101,6 +101,7 @@ import { FIT_WIDTH } from './app-constants'
 import { StageRuler } from './components/StageRuler'
 import { formatRulerValue, type RulerUnit } from './ruler-ticks'
 import * as fileActions from './file-actions'
+import { renderSlidesToPngBase64 } from './export-render'
 import * as clipboardActions from './clipboard-actions'
 import * as insertActions from './insert-actions'
 import * as animationActions from './animation-actions'
@@ -866,6 +867,30 @@ export function App() {
         // The broadcast also fires for undo back to a clean state — ask the
         // session instead of assuming the change dirtied it
         void window.slidesApi.isDirty?.().then((d) => setDirty(!!d))
+      }),
+    [],
+  )
+
+  // Embed host's agent loop asking for a 1x PNG of one page right after landing it
+  // (visual QC). Rasterize offscreen with the export pipeline — same rendering the
+  // editor shows — and reply; null lets the host treat it as "no screenshot".
+  useEffect(
+    () =>
+      window.slidesApi.onRenderPageRequest?.(({ requestId, slideIndex }) => {
+        void (async () => {
+          let png: string | null = null
+          try {
+            const slide = ctxRef.current.slides[slideIndex]
+            if (slide) [png] = await renderSlidesToPngBase64([slide], ctxRef.current.images, 1)
+          } catch {
+            png = null
+          }
+          try {
+            await window.slidesApi.renderPageResult(requestId, png)
+          } catch {
+            /* the request may already have timed out host-side */
+          }
+        })()
       }),
     [],
   )
