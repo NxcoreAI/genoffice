@@ -6,7 +6,7 @@
  * the slides:apply-txn AI-panel surface (plan → history → journal → autofit
  * post-pass), plus the save the renderer path leaves to its user.
  */
-import { webContents } from 'electron'
+import { ipcMain, webContents } from 'electron'
 
 import { extractMergeSlideSource, slideDurableId, materializeSlide } from '@genoffice/pptx-engine'
 
@@ -27,6 +27,62 @@ import {
 import { applyAutofitResize, persistSession, syncAutofitScale } from './slides-main'
 
 const MAX_AGENT_OPS = 50
+
+// ── Host-driven page screenshot (visual QC) ─────────────────────────────────
+// The embed host's agent loop asks for a pixelRatio-1 PNG of one page right
+// after landing it. Main→renderer request via 'slides:render-page-request',
+// renderer rasterizes offscreen (same pipeline as export) and replies through
+// the 'slides:render-page-result' invoke registered in registerSlidesIpc.
+
+const pendingPageRenders = new Map<string, (pngBase64: string | null) => void>()
+let pageRenderSeq = 0
+
+/** Renderer reply hook; registered lazily (slides-main must not import this module — cycle). */
+export function resolveAgentPageRender(requestId: unknown, pngBase64: unknown): void {
+  if (typeof requestId !== 'string') return
+  const resolve = pendingPageRenders.get(requestId)
+  if (!resolve) return
+  pendingPageRenders.delete(requestId)
+  resolve(typeof pngBase64 === 'string' && pngBase64.length > 0 ? pngBase64 : null)
+}
+
+let renderResultIpcRegistered = false
+function ensureRenderResultIpc(): void {
+  if (renderResultIpcRegistered) return
+  renderResultIpcRegistered = true
+  ipcMain.handle('slides:render-page-result', (_e, payload: { requestId?: unknown; pngBase64?: unknown }) => {
+    resolveAgentPageRender(payload?.requestId, payload?.pngBase64)
+  })
+}
+
+const AGENT_PAGE_RENDER_TIMEOUT_MS = 20_000
+
+/** Ask the live view to rasterize one page (1x, vision-friendly size). */
+export async function renderAgentDeckPagePng(
+  wcId: number,
+  slideIndex: number,
+): Promise<{ pngBase64: string } | { error: string }> {
+  ensureRenderResultIpc()
+  const session = sessions.get(wcId)
+  if (!session) return { error: 'no slides session for this view' }
+  const total = session.opened.deck.slides.length
+  if (!Number.isInteger(slideIndex) || slideIndex < 0 || slideIndex >= total) {
+    return { error: `slideIndex must be an integer between 0 and ${total - 1}` }
+  }
+  const wc = webContents.fromId(wcId)
+  if (!wc || wc.isDestroyed()) return { error: 'the slides view is gone' }
+  const requestId = `page-render-${(pageRenderSeq += 1)}-${Date.now()}`
+  const png = await new Promise<string | null>((resolve) => {
+    pendingPageRenders.set(requestId, resolve)
+    wc.send('slides:render-page-request', { requestId, slideIndex })
+    setTimeout(() => {
+      if (pendingPageRenders.delete(requestId)) resolve(null)
+    }, AGENT_PAGE_RENDER_TIMEOUT_MS).unref?.()
+  })
+  if (png === null) return { error: 'the renderer did not return the page PNG in time' }
+  return { pngBase64: png }
+}
+
 
 /** Ops whose executor changes live only in archive entries (notes/sections) or sldIdLst —
  *  the dedicated IPC shims mark the session meta-dirty for them, so the agent path does too. */

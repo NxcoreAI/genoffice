@@ -1550,6 +1550,12 @@ export interface SlidesApi {
   onDeckChanged: (
     handler: (state: { slides: RenderSlide[]; size: { cx: number; cy: number } }) => void,
   ) => () => void
+  /** Embed host's agent loop asking for a pixelRatio-1 PNG of one page (visual QC); reply via renderPageResult */
+  onRenderPageRequest: (
+    handler: (req: { requestId: string; slideIndex: number }) => void,
+  ) => () => void
+  /** Reply to onRenderPageRequest: base64 PNG without the data: prefix, or null when the page could not be rasterized */
+  renderPageResult: (requestId: string, pngBase64: string | null) => Promise<void>
   reportCloseSaveResult: (ok: boolean) => void
   /** Mirror the autosave toggle state to the main process: files with it on save silently on close, no dialog */
   setAutoSavePref: (on: boolean) => void

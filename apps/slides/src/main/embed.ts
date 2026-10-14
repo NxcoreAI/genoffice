@@ -4,7 +4,12 @@
  * single-instance, updater, or BrowserWindow side effects, and it never
  * exports the GenOffice AI/standalone surface (tree-shaken in embed builds).
  */
-export { applyAgentDeckOps, applyAgentDeckPage, describeAgentDeck } from './agent-edit'
+export {
+  applyAgentDeckOps,
+  applyAgentDeckPage,
+  describeAgentDeck,
+  renderAgentDeckPagePng,
+} from './agent-edit'
 export { buildAgentDeckPptx } from './agent-deck'
 export {
   configureSlidesRuntime,

@@ -335,6 +335,18 @@ const api: SlidesApi = {
     ipcRenderer.on('slides:deck-changed', listener)
     return () => ipcRenderer.removeListener('slides:deck-changed', listener)
   },
+  onRenderPageRequest: (
+    handler: (req: { requestId: string; slideIndex: number }) => void,
+  ) => {
+    const listener = (
+      _e: IpcRendererEvent,
+      req: { requestId: string; slideIndex: number },
+    ) => handler(req)
+    ipcRenderer.on('slides:render-page-request', listener)
+    return () => ipcRenderer.removeListener('slides:render-page-request', listener)
+  },
+  renderPageResult: (requestId: string, pngBase64: string | null) =>
+    ipcRenderer.invoke('slides:render-page-result', { requestId, pngBase64 }),
   reportCloseSaveResult: (ok: boolean) => ipcRenderer.send('slides:close-save-result', ok === true),
   setAutoSavePref: (on: boolean) => ipcRenderer.send('slides:autosave-pref', on === true),
   isDirty: () => ipcRenderer.invoke('slides:is-dirty'),
