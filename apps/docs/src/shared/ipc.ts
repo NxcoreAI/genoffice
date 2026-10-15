@@ -350,4 +350,29 @@ export interface DesktopApi {
   reportCloseSaveResult(ok: boolean): void
   /** keep the native View menu's checkbox items in sync with renderer state */
   reportViewMenuState(state: { aiSidebar: boolean; darkCanvas: boolean }): void
+  /**
+   * EverRoom embed only: thesis format panel. The host resolves room and file
+   * from this view's webContents id, so the renderer passes no ids.
+   */
+  thesisListCards(): Promise<ThesisPanelOutcome<ThesisPanelCard[]>>
+  thesisPickTemplate(): Promise<ThesisPanelOutcome<{ canceled: boolean; cardId: string; sourceName: string }>>
+  thesisRemoveCard(cardId: string): Promise<ThesisPanelOutcome<null>>
+  thesisReformat(cardId?: string): Promise<ThesisPanelOutcome<{ originalName: string }>>
+  onThesisCardsChanged(handler: () => void): () => void
 }
+
+/** One thesis format card as shown in the AI tab panel. */
+export interface ThesisPanelCard {
+  id: string
+  sourceName: string
+  updatedAt: string
+  card: Record<string, unknown>
+}
+
+/**
+ * Thesis panel call result: 'no_room' = the open document is not bound to an
+ * EverRoom room (panel shows a hint instead of the card list).
+ */
+export type ThesisPanelOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: 'no_room' | 'error'; message?: string }

@@ -150,6 +150,15 @@ const api: DesktopApi = {
     return () => ipcRenderer.removeListener('docs:close-save-request', listener)
   },
   reportCloseSaveResult: (ok: boolean) => ipcRenderer.send('docs:close-save-result', ok === true),
+  thesisListCards: () => ipcRenderer.invoke('docs:thesis-list'),
+  thesisPickTemplate: () => ipcRenderer.invoke('docs:thesis-pick'),
+  thesisRemoveCard: (cardId: string) => ipcRenderer.invoke('docs:thesis-remove', cardId),
+  thesisReformat: (cardId?: string) => ipcRenderer.invoke('docs:thesis-reformat', cardId ?? null),
+  onThesisCardsChanged: (handler: () => void) => {
+    const listener = () => handler()
+    ipcRenderer.on('docs:thesis-changed', listener)
+    return () => ipcRenderer.removeListener('docs:thesis-changed', listener)
+  },
 }
 
 const projectApi: ProjectApi = {
