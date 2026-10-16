@@ -181,4 +181,56 @@ describe('thesis-binder', () => {
     expect(document).not.toContain('Keywords: ')
     expect(document).not.toContain('<w:t>附录')
   })
+
+  it('parts 分页规则生效（部件换页+每章换页）且固定行距写入 exact', async () => {
+    const source = await sourceDocx()
+    const spec: ThesisBindingSpecInput = {
+      title: '基于ARM的嵌入式系统设计',
+      coverFields: { title: '基于ARM的嵌入式系统设计' },
+      abstractZh: '摘要正文。',
+      keywordsZh: ['嵌入式'],
+      abstractEn: 'Abstract body.',
+      keywordsEn: ['Embedded'],
+      chapters: [
+        { level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 },
+        { level: 1, headingText: '总结与展望', blockStart: 5, blockEnd: 7 },
+      ],
+      references: ['[1] 作者. 书名[M]. 出版社, 2024.'],
+      appendixBlocks: null,
+      acknowledgementParagraphs: ['感谢导师指导。'],
+      achievements: [],
+    }
+    const card: ThesisFormatCardInput = {
+      ...CARD,
+      base: {
+        font: CARD.base.font,
+        paragraph: { ...CARD.base.paragraph, lineSpacingExactPt: 22 },
+      },
+      parts: [
+        { type: 'abstract_zh', title: '摘  要', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'abstract_en', title: 'Abstract', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'toc', title: '目  录', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'chapter', title: '', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'references', title: '参考文献', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'acknowledgement', title: '谢辞', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+      ],
+    }
+    const bytes = await buildThesisDocx(source, card, spec)
+    const { document } = await unzipXml(bytes)
+
+    // 自定义部件标题与标题字体生效
+    expect(document).toContain('摘  要')
+    expect(document).toContain('目  录')
+    expect(document).toContain('谢辞')
+
+    // 部件换页：承诺书（无规则不换）→ 摘要/Abstract(题目行)/目录/参考文献/致谢 → 5 处
+    // 章级换页：两个一级章标题 → 2 处（首章在节首，Word 规范下不再额外分页，但属性仍写出）
+    const breaks = document.match(/<w:pageBreakBefore\/>/g) ?? []
+    expect(breaks.length).toBe(7)
+
+    // 固定行距 22 磅 = 440 twips，lineRule=exact
+    expect(document).toContain('w:lineRule="exact"')
+    expect(document).toMatch(/w:line="440"/)
+    expect(document).not.toMatch(/w:lineRule="auto"[^/]*\/><\/w:spacing>/)
+  })
 })
