@@ -70,6 +70,7 @@ import {
   insertImageFromDataUrl,
   applyParagraphStyle,
 } from './ribbon-tabs'
+import { AiTab } from './AiTab'
 import { WRAP_OPTIONS } from './ContextMenu'
 import { CropDialog, CutoutDialog } from './PictureDialogs'
 import {
@@ -147,6 +148,8 @@ interface RibbonProps {
   /** shallow-stable snapshot of every editor-state read shown in the ribbon (memo invalidation key) */
   formatState: RibbonFormatState
   hasDoc: boolean
+  /** transient message for the status bar (AI tab reformat outcome etc.) */
+  onNotice?: (message: string) => void
   blocks: Block[]
   /** Fallback when a new list can't reuse a numId (adopt a document definition / create one) */
   allocateNumId?: (kind: 'bullet' | 'ordered') => string | null
@@ -303,11 +306,20 @@ const IS_MAC = navigator.platform.toLowerCase().includes('mac')
 /** shell tab mode: the tab strip above owns traffic lights / caption buttons */
 const IN_TAB = new URLSearchParams(window.location.search).get('mode') === 'tab'
 
-const TABS = (
-  IS_MAC
-    ? ['home', 'insert', 'draw', 'design', 'layout', 'references', 'review', 'view']
-    : ['file', 'home', 'insert', 'draw', 'design', 'layout', 'references', 'review', 'view']
-) as readonly string[]
+// EverRoom embed builds gain an "AI" tab right after Home (thesis format
+// panel; standalone has no EverRoom host to serve it).
+const TABS = [
+  ...(!IS_MAC ? ['file' as const] : []),
+  'home' as const,
+  ...(__GENOFFICE_EMBED_ONLY__ ? ['ai' as const] : []),
+  'insert' as const,
+  'draw' as const,
+  'design' as const,
+  'layout' as const,
+  'references' as const,
+  'review' as const,
+  'view' as const,
+] as readonly string[]
 const TABLE_TABS = ['tableDesign', 'tableLayout'] as const
 const IMAGE_TABS = ['pictureFormat'] as const
 const SHAPE_TABS = ['shapeFormat'] as const
@@ -371,6 +383,7 @@ const TABLE_AUTO_FIT_OPTIONS: Array<[TableAutoFitMode, StringKey]> = [
 const TAB_LABEL_KEYS: Record<string, StringKey> = {
   file: 'ribbonTabFile',
   home: 'ribbonTabHome',
+  ai: 'ribbonTabAi',
   insert: 'ribbonTabInsert',
   draw: 'ribbonTabDraw',
   design: 'ribbonTabDesign',
@@ -605,6 +618,7 @@ function RibbonInner({
   actionsRef,
   quickActions,
   trailingActions,
+  onNotice,
   editor,
   formatState: fs,
   hasDoc,
@@ -3727,6 +3741,8 @@ function RibbonInner({
             onAddSource={onAddSource}
             headingPages={headingPages}
           />
+        ) : tab === 'ai' ? (
+          <AiTab hasDoc={hasDoc} dropdown={dropdown} setDropdown={setDropdown} onNotice={onNotice} />
         ) : tab === 'review' ? (
           <ReviewTab
             editor={editor}

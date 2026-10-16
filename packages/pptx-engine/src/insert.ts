@@ -54,6 +54,12 @@ export interface NewElementOptions {
    * the preset geometry (baked icon shapes); kind is only used for the element name.
    */
   custGeomPathLst?: string
+  /**
+   * Preset-geometry adjust value for <a:avLst> (1/1000 %, roundRect: 0 = square
+   * corners, 50000 = pill). Absent = the OOXML per-shape default (roundRect 16.67%
+   * of the short side — balloons as cards grow).
+   */
+  adj?: number
 }
 
 /**
@@ -163,7 +169,7 @@ export function buildSpXml(slide: Slide, opts: NewElementOptions): string {
     ? `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:rect l="0" t="0" r="0" b="0"/>${opts.custGeomPathLst}</a:custGeom>`
     : isTextbox
       ? ''
-      : `<a:prstGeom prst="${escapeXmlAttr(opts.kind)}"><a:avLst/></a:prstGeom>`
+      : `<a:prstGeom prst="${escapeXmlAttr(opts.kind)}">${opts.adj !== undefined ? `<a:avLst><a:gd name="adj" fmla="val ${Math.round(opts.adj)}"/></a:avLst>` : "<a:avLst/>"}</a:prstGeom>`
   const fill = opts.fillColor ? `<a:solidFill>${srgbClrXml(opts.fillColor)}</a:solidFill>` : ''
   const ln = opts.stroke
     ? `<a:ln w="${Math.round(opts.stroke.widthEmu)}"><a:solidFill><a:srgbClr val="${opts.stroke.color.replace(/^#/, '').slice(0, 6).toUpperCase()}"/></a:solidFill></a:ln>`
@@ -412,6 +418,12 @@ export interface NewPictureOptions {
   name?: string
   /** cNvPr descr: editor-specific payload (e.g. ink vector points), recoverable on reopen */
   descr?: string
+  /** Rounded-corner card: roundRect geometry with the given adjust (1/1000 %, 0–50000) */
+  geometry?: { prst: 'roundRect' | 'ellipse'; adj?: number }
+  /** Duotone recolor pair [shadowColor, highlightColor] (srgbClr hex) written into a:blip */
+  duotone?: [string, string]
+  /** Grayscale recolor (<a:grayscl/>) written into a:blip */
+  grayscale?: boolean
 }
 
 /**
@@ -481,12 +493,29 @@ export function addPicture(
   const id = nextCNvPrId(slide)
   const name = opts.name ?? `Picture ${id}`
   const descrAttr = opts.descr ? ` descr="${escapeXmlAttr(opts.descr)}"` : ''
+  // a:duotone：亮度→双色映射（[暗部, 亮部]）；a:grayscl：灰度化。两者都是
+  // a:blip 的色彩效果子元素（schema 顺序 duotone 在 grayscl 之前）；非法色对整体忽略。
+  const hexOk = (v: string) => /^[0-9A-Fa-f]{6}$/.test(v.replace(/^#/, ''))
+  const hexUp = (v: string) => v.replace(/^#/, '').toUpperCase()
+  const duo =
+    opts.duotone && hexOk(opts.duotone[0]) && hexOk(opts.duotone[1])
+      ? `<a:duotone><a:srgbClr val="${hexUp(opts.duotone[0])}"/><a:srgbClr val="${hexUp(opts.duotone[1])}"/></a:duotone>`
+      : ''
+  const gray = opts.grayscale === true ? '<a:grayscl/>' : ''
+  const geometry =
+    opts.geometry?.prst === 'roundRect' || opts.geometry?.prst === 'ellipse'
+      ? `<a:prstGeom prst="${opts.geometry.prst}">${
+          opts.geometry.adj != null && opts.geometry.prst === 'roundRect'
+            ? `<a:avLst><a:gd name="adj" fmla="val ${Math.max(0, Math.min(50000, Math.round(opts.geometry.adj)))}"/></a:avLst>`
+            : '<a:avLst/>'
+        }</a:prstGeom>`
+      : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
   const xml =
     `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${escapeXmlAttr(name)}"${descrAttr}>${creationIdXml()}</p:cNvPr>` +
     '<p:cNvPicPr/><p:nvPr/></p:nvPicPr>' +
-    `<p:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+    `<p:blipFill><a:blip r:embed="${rid}"/>${duo}${gray}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
     `<p:spPr>${generateXfrmXml({ offset: opts.offset, rot: 0, flipH: false, flipV: false })}` +
-    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
+    `${geometry}</p:spPr></p:pic>`
 
   const el: PictureElement = {
     id: `picnew_${(insertCounter++).toString(36)}_${Date.now().toString(36)}`,

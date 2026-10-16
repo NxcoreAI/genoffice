@@ -20,8 +20,6 @@ import { tableModelToPmNode } from '../editor/convert'
 import { isStraightLineKind } from '../editor/shape-svg'
 import type { InkTool } from '../editor/ink'
 import { t, useI18n, type StringKey } from '../i18n/locale'
-import iconEditor from '../assets/icon-editor.png'
-import iconTranslate from '../assets/icon-translate.png'
 import {
   IconAccept,
   IconAiPanel,
@@ -601,18 +599,6 @@ export interface InsertTabProps extends TabProps {
   onShowComments: () => void
 }
 
-/** target languages of Word's Translate dropdown that the AI backend can serve;
- *  the localized label is also spliced into the instruction sent to the LLM */
-const TRANSLATE_TARGETS: Array<{ labelKey: StringKey }> = [
-  { labelKey: 'ribbonLangEnglish' },
-  { labelKey: 'ribbonLangSimplifiedChinese' },
-  { labelKey: 'ribbonLangJapanese' },
-  { labelKey: 'ribbonLangKorean' },
-  { labelKey: 'ribbonLangFrench' },
-  { labelKey: 'ribbonLangGerman' },
-  { labelKey: 'ribbonLangSpanish' },
-]
-
 /** One-time "AI rewrites the whole document" acknowledgement */
 export const AI_REWRITE_ACK_KEY = 'docs-ai-rewrite-ack'
 
@@ -649,7 +635,6 @@ interface ReviewTabProps extends TabProps {
 }
 
 export function ReviewTab({
-  editor,
   hasDoc,
   dropdown,
   setDropdown,
@@ -675,87 +660,8 @@ export function ReviewTab({
   onCompare,
 }: ReviewTabProps) {
   const { t } = useI18n()
-  // One-time acknowledgement before whole-document AI rewrites:
-  // Editor / Translate send the full document to the agent, consume credits and
-  // may rewrite everything — say so once before the first run.
-  const confirmAiRewrite = () => {
-    if (localStorage.getItem(AI_REWRITE_ACK_KEY) === '1') return true
-    if (!window.confirm(t('ribbonAiRewriteConfirm'))) return false
-    localStorage.setItem(AI_REWRITE_ACK_KEY, '1')
-    return true
-  }
-  // With a range selection the rewrite scopes to the selection (no whole-document ack needed)
-  const hasRangeSelection = () => !editor.state.selection.empty
   return (
     <>
-      {/* Word: Proofing (Editor) sits leftmost */}
-      <div className="ribbon-group">
-        <div className="ribbon-group-items">
-          <button
-            className="rb-big"
-            disabled={!hasDoc}
-            data-tip={`${t('ribbonEditorTip')} — ${t('ribbonAiCreditNote')}`}
-            onClick={() => {
-              if (hasRangeSelection()) onAiPreset(t('ribbonEditorSelectionPrompt'))
-              else if (confirmAiRewrite()) onAiPreset(t('ribbonEditorPrompt'))
-            }}
-          >
-            <span className="rb-big-icon">
-              <span className="ai-feature-icon" aria-hidden="true">
-                <img src={iconEditor} width={22} height={22} alt="" />
-              </span>
-            </span>
-            <span>{t('ribbonEditorBtn')}</span>
-          </button>
-        </div>
-        <div className="ribbon-group-label">{t('ribbonGroupProofing')}</div>
-      </div>
-
-      <div className="ribbon-sep" />
-
-      <div className="ribbon-group">
-        <div className="ribbon-group-items">
-          <div className="rb-split-wrap">
-            <button
-              className="rb-big"
-              disabled={!hasDoc}
-              data-tip={`${t('ribbonTranslateTip')} — ${t('ribbonAiCreditNote')}`}
-              onClick={() => toggleDropdown(setDropdown, 'translate')}
-            >
-              <span className="rb-big-icon">
-                <span className="ai-feature-icon" aria-hidden="true">
-                  <img src={iconTranslate} width={22} height={22} alt="" />
-                </span>
-                <IconCaret />
-              </span>
-              <span>{t('ribbonTranslate')}</span>
-            </button>
-            {dropdown === 'translate' && (
-              <div data-rb-panel="" className="layout-menu">
-                {TRANSLATE_TARGETS.map((lang) => (
-                  <button
-                    key={lang.labelKey}
-                    onClick={() => {
-                      setDropdown(() => null)
-                      if (hasRangeSelection()) {
-                        onAiPreset(t('ribbonTranslateSelectionPrompt', { lang: t(lang.labelKey) }))
-                      } else if (confirmAiRewrite()) {
-                        onAiPreset(t('ribbonTranslatePrompt', { lang: t(lang.labelKey) }))
-                      }
-                    }}
-                  >
-                    {t('ribbonTranslateTo', { lang: t(lang.labelKey) })}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="ribbon-group-label">{t('ribbonGroupLanguage')}</div>
-      </div>
-
-      <div className="ribbon-sep" />
-
       <div className="ribbon-group">
         <div className="ribbon-group-items">
           <button

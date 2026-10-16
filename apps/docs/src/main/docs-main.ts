@@ -68,6 +68,8 @@ import type {
   DocsTabInfo,
   MenuCommand,
   OpenDocxResult,
+  ThesisPanelCard,
+  ThesisPanelOutcome,
 } from '../shared/ipc'
 import { ATTACHMENT_IMAGE_EXTS } from '../shared/ipc'
 import { findDocxPath } from '../shared/open-file'
@@ -2825,6 +2827,44 @@ function notifyFileSaved(wc: WebContents, filePath: string): void {
 }
 
 /**
+ * EverRoom embed host hook: thesis format panel calls from the renderer's AI
+ * tab. The host resolves room and file from the calling view's webContents id,
+ * so the payload carries no ids. Absent hook (standalone) → 'no_room'.
+ */
+export type DocsThesisPanelAction =
+  | { kind: 'list' }
+  | { kind: 'pick' }
+  | { kind: 'remove'; cardId: string }
+  | { kind: 'reformat'; cardId?: string }
+
+let thesisPanelHook:
+  | ((wcId: number, action: DocsThesisPanelAction) => Promise<ThesisPanelOutcome<unknown>>)
+  | null = null
+
+export function setDocsThesisPanelHook(
+  hook:
+    | ((wcId: number, action: DocsThesisPanelAction) => Promise<ThesisPanelOutcome<unknown>>)
+    | null,
+): void {
+  thesisPanelHook = hook
+}
+
+async function runThesisPanel<T>(
+  wcId: number,
+  action: DocsThesisPanelAction,
+): Promise<ThesisPanelOutcome<T>> {
+  if (!thesisPanelHook) {
+    return { ok: false, reason: 'no_room', message: 'thesis panel is not available in this build' }
+  }
+  const outcome = await thesisPanelHook(wcId, action).catch((error: unknown) => ({
+    ok: false as const,
+    reason: 'error' as const,
+    message: error instanceof Error ? error.message : String(error),
+  }))
+  return outcome as ThesisPanelOutcome<T>
+}
+
+/**
  * Fired when a docx is opened INSIDE an existing tab (File > Open dialog or an
  * explicit path open). Sheets and slides have had this hook from the start;
  * docs only synced the tab on save-as/first-save, so a file opened into an
@@ -3020,6 +3060,16 @@ export function registerDocsIpc(): void {
   ipcMain.handle('docs:font-metrics', (_event, family: string) =>
     typeof family === 'string' ? familyVerticalMetrics(family) : null,
   )
+
+  // EverRoom embed: AI tab thesis panel (no-op outcome when no host hook).
+  ipcMain.handle('docs:thesis-list', (event) =>
+    runThesisPanel<ThesisPanelCard[]>(event.sender.id, { kind: 'list' }))
+  ipcMain.handle('docs:thesis-pick', (event) =>
+    runThesisPanel<{ canceled: boolean; cardId: string; sourceName: string }>(event.sender.id, { kind: 'pick' }))
+  ipcMain.handle('docs:thesis-remove', (event, cardId: string) =>
+    runThesisPanel<null>(event.sender.id, { kind: 'remove', cardId }))
+  ipcMain.handle('docs:thesis-reformat', (event, cardId: string | null) =>
+    runThesisPanel<{ originalName: string }>(event.sender.id, { kind: 'reformat', cardId: cardId ?? undefined }))
 
   ipcMain.handle('docs:open', async (event) => {
     const result = await openDialog(event, {

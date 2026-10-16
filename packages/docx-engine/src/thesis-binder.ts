@@ -26,6 +26,26 @@ export interface ThesisFontCard {
   bold: boolean
 }
 
+export interface ThesisParagraphCard {
+  align?: 'left' | 'center' | 'right' | 'justify'
+  firstLineIndentChars?: number
+  lineSpacingMultiple?: number
+  /** 固定行距（磅）：与 lineSpacingMultiple 二选一，优先于多倍行距。 */
+  lineSpacingExactPt?: number
+  spaceBeforePt?: number
+  spaceAfterPt?: number
+}
+
+export interface ThesisPartCard {
+  type: string
+  /** 部件标题文案（封面/章节为空）。 */
+  title: string
+  titleFont: ThesisFontCard
+  /** 部件前分隔：page=换页；section/sectionRestart 由三节结构承担；none=接排。 */
+  breakBefore: 'none' | 'page' | 'section' | 'sectionRestart'
+  optional: boolean
+}
+
 export interface ThesisFormatCardInput {
   page: {
     widthMm: number
@@ -39,13 +59,7 @@ export interface ThesisFormatCardInput {
   }
   base: {
     font: ThesisFontCard
-    paragraph: {
-      align: 'left' | 'center' | 'right' | 'justify'
-      firstLineIndentChars: number
-      lineSpacingMultiple?: number
-      spaceBeforePt?: number
-      spaceAfterPt?: number
-    }
+    paragraph: ThesisParagraphCard
   }
   header: {
     enabled: boolean
@@ -63,16 +77,13 @@ export interface ThesisFormatCardInput {
     font: ThesisFontCard
     align: 'left' | 'center'
     numbering: 'numeric-tree' | 'none'
-    paragraph?: { spaceBeforePt?: number; spaceAfterPt?: number; lineSpacingMultiple?: number }
+    paragraph?: ThesisParagraphCard
   }>
+  parts?: ThesisPartCard[]
   abstract: {
     titleFont: ThesisFontCard
     bodyFont: ThesisFontCard
-    bodyParagraph: {
-      align: 'left' | 'center' | 'right' | 'justify'
-      firstLineIndentChars: number
-      lineSpacingMultiple?: number
-    }
+    bodyParagraph: ThesisParagraphCard
     keywordPrefix: string
     keywordPrefixBold: boolean
     keywordSeparator: string
@@ -80,10 +91,7 @@ export interface ThesisFormatCardInput {
   toc: { enabled: boolean; levels: string; titleFont: ThesisFontCard }
   references: {
     listFont: ThesisFontCard
-    listParagraph: {
-      align: 'left' | 'center' | 'right' | 'justify'
-      lineSpacingMultiple?: number
-    }
+    listParagraph: ThesisParagraphCard
   }
   cover: {
     schoolName: string
@@ -133,13 +141,21 @@ function textRun(card: ThesisFontCard, text: string, bold = card.bold): Run {
   }
 }
 
+/** 行距规则：固定磅值（exact）优先于多倍行距（auto）。 */
+function spacingOf(paragraph: { lineSpacingMultiple?: number; lineSpacingExactPt?: number }): Pick<ParaFormat, 'lineSpacing' | 'lineRule' | 'lineRawTwips'> {
+  if (paragraph.lineSpacingExactPt && paragraph.lineSpacingExactPt > 0) {
+    return { lineRule: 'exact', lineRawTwips: pt(paragraph.lineSpacingExactPt) }
+  }
+  if (paragraph.lineSpacingMultiple && paragraph.lineSpacingMultiple > 0) {
+    return { lineSpacing: paragraph.lineSpacingMultiple }
+  }
+  return {}
+}
+
 function bodyFormat(card: ThesisFormatCardInput): ParaFormat {
   const paragraph = card.base.paragraph
-  const format: ParaFormat = { align: paragraph.align }
-  if (paragraph.lineSpacingMultiple && paragraph.lineSpacingMultiple > 0) {
-    format.lineSpacing = paragraph.lineSpacingMultiple
-  }
-  const chars = paragraph.firstLineIndentChars
+  const format: ParaFormat = { align: paragraph.align, ...spacingOf(paragraph) }
+  const chars = paragraph.firstLineIndentChars ?? 0
   if (chars > 0) format.indentFirstLine = Math.round(chars * card.base.font.size * PT_TO_TWIPS)
   if (paragraph.spaceBeforePt) format.spaceBefore = pt(paragraph.spaceBeforePt)
   if (paragraph.spaceAfterPt) format.spaceAfter = pt(paragraph.spaceAfterPt)
@@ -191,6 +207,19 @@ function sectionSettingsOf(card: ThesisFormatCardInput): SectionSettings {
 
 function partTitle(runs: Run[]): SaveBlock {
   return generated(runs, { align: 'center', spaceBefore: pt(12), spaceAfter: pt(12) })
+}
+
+/** 部件标题块：文案/标题字体/换页取卡内 parts 规则，缺失回退默认标题与摘要标题字体。 */
+function partTitleOf(card: ThesisFormatCardInput, type: string, fallbackTitle: string): SaveBlock {
+  const rule = card.parts?.find((part) => part.type === type)
+  const title = rule?.title || fallbackTitle
+  const runs = [textRun(rule?.titleFont ?? card.abstract.titleFont, title)]
+  return generated(runs, {
+    align: 'center',
+    spaceBefore: pt(12),
+    spaceAfter: pt(12),
+    ...(rule?.breakBefore === 'page' ? { pageBreakBefore: true } : {}),
+  })
 }
 
 function chapterNumberText(
@@ -305,21 +334,19 @@ export async function buildThesisDocx(
 
   // ---- 前置节：承诺书 → 中文摘要 → 英文摘要 → 目录 ----
   if (card.fixedTexts.commitment.length > 0) {
-    finalBlocks.push(partTitle([textRun(card.abstract.titleFont, '毕业论文（设计）诚信承诺书')]))
+    finalBlocks.push(partTitleOf(card, 'commitment', '毕业论文（设计）诚信承诺书'))
     for (const paragraph of card.fixedTexts.commitment) {
       finalBlocks.push(generated([textRun(card.base.font, paragraph)], bodyFormat(card)))
     }
   }
   if (spec.abstractZh.trim() || spec.keywordsZh.length > 0) {
-    finalBlocks.push(partTitle([textRun(card.abstract.titleFont, '摘要')]))
+    finalBlocks.push(partTitleOf(card, 'abstract_zh', '摘要'))
     if (spec.abstractZh.trim()) {
       finalBlocks.push(generated([textRun(card.abstract.bodyFont, spec.abstractZh.trim())], {
         align: card.abstract.bodyParagraph.align,
-        ...(card.abstract.bodyParagraph.lineSpacingMultiple
-          ? { lineSpacing: card.abstract.bodyParagraph.lineSpacingMultiple }
-          : {}),
+        ...spacingOf(card.abstract.bodyParagraph),
         indentFirstLine: Math.round(
-          card.abstract.bodyParagraph.firstLineIndentChars * card.abstract.bodyFont.size * PT_TO_TWIPS,
+          (card.abstract.bodyParagraph.firstLineIndentChars ?? 0) * card.abstract.bodyFont.size * PT_TO_TWIPS,
         ),
       }))
     }
@@ -331,16 +358,22 @@ export async function buildThesisDocx(
     }
   }
   if (spec.abstractEn.trim() || spec.keywordsEn.length > 0) {
+    const enBreaks = card.parts?.find((part) => part.type === 'abstract_en')?.breakBefore === 'page'
     if (title) {
-      finalBlocks.push(partTitle([textRun(card.abstract.titleFont, title)]))
+      // 英文摘要页排式：论文题目（英文）在上，Abstract 标题在下；换页属性落在本页首行。
+      finalBlocks.push(generated([textRun(card.abstract.titleFont, title)], {
+        align: 'center',
+        spaceBefore: pt(12),
+        ...(enBreaks ? { pageBreakBefore: true } : {}),
+      }))
+      finalBlocks.push(partTitle([textRun(card.abstract.titleFont, 'Abstract')]))
+    } else {
+      finalBlocks.push(partTitleOf(card, 'abstract_en', 'Abstract'))
     }
-    finalBlocks.push(partTitle([textRun(card.abstract.titleFont, 'Abstract')]))
     if (spec.abstractEn.trim()) {
       finalBlocks.push(generated([textRun(card.abstract.bodyFont, spec.abstractEn.trim())], {
         align: card.abstract.bodyParagraph.align,
-        ...(card.abstract.bodyParagraph.lineSpacingMultiple
-          ? { lineSpacing: card.abstract.bodyParagraph.lineSpacingMultiple }
-          : {}),
+        ...spacingOf(card.abstract.bodyParagraph),
       }))
     }
     if (spec.keywordsEn.length > 0) {
@@ -351,22 +384,23 @@ export async function buildThesisDocx(
     }
   }
   if (card.toc.enabled) {
-    finalBlocks.push(partTitle([textRun(card.toc.titleFont, '目录')]))
+    finalBlocks.push(partTitleOf(card, 'toc', '目录'))
     finalBlocks.push({ kind: 'xml', xml: tocFieldXml })
   }
   finalBlocks.push({ kind: 'xml', xml: sectionBreakParagraph(card.page) })
 
   // ---- 正文节 ----
+  // 每章另起一页：chapter 部件 breakBefore=page 时，一级章节标题前换页（首个一级章在节首不再重复分页）。
+  const chapterBreaksPage = card.parts?.find((part) => part.type === 'chapter')?.breakBefore === 'page'
   for (const [chapterIndex, chapter] of spec.chapters.entries()) {
     const heading = headingByLevel.get(chapter.level) ?? headingByLevel.get(1)!
     const headingText = tocEntries[chapterIndex]!.text
     const headingFormat: ParaFormat = {
       align: heading.align,
-      ...(heading.paragraph?.lineSpacingMultiple
-        ? { lineSpacing: heading.paragraph.lineSpacingMultiple }
-        : {}),
+      ...spacingOf(heading.paragraph ?? {}),
       ...(heading.paragraph?.spaceBeforePt ? { spaceBefore: pt(heading.paragraph.spaceBeforePt) } : {}),
       ...(heading.paragraph?.spaceAfterPt ? { spaceAfter: pt(heading.paragraph.spaceAfterPt) } : {}),
+      ...(chapterBreaksPage && chapter.level === 1 ? { pageBreakBefore: true } : {}),
     }
     finalBlocks.push({
       kind: 'generated',
@@ -389,7 +423,7 @@ export async function buildThesisDocx(
 
   // ---- 附录（复用源块）----
   if (spec.appendixBlocks) {
-    finalBlocks.push(partTitle([textRun(card.abstract.titleFont, '附录')]))
+    finalBlocks.push(partTitleOf(card, 'appendix', '附录'))
     for (let i = spec.appendixBlocks.start; i < spec.appendixBlocks.end; i += 1) {
       const block = visible[i]
       if (!block || block.docxIndex === null) continue
@@ -399,22 +433,22 @@ export async function buildThesisDocx(
   }
 
   // ---- 参考文献 ----
-  finalBlocks.push(partTitle([textRun(card.abstract.titleFont, '参考文献')]))
-  const refFormat: ParaFormat = { align: card.references.listParagraph.align }
-  if (card.references.listParagraph.lineSpacingMultiple) {
-    refFormat.lineSpacing = card.references.listParagraph.lineSpacingMultiple
+  finalBlocks.push(partTitleOf(card, 'references', '参考文献'))
+  const refFormat: ParaFormat = {
+    align: card.references.listParagraph.align,
+    ...spacingOf(card.references.listParagraph),
   }
   for (const entry of spec.references) {
     finalBlocks.push(generated([textRun(card.references.listFont, entry)], refFormat))
   }
 
   // ---- 致谢 / 研究成果 ----
-  finalBlocks.push(partTitle([textRun(card.abstract.titleFont, '致谢')]))
+  finalBlocks.push(partTitleOf(card, 'acknowledgement', '致谢'))
   for (const paragraph of spec.acknowledgementParagraphs) {
     finalBlocks.push(generated([textRun(card.base.font, paragraph)], bodyFormat(card)))
   }
   if (spec.achievements.length > 0) {
-    finalBlocks.push(partTitle([textRun(card.abstract.titleFont, '攻读学位期间的研究成果')]))
+    finalBlocks.push(partTitleOf(card, 'achievements', '攻读学位期间的研究成果'))
     for (const entry of spec.achievements) {
       finalBlocks.push(generated([textRun(card.references.listFont, entry)], refFormat))
     }

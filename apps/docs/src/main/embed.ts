@@ -14,6 +14,8 @@ export {
   setActiveDocsResolver,
   setDocsFileSavedHook,
   setDocsShellWindow,
+  setDocsThesisPanelHook,
   teardownDocsRenderer,
 } from './docs-main'
+export type { DocsThesisPanelAction } from './docs-main'
 export { buildThesisDocx, describeThesisBlocks } from '@genoffice/docx-engine'

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { openPptx, type TextElement, type PictureElement } from '@genoffice/pptx-engine'
 import { HeuristicMetrics } from '@genoffice/pptx-render'
-import { parsePageSpec, buildPagePptx, type PageSpec, type SpecPath } from '../src/main/page-spec'
+import { parsePageSpec, buildPagePptx, type PageSpec, type SpecPath, type SpecShape } from '../src/main/page-spec'
 
 // 1x1 red PNG
 const PNG_1PX = Uint8Array.from(
@@ -27,6 +27,24 @@ const textSpec = (text: string, extra: Record<string, unknown> = {}) => ({
 })
 
 describe('parsePageSpec', () => {
+  it('roundRect adj: kept in range, clamped, and dropped for other shapes', () => {
+    const r = parsePageSpec(JSON.stringify({
+      elements: [
+        { type: 'shape', shape: 'roundRect', x: 0, y: 0, w: 300, h: 160, fill: '#EEEEEE', adj: 4000 },
+        { type: 'shape', shape: 'roundRect', x: 0, y: 200, w: 300, h: 160, fill: '#EEEEEE', adj: 90000 },
+        { type: 'shape', shape: 'rect', x: 0, y: 400, w: 300, h: 160, fill: '#EEEEEE', adj: 4000 },
+        { type: 'shape', shape: 'roundRect', x: 0, y: 600, w: 300, h: 160, fill: '#EEEEEE', adj: 'junk' },
+      ],
+    }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const shapes = r.spec.elements.filter((e): e is SpecShape => e.type === 'shape')
+    expect(shapes[0]!.adj).toBe(4000)
+    expect(shapes[1]!.adj).toBe(50000)
+    expect(shapes[2]!.adj).toBeUndefined()
+    expect(shapes[3]!.adj).toBeUndefined()
+  })
+
   it('accepts fenced JSON with junk around it', () => {
     const raw =
       'Here is the design:\n```json\n{"background":"#0E1A2B","elements":[' +
@@ -751,6 +769,26 @@ describe('card text cluster centering', () => {
     const imageCardText = r.spec.elements[4]!
     expect(imageCardText!.y).toBe(366) // 图文混排卡不处理
   })
+
+  it('icon elements travel with the shifted cluster so row-leading icons stay aligned', () => {
+    // 顶紧卡 + 行首图标（利弊清单形态）：图标与文字同幅平移，行首对齐保持
+    const r = parsePageSpec(JSON.stringify({
+      elements: [
+        card,
+        chipText('优势', 155),
+        { type: 'icon', icon: 'check-circle', x: 80, y: 195, w: 20, h: 20, color: '#1E5A8A' },
+        textSpec('第一条要点', { x: 110, y: 195, w: 240, h: 24, paragraphs: [{ runs: [{ text: '第一条要点', sizePt: 14 }] }] }),
+      ],
+    }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const [, title, icon, point] = r.spec.elements
+    expect(icon!.type).toBe('icon')
+    const delta = title!.y - 155
+    expect(delta).toBeGreaterThan(0) // 顶紧簇确实下移
+    expect(icon!.y - 195).toBe(delta) // 图标与文字同幅平移，行首对齐保持
+    expect(point!.y - 195).toBe(delta)
+  })
 })
 
 describe('PageSpec free paths', () => {
@@ -842,5 +880,121 @@ describe('PageSpec free paths', () => {
     expect(xml).toContain('<a:alpha val="0"/>')
     expect(xml).toContain('<a:ln w="25400"')
     expect(xml).toContain('Path ')
+  })
+})
+
+describe('buildPagePptx P0 扩展（圆角图卡/双色调/焦点裁切/逐点填色）', () => {
+  const noImages = { fetchImage: async () => null }
+
+  it('image radiusAdj → roundRect geometry; duotone → a:duotone in blip', async () => {
+    const r = parsePageSpec(JSON.stringify({
+      elements: [
+        { type: 'image', url: 'https://ok.example/a.png', x: 0, y: 0, w: 400, h: 300,
+          radiusAdj: 12000, duotone: ['#16181D', '#FAFAF8'] },
+      ],
+    }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const { bytes } = await buildPagePptx(r.spec, {
+      fetchImage: async () => ({ bytes: PNG_1PX, ext: 'png' }),
+      imageDims: () => ({ width: 100, height: 100 }),
+    })
+    const opened = await openPptx(bytes)
+    const xml = opened.deck.slides[0]!.elements.map((e) => e.anchor.originalXml).join('')
+    expect(xml).toContain('<a:prstGeom prst="roundRect">')
+    expect(xml).toContain('fmla="val 12000"')
+    expect(xml).toContain('<a:duotone><a:srgbClr val="16181D"/><a:srgbClr val="FAFAF8"/></a:duotone>')
+  })
+
+  it('image circle → ellipse geometry; grayscale → a:grayscl', async () => {
+    const r = parsePageSpec(JSON.stringify({
+      elements: [
+        { type: 'image', url: 'https://ok.example/a.png', x: 0, y: 0, w: 120, h: 120,
+          circle: true, grayscale: true },
+      ],
+    }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const { bytes } = await buildPagePptx(r.spec, {
+      fetchImage: async () => ({ bytes: PNG_1PX, ext: 'png' }),
+      imageDims: () => ({ width: 100, height: 100 }),
+    })
+    const opened = await openPptx(bytes)
+    const xml = opened.deck.slides[0]!.elements.map((e) => e.anchor.originalXml).join('')
+    expect(xml).toContain('<a:prstGeom prst="ellipse">')
+    expect(xml).toContain('<a:grayscl/>')
+    // circle 赢过 radiusAdj（解析层丢弃 radiusAdj）
+    const r2 = parsePageSpec(JSON.stringify({
+      elements: [
+        { type: 'image', url: 'https://ok.example/a.png', x: 0, y: 0, w: 120, h: 120,
+          circle: true, radiusAdj: 8000 },
+      ],
+    }))
+    expect(r2.ok).toBe(true)
+    if (!r2.ok) return
+    const out2 = await buildPagePptx(r2.spec, {
+      fetchImage: async () => ({ bytes: PNG_1PX, ext: 'png' }),
+      imageDims: () => ({ width: 100, height: 100 }),
+    })
+    const opened2 = await openPptx(out2.bytes)
+    const xml2 = opened2.deck.slides[0]!.elements.map((e) => e.anchor.originalXml).join('')
+    expect(xml2).toContain('prst="ellipse"')
+    expect(xml2).not.toContain('fmla="val 8000"')
+  })
+
+  it('image focus biases the cover crop window', async () => {
+    const spec: PageSpec = {
+      elements: [
+        { type: 'image', url: 'https://ok.example/a.png', x: 0, y: 0, w: 800, h: 400, focus: { x: 90 } },
+      ],
+    }
+    const { bytes } = await buildPagePptx(spec, {
+      fetchImage: async () => ({ bytes: PNG_1PX, ext: 'png' }),
+      imageDims: () => ({ width: 200, height: 100 }),
+    })
+    const opened = await openPptx(bytes)
+    const pic = opened.deck.slides[0]!.elements.find(
+      (e): e is PictureElement => e.type === 'picture',
+    )
+    // 2:1 source in 2:1 frame → no crop needed; focus alone must not invent one
+    expect(pic?.srcRect).toBeUndefined()
+    // portrait frame from landscape source: center crop splits evenly
+    const spec2: PageSpec = {
+      elements: [
+        { type: 'image', url: 'https://ok.example/a.png', x: 0, y: 0, w: 400, h: 400, focus: { x: 95 } },
+      ],
+    }
+    const { bytes: bytes2 } = await buildPagePptx(spec2, {
+      fetchImage: async () => ({ bytes: PNG_1PX, ext: 'png' }),
+      imageDims: () => ({ width: 200, height: 100 }),
+    })
+    const opened2 = await openPptx(bytes2)
+    const pic2 = opened2.deck.slides[0]!.elements.find(
+      (e): e is PictureElement => e.type === 'picture',
+    )
+    // total crop = 0.5; focal 95% pushes the window fully right: l=0.5, r=0
+    expect(pic2?.srcRect?.l).toBeCloseTo(0.5, 5)
+    expect(pic2?.srcRect?.r).toBeCloseTo(0, 5)
+  })
+
+  it('chart pointColors → per-point dPt fills', async () => {
+    const r = parsePageSpec(JSON.stringify({
+      elements: [
+        { type: 'chart', chart: 'bar', x: 80, y: 140, w: 800, h: 400,
+          categories: ['2023', '2024', '2025'],
+          series: [{ name: '营收', values: [12, 18, 27] }],
+          pointColors: [[null, null, '#2447B0']] },
+      ],
+    }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const { bytes } = await buildPagePptx(r.spec, noImages)
+    const opened = await openPptx(bytes)
+    const chartPath = [...opened.archive.entries.keys()].find((p) => /^ppt\/charts\/chart\d+\.xml$/.test(p))
+    expect(chartPath).toBeDefined()
+    const chartXml = opened.archive.readText(chartPath!)!
+    expect(chartXml).toContain('<c:dPt>')
+    expect(chartXml).toContain('<c:idx val="2"/>')
+    expect(chartXml).toContain('2447B0')
   })
 })
