@@ -43,6 +43,24 @@ export interface ChartStyleOptions {
   valAxisTitle?: string
   /** Gap between bars (% of bar width, c:gapWidth, PowerPoint default 150) */
   gapWidthPct?: number
+  /** Axis label style (pt/hex). Omitted = the restrained defaults. */
+  axisLabelColor?: string
+  axisLabelSizePt?: number
+  /** Axis/grid/legend/data-label styling for dark or branded decks. */
+  axisLineColor?: string
+  gridColor?: string
+  legendColor?: string
+  legendSizePt?: number
+  dataLabelColor?: string
+  dataLabelSizePt?: number
+  /**
+   * Value-axis major tick unit (c:majorUnit). Omitted = auto.
+   * 自动刻度按绘图区尺寸推，大图上两根柱也能长出十来条刻度——商用图表里这是噪音，
+   * 调用方给出步长就能直接钉死刻度密度。
+   */
+  valAxisMajorUnit?: number
+  /** 隐藏值轴刻度标签（c:tickLblPos none）：数据标签已直接标注时，值轴只剩噪音。 */
+  hideValAxisLabels?: boolean
 }
 
 export interface NewChartOptions extends ChartStyleOptions {
@@ -91,30 +109,53 @@ function numCacheXml(values: (number | null | undefined)[], f: string): string {
 }
 
 /** Data label fragment (dLbls follows ser in the schema; shared by all chart types). */
-const FONT_DLABELS =
-  '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>' +
-  '<a:defRPr sz="1000"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:defRPr>' +
-  '</a:pPr><a:endParaRPr lang="zh-CN"/></a:p></c:txPr>'
-const DLBLS_XML =
-  '<c:dLbls>' + FONT_DLABELS + '<c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/>' +
-  '<c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'
-
 /** Restrained single-hue palette used when the caller does not pass series colors. */
 const DEFAULT_SERIES_COLORS = ['#3B5F82', '#8FA9C4', '#C6D3E0', '#54749A', '#A9BFD4', '#2C4468']
 
-const FONT_AXIS =
-  '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>' +
-  '<a:defRPr sz="1100"><a:solidFill><a:srgbClr val="64748B"/></a:solidFill></a:defRPr>' +
-  '</a:pPr><a:endParaRPr lang="zh-CN"/></a:p></c:txPr>'
-const AXIS_LN =
-  '<c:spPr><a:ln w="9525" cap="flat"><a:solidFill><a:srgbClr val="CBD5E1"/></a:solidFill></a:ln></c:spPr>'
-const AX_STYLE = AXIS_LN + FONT_AXIS
-const GRID_XML =
-  '<c:majorGridlines><c:spPr><a:ln w="9525" cap="flat"><a:solidFill><a:srgbClr val="E2E8F0"/></a:solidFill></a:ln></c:spPr></c:majorGridlines>'
-const FONT_LEGEND =
-  '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>' +
-  '<a:defRPr sz="1100"><a:solidFill><a:srgbClr val="475569"/></a:solidFill></a:defRPr>' +
-  '</a:pPr><a:endParaRPr lang="zh-CN"/></a:p></c:txPr>'
+const hex = (value: string | undefined, fallback: string): string =>
+  (value ?? fallback).replace('#', '').toUpperCase().slice(0, 6)
+
+function fontTxPr(sizePt: number, color: string): string {
+  const sz = Math.round(Math.min(Math.max(sizePt, 6), 48) * 100)
+  return (
+    '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>' +
+    `<a:defRPr sz="${sz}"><a:solidFill><a:srgbClr val="${hex(color, '64748B')}"/></a:solidFill></a:defRPr>` +
+    '</a:pPr><a:endParaRPr lang="zh-CN"/></a:p></c:txPr>'
+  )
+}
+
+function dataLabelsXml(opts: ChartStyleOptions): string {
+  const size = opts.dataLabelSizePt ?? 10
+  const color = opts.dataLabelColor ?? '#334155'
+  return (
+    '<c:dLbls>' + fontTxPr(size, color) +
+    '<c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/>' +
+    '<c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'
+  )
+}
+
+function axisStyleXml(opts: ChartStyleOptions): string {
+  const size = opts.axisLabelSizePt ?? 11
+  const color = opts.axisLabelColor ?? '#64748B'
+  const line = opts.axisLineColor ?? '#CBD5E1'
+  return (
+    '<c:spPr><a:ln w="9525" cap="flat"><a:solidFill>' +
+    `<a:srgbClr val="${hex(line, 'CBD5E1')}"/></a:solidFill></a:ln></c:spPr>` +
+    fontTxPr(size, color)
+  )
+}
+
+function gridXml(opts: ChartStyleOptions): string {
+  const color = hex(opts.gridColor, 'E2E8F0')
+  return (
+    '<c:majorGridlines><c:spPr><a:ln w="9525" cap="flat"><a:solidFill>' +
+    `<a:srgbClr val="${color}"/></a:solidFill></a:ln></c:spPr></c:majorGridlines>`
+  )
+}
+
+function legendFontXml(opts: ChartStyleOptions): string {
+  return fontTxPr(opts.legendSizePt ?? 11, opts.legendColor ?? '#475569')
+}
 
 /** Axis title fragment (value axis vertical, rot=-5400000). */
 function axTitleXml(text: string, vertical: boolean): string {
@@ -126,11 +167,42 @@ function axTitleXml(text: string, vertical: boolean): string {
   )
 }
 
+/**
+ * 值轴刻度收尾：把调用方要的步长与"隐藏刻度标签"写进每个 c:valAx。
+ * 放在整段 XML 之后做，是因为 valAx 的模板有六份（柱/条/线/散点/组合/3D），
+ * 逐份改容易漏；这里按标签统一切一次，规则只有一处。
+ */
+function applyValAxisTweaks(xml: string, opts: NewChartOptions): string {
+  const unit = opts.valAxisMajorUnit
+  const hide = opts.hideValAxisLabels === true
+  if (!hide && !(typeof unit === 'number' && Number.isFinite(unit) && unit > 0)) return xml
+  return xml.replace(/<c:valAx>([\s\S]*?)<\/c:valAx>/g, (_match, body: string) => {
+    let inner = body
+    // tickLblPos 在 CT_ValAx 里排在 spPr 之前——插到第一个 spPr 前才是合法顺序。
+    if (hide && !inner.includes('<c:tickLblPos')) {
+      inner = inner.includes('<c:spPr>')
+        ? inner.replace('<c:spPr>', '<c:tickLblPos val="none"/><c:spPr>')
+        : `${inner}<c:tickLblPos val="none"/>`
+    }
+    if (typeof unit === 'number' && Number.isFinite(unit) && unit > 0 && !inner.includes('<c:majorUnit')) {
+      // majorUnit 在 CT_ValAx 里排在 crossAx/crosses/crossBetween 之后、dispUnits 之前。
+      inner = `${inner}<c:majorUnit val="${unit}"/>`
+    }
+    return `<c:valAx>${inner}</c:valAx>`
+  })
+}
+
 /** Full c:chartSpace part XML. */
 export function buildChartSpaceXml(opts: NewChartOptions): string {
+  return applyValAxisTweaks(buildChartSpaceXmlInner(opts), opts)
+}
+
+function buildChartSpaceXmlInner(opts: NewChartOptions): string {
   const rows = opts.categories.length
-  const dLbls = opts.dataLabels ? DLBLS_XML : ''
-  const grid = opts.gridlines ? GRID_XML : ''
+  const dLbls = opts.dataLabels ? dataLabelsXml(opts) : ''
+  const grid = opts.gridlines ? gridXml(opts) : ''
+  const AX_STYLE = axisStyleXml(opts)
+  const FONT_LEGEND = legendFontXml(opts)
   const catTitle = opts.catAxisTitle ? axTitleXml(opts.catAxisTitle, false) : ''
   const valTitle = opts.valAxisTitle ? axTitleXml(opts.valAxisTitle, true) : ''
   const gapWidth =

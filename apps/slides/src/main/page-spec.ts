@@ -22,6 +22,7 @@ import {
   promoteSlideBackground,
   savePptx,
   setElementEffects,
+  setSlideNotes,
   setElementFill,
   type Paragraph,
   type TableElement,
@@ -198,6 +199,21 @@ export interface SpecChart extends SpecBase {
   legend?: boolean
   dataLabels?: boolean
   gridlines?: boolean
+  /** Chart theme tokens: axis/legend/data-label colors and sizes (dark/branded decks). */
+  axis?: {
+    labelColor?: string
+    labelSizePt?: number
+    lineColor?: string
+    gridColor?: string
+    legendColor?: string
+    legendSizePt?: number
+    dataLabelColor?: string
+    dataLabelSizePt?: number
+    /** 值轴主刻度步长（c:majorUnit）；给出后刻度密度不再由绘图区尺寸自动推。 */
+    majorUnit?: number
+    /** 隐藏值轴刻度标签（数据标签已直接标注时，值轴只剩噪音）。 */
+    hideValueAxis?: boolean
+  }
 }
 
 /** Baked vector icon (Heroicons solid) rendered as a custom-geometry shape. */
@@ -258,6 +274,8 @@ export type SpecElement = SpecShape | SpecText | SpecImage | SpecChart | SpecIco
 
 export interface PageSpec {
   background?: string
+  /** Speaker notes (notesSlide body); omitted = no notes. */
+  notes?: string
   elements: SpecElement[]
 }
 
@@ -771,6 +789,27 @@ export function parsePageSpec(
             )
             .filter((row): row is Array<string | null> => Array.isArray(row))
         : undefined
+      const axisRaw = asRecord(el.axis)
+      const axisNumber = (value: unknown): number | undefined => {
+        const n = num(value)
+        return n === undefined ? undefined : Math.min(Math.max(n, 6), 24)
+      }
+      const axis = axisRaw
+        ? {
+            ...(normColor(axisRaw.labelColor) ? { labelColor: normColor(axisRaw.labelColor)! } : {}),
+            ...(axisNumber(axisRaw.labelSizePt) !== undefined ? { labelSizePt: axisNumber(axisRaw.labelSizePt)! } : {}),
+            ...(normColor(axisRaw.lineColor) ? { lineColor: normColor(axisRaw.lineColor)! } : {}),
+            ...(normColor(axisRaw.gridColor) ? { gridColor: normColor(axisRaw.gridColor)! } : {}),
+            ...(normColor(axisRaw.legendColor) ? { legendColor: normColor(axisRaw.legendColor)! } : {}),
+            ...(axisNumber(axisRaw.legendSizePt) !== undefined ? { legendSizePt: axisNumber(axisRaw.legendSizePt)! } : {}),
+            ...(normColor(axisRaw.dataLabelColor) ? { dataLabelColor: normColor(axisRaw.dataLabelColor)! } : {}),
+            ...(axisNumber(axisRaw.dataLabelSizePt) !== undefined ? { dataLabelSizePt: axisNumber(axisRaw.dataLabelSizePt)! } : {}),
+            ...(typeof axisRaw.majorUnit === 'number' && Number.isFinite(axisRaw.majorUnit) && axisRaw.majorUnit > 0
+              ? { majorUnit: axisRaw.majorUnit }
+              : {}),
+            ...(axisRaw.hideValueAxis === true ? { hideValueAxis: true } : {}),
+          }
+        : undefined
       elements.push({
         type: 'chart',
         chart: kind as SpecChartKind,
@@ -783,6 +822,7 @@ export function parsePageSpec(
         ...(el.legend === true || el.legend === false ? { legend: el.legend } : {}),
         ...(el.dataLabels === true ? { dataLabels: true } : {}),
         ...(el.gridlines === true ? { gridlines: true } : {}),
+        ...(axis ? { axis } : {}),
       })
       continue
     }
@@ -1023,6 +1063,7 @@ export function parsePageSpec(
     ok: true,
     spec: {
       ...(normColor(root.background) ? { background: normColor(root.background) } : {}),
+      ...(typeof root.notes === 'string' && root.notes.trim() ? { notes: root.notes.trim().slice(0, 2000) } : {}),
       elements,
     },
     warnings,
@@ -1339,6 +1380,16 @@ export async function buildPagePptx(
         legendPos: wantLegend ? 'b' : 'none',
         ...(el.dataLabels ? { dataLabels: true } : {}),
         ...(el.gridlines ? { gridlines: true } : {}),
+        ...(el.axis?.labelColor ? { axisLabelColor: el.axis.labelColor } : {}),
+        ...(el.axis?.labelSizePt ? { axisLabelSizePt: el.axis.labelSizePt } : {}),
+        ...(el.axis?.lineColor ? { axisLineColor: el.axis.lineColor } : {}),
+        ...(el.axis?.gridColor ? { gridColor: el.axis.gridColor } : {}),
+        ...(el.axis?.legendColor ? { legendColor: el.axis.legendColor } : {}),
+        ...(el.axis?.legendSizePt ? { legendSizePt: el.axis.legendSizePt } : {}),
+        ...(el.axis?.dataLabelColor ? { dataLabelColor: el.axis.dataLabelColor } : {}),
+        ...(el.axis?.dataLabelSizePt ? { dataLabelSizePt: el.axis.dataLabelSizePt } : {}),
+        ...(el.axis?.majorUnit !== undefined ? { valAxisMajorUnit: el.axis.majorUnit } : {}),
+        ...(el.axis?.hideValueAxis === true ? { hideValAxisLabels: true } : {}),
       })
       if (r) slide = r.slide
       continue
@@ -1465,6 +1516,7 @@ export async function buildPagePptx(
   }
 
   promoteSlideBackground(slide, opened.deck.size)
+  if (spec.notes) setSlideNotes(opened, 0, spec.notes)
   let bytes = await savePptx(opened)
   if (deps.fontMetrics) bytes = (await growTextBoxesAndValidate(bytes, deps.fontMetrics)) ?? bytes
   return { bytes, imageFailures }
