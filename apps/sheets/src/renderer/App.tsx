@@ -399,6 +399,7 @@ import {
   type ChartVectorRead,
   type ShapeEditChanges,
 } from './WorkbookVisuals'
+import { forgetVisualMedia } from './visual-media-cache'
 import { ChartFormatPane, SelectDataDialog } from './ChartPanels'
 
 // Source sheet id of an in-flight copy-sheet command; the next insert-sheet
@@ -2586,6 +2587,7 @@ export function App(): React.JSX.Element {
       lazyWorkbookRef.current = null
       clearLazyState(lazyState)
       if (lazyState) {
+        forgetVisualMedia(lazyState.file.sessionId)
         void window.desktopApi.closeWorkbook(lazyState.file.sessionId)
       }
       runtime.univer.dispose()
@@ -4087,6 +4089,7 @@ export function App(): React.JSX.Element {
     const previous = lazyWorkbookRef.current
     if (previous) {
       clearLazyState(previous)
+      forgetVisualMedia(previous.file.sessionId)
       void window.desktopApi.closeWorkbook(previous.file.sessionId).catch(() => undefined)
     }
     if (demoVisualInstallTimerRef.current) {

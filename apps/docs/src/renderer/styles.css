@@ -3897,7 +3897,14 @@ body.docs-crop-active .doc-protected[data-doc-protected='image'] .doc-img-wrap {
 .table-ribbon-body {
   display: flex;
   align-items: stretch;
-  min-width: 0;
+  /* Lay the groups out at their natural width and let .ribbon-body scroll, the
+     same way the regular tabs do. `min-width: 0` let this row be squeezed down
+     to the viewport width, so group-heavy tabs (Table Design / Table Layout)
+     compressed into each other — option labels ellipsized, border buttons
+     stacked together. max-content keeps the groups apart and turns a narrow
+     window into horizontal scrolling. */
+  flex: 0 0 auto;
+  min-width: max-content;
 }
 
 .table-tool-group {
