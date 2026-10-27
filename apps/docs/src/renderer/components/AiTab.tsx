@@ -303,18 +303,22 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     }
   }
 
-  /** 删除模版：keepCard=false 连格式卡一起删（删干净）；true 只删文件、卡留着。 */
-  const deleteTemplate = async (cardId: string, name: string, keepCard: boolean) => {
-    const question = keepCard ? t('aiThesisDeleteFileConfirm', { name }) : t('aiThesisDeleteConfirm', { name })
-    if (!window.confirm(question)) return
+  /**
+   * 删除模版：确认后调后端删（模版文件 + 格式卡一起删，删干净不留残留），
+   * 成功即从列表里移除该行。
+   */
+  const deleteTemplate = async (cardId: string, name: string) => {
+    if (!window.confirm(t('aiThesisDeleteConfirm', { name }))) return
     setDeletingId(cardId)
     setError(null)
     try {
-      const outcome = await window.desktop.thesisDeleteTemplate(cardId, keepCard)
+      const outcome = await window.desktop.thesisDeleteTemplate(cardId, false)
       if (!outcome.ok) throw new Error(outcome.message || t('aiThesisFailed'))
-      const result = outcome.value as { fileDeleted?: boolean; hadFile?: boolean; cardKept?: boolean } | null
+      const result = outcome.value as { fileDeleted?: boolean; hadFile?: boolean } | null
+      // 先把行从列表移除（用户要的即时反馈），再拉一次服务端确认
+      setCards((prev) => (prev ? prev.filter((entry) => entry.id !== cardId) : prev))
       if (result?.hadFile && !result.fileDeleted) setError(t('aiThesisDeleteFileFailed'))
-      onNotice?.(keepCard ? t('aiThesisFileDeleted') : t('aiThesisDeleted'))
+      onNotice?.(t('aiThesisDeleted'))
       refresh()
     } catch (err) {
       setError(errorMessage(err))
@@ -440,33 +444,27 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                               <circle cx="12" cy="12" r="3" />
                             </svg>
                           </button>
-                          {row.sourceFileEntryId ? (
-                            <button
-                              className="ai-thesis-card-act"
-                              title={t('aiThesisDeleteFileTip')}
-                              disabled={deletingId === row.id}
-                              onClick={() => void deleteTemplate(row.id, row.sourceName, true)}
-                            >
-                              {deletingId === row.id ? (
-                                <span className="ai-thesis-spinner" />
-                              ) : (
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
-                                </svg>
-                              )}
-                            </button>
-                          ) : null}
+                          {/* 删除模版（右上角小按钮）：浅灰常态、hover 变红；
+                              必须 stopPropagation——父级是「用此模版排版」的点击区，
+                              不拦就会点删除反而触发排版。 */}
                           <button
-                            className="ai-thesis-card-act is-danger"
+                            type="button"
+                            className="ai-thesis-card-act is-danger ai-thesis-card-del"
                             title={t('aiThesisRemove')}
+                            aria-label={t('aiThesisRemove')}
                             disabled={deletingId === row.id}
-                            onClick={() => void deleteTemplate(row.id, row.sourceName, false)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              event.preventDefault();
+                              void deleteTemplate(row.id, row.sourceName);
+                            }}
                           >
                             {deletingId === row.id ? (
                               <span className="ai-thesis-spinner" />
                             ) : (
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+                                <path d="M10 11v6M14 11v6" />
                               </svg>
                             )}
                           </button>

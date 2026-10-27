@@ -10054,6 +10054,45 @@ tr > .page-gap-cut {
   cursor: default;
 }
 
+/* 模版行的删除按钮：右侧小巧图标，常态浅灰、hover 转红提示危险操作。
+   绝对定位到右上角，不参与卡片主区布局（长文件名也不会被挤变形）。 */
+.ai-thesis-card {
+  position: relative;
+}
+
+.ai-thesis-card-act.ai-thesis-card-del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  opacity: 0.75;
+  transition: color 120ms ease, opacity 120ms ease, background 120ms ease;
+}
+
+.ai-thesis-card-act.ai-thesis-card-del svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ai-thesis-card-act.ai-thesis-card-del:hover:not(:disabled) {
+  color: var(--danger);
+  opacity: 1;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.ai-thesis-card-act.ai-thesis-card-del:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* 给右上角按钮留出空间，避免长文件名压到图标下面。 */
+.ai-thesis-card .ai-thesis-card-main {
+  padding-right: 22px;
+}
+
 .ai-thesis-upload {
   display: flex;
   width: 100%;
