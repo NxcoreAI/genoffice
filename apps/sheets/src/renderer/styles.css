@@ -1632,6 +1632,11 @@ button.check-item:hover {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* EverRoom host side dock (dock=1): dock column on the right, sheet keeps the rest */
+.app-shell.copilot-off .sheet-body:has(> .evsd-root) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .spreadsheet {
   min-width: 0;
   min-height: 0;

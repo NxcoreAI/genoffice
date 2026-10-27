@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { SideDock } from '../../../side-dock-shared/SideDock'
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
 // legacy build: the modern build relies on new APIs like Math.sumPrecise that the current
 // Electron V8 lacks, making embedded font parsing fail and whole pages render as garbled raw char codes
@@ -252,6 +253,8 @@ import {
  * out of the renderer — the embed closure ships no AI backend to talk to. */
 declare const __GENOFFICE_EMBED_ONLY__: boolean
 const everroomEmbed = __GENOFFICE_EMBED_ONLY__
+/** EverRoom host opts into the embedded side dock (dock=1). */
+const dockParam = new URLSearchParams(window.location.search).get('dock') === '1'
 /** Host-readonly mode (readonly=1 query set by the embed host): piggyback the
  * encrypted-file readOnly flag so the whole edit surface is gated at once. */
 const embedReadonly =
@@ -8462,6 +8465,9 @@ export default function App() {
             </div>
           </footer>
         </div>
+        {everroomEmbed && dockParam && (
+          <SideDock kind="pdf" fileName={fileName} />
+        )}
       </div>
     </div>
   )

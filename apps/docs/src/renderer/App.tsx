@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { SideDock } from '../../../side-dock-shared/SideDock'
 import type { CSSProperties, MouseEvent as ReactMouseEvent, SetStateAction } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/core'
@@ -411,6 +412,8 @@ const AiPanel = !__GENOFFICE_EMBED_ONLY__ ? lazy(async () => {
 export function App() {
   const everroomEmbed = __GENOFFICE_EMBED_ONLY__
     || new URLSearchParams(window.location.search).get('mode') === 'everroom'
+  // EverRoom host opts into the embedded side dock (Agent / Materials / History)
+  const dockParam = new URLSearchParams(window.location.search).get('dock') === '1'
   // Read-only embed (host passes readonly=1): the body is view-only, like a
   // document opened under a write lock — isProtected carries it everywhere.
   const embedReadonly = everroomEmbed
@@ -4345,6 +4348,9 @@ export function App() {
             </div>
           </footer>
         </div>
+        {everroomEmbed && dockParam && (
+          <SideDock kind="docs" fileName={doc?.fileName ?? undefined} />
+        )}
       </div>
 
       {showShortcuts && <ShortcutsDialog onClose={() => setShowShortcuts(false)} />}
