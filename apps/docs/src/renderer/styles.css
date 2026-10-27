@@ -10060,21 +10060,20 @@ tr > .page-gap-cut {
   position: relative;
 }
 
+/* 与其它行内按钮同尺寸（24×24 / 图标 14px），不再缩成角落小点 */
 .ai-thesis-card-act.ai-thesis-card-del {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  min-width: 24px;
+  align-self: center;
   border-radius: 5px;
   color: var(--text-muted);
-  opacity: 0.75;
+  opacity: 0.85;
   transition: color 120ms ease, opacity 120ms ease, background 120ms ease;
 }
 
 .ai-thesis-card-act.ai-thesis-card-del svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
 }
 
 .ai-thesis-card-act.ai-thesis-card-del:hover:not(:disabled) {
@@ -10088,10 +10087,7 @@ tr > .page-gap-cut {
   outline-offset: 1px;
 }
 
-/* 给右上角按钮留出空间，避免长文件名压到图标下面。 */
-.ai-thesis-card .ai-thesis-card-main {
-  padding-right: 22px;
-}
+
 
 .ai-thesis-upload {
   display: flex;

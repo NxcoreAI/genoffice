@@ -243,6 +243,9 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   const [previewCard, setPreviewCard] = useState<Record<string, unknown> | null>(null)
   /** 正在删除模版的卡片 id（文件+卡，或只删文件）。 */
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  /** 待确认删除的卡片 id：面板内联二次确认（不用 window.confirm——它会抢焦点，
+   *  确认框关闭时下拉面板被判定为「点到外部」而收起）。 */
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   /** v2 槽位映射报告：排版完成后在面板里给出守恒/未匹配/待复核摘要。 */
   const [report, setReport] = useState<{
     matched?: number
@@ -270,6 +273,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     setCards(null)
     setError(null)
     setReport(null)
+    setPendingDeleteId(null)
     refresh()
     return window.desktop.onThesisCardsChanged(refresh)
   }, [open, refresh])
@@ -307,8 +311,8 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
    * 删除模版：确认后调后端删（模版文件 + 格式卡一起删，删干净不留残留），
    * 成功即从列表里移除该行。
    */
-  const deleteTemplate = async (cardId: string, name: string) => {
-    if (!window.confirm(t('aiThesisDeleteConfirm', { name }))) return
+  const deleteTemplate = async (cardId: string) => {
+    setPendingDeleteId(null)
     setDeletingId(cardId)
     setError(null)
     try {
@@ -327,17 +331,6 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     }
   }
 
-  const removeCard = async (cardId: string) => {
-    setRemovingId(cardId)
-    try {
-      const outcome = await window.desktop.thesisRemoveCard(cardId)
-      if (!outcome.ok && outcome.message) setError(outcome.message)
-    } catch (err) {
-      setError(errorMessage(err))
-    } finally {
-      setRemovingId(null)
-    }
-  }
 
   const reformatWith = async (cardId: string) => {
     setBusy(true)
@@ -444,9 +437,9 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                               <circle cx="12" cy="12" r="3" />
                             </svg>
                           </button>
-                          {/* 删除模版（右上角小按钮）：浅灰常态、hover 变红；
-                              必须 stopPropagation——父级是「用此模版排版」的点击区，
-                              不拦就会点删除反而触发排版。 */}
+                          {/* 删除模版：与预览按钮同尺寸（24×24、图标 14px），浅灰常态、
+                              hover 转红；stopPropagation 防止触发父级的「用此模版排版」。
+                              点击进入行内二次确认，面板保持打开。 */}
                           <button
                             type="button"
                             className="ai-thesis-card-act is-danger ai-thesis-card-del"
@@ -456,7 +449,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                             onClick={(event) => {
                               event.stopPropagation();
                               event.preventDefault();
-                              void deleteTemplate(row.id, row.sourceName);
+                              setPendingDeleteId((current) => (current === row.id ? null : row.id));
                             }}
                           >
                             {deletingId === row.id ? (
@@ -468,6 +461,41 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                               </svg>
                             )}
                           </button>
+                          {pendingDeleteId === row.id ? (
+                            <div
+                              className="ai-thesis-card-confirm"
+                              role="alertdialog"
+                              aria-label={t('aiThesisDeleteConfirmInline')}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <span className="ai-thesis-card-confirm-text">
+                                {t('aiThesisDeleteConfirmInline')}
+                                <em>{t('aiThesisDeleteConfirmNote')}</em>
+                              </span>
+                              <button
+                                type="button"
+                                className="ai-thesis-card-confirm-cancel"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setPendingDeleteId(null);
+                                }}
+                              >
+                                {t('aiThesisDeleteCancel')}
+                              </button>
+                              <button
+                                type="button"
+                                className="ai-thesis-card-confirm-ok"
+                                disabled={deletingId === row.id}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  event.preventDefault();
+                                  void deleteTemplate(row.id);
+                                }}
+                              >
+                                {deletingId === row.id ? <span className="ai-thesis-spinner" /> : t('aiThesisDeleteOk')}
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>
