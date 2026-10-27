@@ -3786,7 +3786,10 @@ export async function preloadEntireWorkbook(
   }
   if (lazyWorkbookRef.current === state) {
     state.flags.preloadComplete = true
-    setMessage(t('appFullyLoaded'))
+    // Do not surface a "workbook fully loaded" notice: the progress messages
+    // already covered the load, and a permanent line in the nav/status bar is
+    // just clutter. Clear whatever transient text is left instead.
+    setMessage('')
   }
 }
 
