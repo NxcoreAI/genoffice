@@ -46,7 +46,58 @@ export interface ThesisPartCard {
   optional: boolean
 }
 
+/** 编号方案（来自模板剖面的 numbering.xml 解析结果）。 */
+export type ThesisNumberingScheme = 'cn-upper' | 'cn-lower' | 'decimal-tree' | 'decimal-dot' | 'none'
+
+export interface ThesisNumberingInput {
+  scheme: ThesisNumberingScheme
+  /** 每级定义（模板 numbering.xml 的 lvl），仅作参考：lvlText/start 目前不强制套用。 */
+  levels?: Array<{ level: number; numFmt?: string; lvlText?: string; start?: number }>
+}
+
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+
+/** 1–99 → 中文数字（模板正文编号基本用不到三位数）。 */
+function cnNumber(value: number): string {
+  if (value <= 0) return '零'
+  if (value < 10) return CN_DIGITS[value]!
+  if (value < 20) return `十${value % 10 === 0 ? '' : CN_DIGITS[value % 10]}`
+  const tens = Math.floor(value / 10)
+  const ones = value % 10
+  return `${CN_DIGITS[tens] ?? String(tens)}十${ones === 0 ? '' : CN_DIGITS[ones]}`
+}
+
+/**
+ * 按模板编号方案生成标题前缀（方案 §6.6）。
+ *
+ * - cn-upper：「一、」/「（一）」/「1.」/「（1）」（中文论文最常见）
+ * - cn-lower：同 cn-upper（中文无大小写，两者等价）
+ * - decimal-tree：「1」/「1.1」/「1.1.1」
+ * - decimal-dot：「1.」单级，深层同 tree
+ * - none：不生成编号（正文标题里的原编号已由网关剥离）
+ */
+export function headingNumberPrefix(
+  scheme: ThesisNumberingScheme,
+  counters: readonly [number, number, number, number],
+  level: 1 | 2 | 3 | 4,
+): string {
+  if (scheme === 'none') return ''
+  if (scheme === 'decimal-tree' || scheme === 'decimal-dot') {
+    const parts: string[] = []
+    for (let i = 0; i < level; i += 1) parts.push(String(counters[i] ?? 0))
+    return `${parts.join('.')}${scheme === 'decimal-dot' && level === 1 ? '.' : ''} `
+  }
+  // 中文编号：一级「一、」二级「（一）」三级「1.」四级「（1）」
+  const current = counters[level - 1] ?? 0
+  if (level === 1) return `${cnNumber(current)}、`
+  if (level === 2) return `（${cnNumber(current)}）`
+  if (level === 3) return `${current}.`
+  return `（${current}）`
+}
+
 export interface ThesisFormatCardInput {
+  /** 模板编号方案（v2 剖面）。缺省时按 headings[].numbering 的老语义。 */
+  numbering?: ThesisNumberingInput
   page: {
     widthMm: number
     heightMm: number
@@ -227,6 +278,7 @@ function partTitle(runs: Run[]): SaveBlock {
   return generated(runs, { align: 'center', spaceBefore: pt(12), spaceAfter: pt(12) })
 }
 
+
 /** 部件标题块：文案/标题字体/换页取卡内 parts 规则，缺失回退默认标题与摘要标题字体。 */
 function partTitleOf(card: ThesisFormatCardInput, type: string, fallbackTitle: string): SaveBlock {
   const rule = card.parts?.find((part) => part.type === type)
@@ -238,15 +290,6 @@ function partTitleOf(card: ThesisFormatCardInput, type: string, fallbackTitle: s
     spaceAfter: pt(12),
     ...(rule?.breakBefore === 'page' ? { pageBreakBefore: true } : {}),
   })
-}
-
-function chapterNumberText(
-  counters: [number, number, number, number],
-  level: 1 | 2 | 3 | 4,
-): string {
-  const parts: string[] = []
-  for (let i = 0; i < level; i += 1) parts.push(String(counters[i]))
-  return parts.join('.')
 }
 
 /** 源块 → 装订块：文本段重建套样式；表格/图片/公式等 passthrough 保真。 */
@@ -310,16 +353,16 @@ export async function buildThesisDocx(
   const tocEntries: Array<{ text: string; level: number }> = []
   const headingStyleIds = ['Heading1', 'Heading2', 'Heading3', 'Heading4']
   const headingByLevel = new Map(card.headings.map((heading) => [heading.level, heading]))
+  // 编号方案：优先用模板剖面（v2），否则回落 headings[].numbering 的老语义。
+  const numberingScheme: ThesisNumberingScheme = card.numbering?.scheme
+    ?? (card.headings.some((heading) => heading.numbering === 'numeric-tree') ? 'decimal-tree' : 'none')
   for (const chapter of spec.chapters) {
-    const heading = headingByLevel.get(chapter.level) ?? headingByLevel.get(1)!
-    if (heading.numbering === 'numeric-tree') {
+    if (numberingScheme !== 'none') {
       const idx = chapter.level - 1
       counters[idx] += 1
       for (let i = idx + 1; i < 4; i += 1) counters[i] = 0
     }
-    const numberText = heading.numbering === 'numeric-tree'
-      ? `${chapterNumberText(counters, chapter.level)} `
-      : ''
+    const numberText = headingNumberPrefix(numberingScheme, counters, chapter.level)
     tocEntries.push({ text: `${numberText}${chapter.headingText}`, level: Math.min(chapter.level, 3) })
   }
   const tocMaxLevel = Number.parseInt(card.toc.levels.replace(/[^0-9]/g, '').slice(-1), 10)

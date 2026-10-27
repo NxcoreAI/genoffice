@@ -276,3 +276,56 @@ describe('thesis-binder · 未归类内容（v2 映射兜底）', () => {
     expect(document).not.toContain('未归类内容')
   })
 })
+
+describe('thesis-binder · 模板编号方案（v2 编号重算）', () => {
+  const baseSpec = (): ThesisBindingSpecInput => ({
+    title: '开题与需求、系统设计报告',
+    coverFields: {},
+    abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+    chapters: [
+      { level: 1, headingText: '业务场景分析', blockStart: 0, blockEnd: 1 },
+      { level: 2, headingText: '政策与业务背景', blockStart: 1, blockEnd: 2 },
+      { level: 2, headingText: '业务痛点', blockStart: 2, blockEnd: 3 },
+      { level: 1, headingText: '需求梳理', blockStart: 3, blockEnd: 4 },
+    ],
+    references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+  })
+
+  it('中文编号方案：一、/（一）/二、/（一）', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'cn-upper' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('一、业务场景分析')
+    expect(document).toContain('（一）政策与业务背景')
+    expect(document).toContain('（二）业务痛点')
+    expect(document).toContain('二、需求梳理')
+  })
+
+  it('十进制树编号：1 / 1.1 / 1.2 / 2', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'decimal-tree' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('1 业务场景分析')
+    expect(document).toContain('1.1 政策与业务背景')
+    expect(document).toContain('2 需求梳理')
+  })
+
+  it('none：不生成编号（原编号已由网关剥离）', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'none' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('业务场景分析')
+    expect(document).not.toContain('一、业务场景分析')
+    expect(document).not.toContain('1 业务场景分析')
+  })
+
+  it('两级计数独立递增，回退一级时二级归零', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'decimal-tree' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document.indexOf('1.1 政策')).toBeLessThan(document.indexOf('1.2 业务痛点'))
+    expect(document).toContain('2 需求梳理')
+    // 第二个一级标题之后没有二级标题，不应出现 "2.1"
+    expect(document).not.toContain('2.1 ')
+  })
+})
