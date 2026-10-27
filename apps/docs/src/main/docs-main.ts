@@ -4236,7 +4236,7 @@ async function performDocsClose(
 
 export function createDocsView(
   openPath?: string,
-  options?: { hostMode?: 'tab' | 'everroom'; readonly?: boolean },
+  options?: { hostMode?: 'tab' | 'everroom'; readonly?: boolean; sideDock?: boolean },
 ): WebContentsView {
   const view = new WebContentsView({
     webPreferences: {
@@ -4265,10 +4265,15 @@ export function createDocsView(
     const devUrl = new URL(runtime.rendererUrl)
     devUrl.searchParams.set('mode', hostMode)
     if (options?.readonly) devUrl.searchParams.set('readonly', '1')
+    if (options?.sideDock) devUrl.searchParams.set('dock', '1')
     void view.webContents.loadURL(devUrl.toString())
   } else {
     void view.webContents.loadFile(runtime.rendererFile, {
-      query: options?.readonly ? { mode: hostMode, readonly: '1' } : { mode: hostMode },
+      query: {
+        mode: hostMode,
+        ...(options?.readonly ? { readonly: '1' } : {}),
+        ...(options?.sideDock ? { dock: '1' } : {}),
+      },
     })
   }
   // view.webContents becomes undefined after destroy, so grab the id beforehand
