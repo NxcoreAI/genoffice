@@ -173,6 +173,11 @@ export interface ThesisBindingSpecInput {
    * 渲染为正文末尾的独立小节，整段红色高亮 + 说明，供用户人工归位。
    */
   unmatchedBlocks?: Array<{ start: number; end: number; label?: string }>
+  /**
+   * 融合模式：正文块保留源文档自身的格式（原文透传），只让模版决定页面、
+   * 页眉页脚、标题层级与编号。严格模式（缺省）= 全部按模版样式重建。
+   */
+  preserveSourceFormat?: boolean
 }
 
 function mm(mmValue: number): number {
@@ -477,6 +482,11 @@ export async function buildThesisDocx(
       const block = visible[i]
       if (!block) continue
       if (block.originalXml?.includes('<w:sectPr')) continue
+      if (spec.preserveSourceFormat && block.docxIndex !== null) {
+        // 融合模式：正文保留原文档格式，只替换结构（标题/编号仍由模版生成）
+        finalBlocks.push({ kind: 'original', docxIndex: block.docxIndex })
+        continue
+      }
       const adapted = adaptBodyBlock(block, card)
       if (adapted) finalBlocks.push(adapted)
     }

@@ -329,3 +329,46 @@ describe('thesis-binder · 模板编号方案（v2 编号重算）', () => {
     expect(document).not.toContain('2.1 ')
   })
 })
+
+describe('thesis-binder · 融合模式与标题层级映射', () => {
+  it('严格模式：正文按模版样式重建（不保留原格式）', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, CARD, {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 }],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+    })
+    const { document } = await unzipXml(bytes)
+    // 原文档里的段落文字仍会出现（重建为模版样式）
+    expect(document).toContain('选题背景的正文段落。')
+  })
+
+  it('融合模式：正文块走原文透传（保留原文档格式）', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, CARD, {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 }],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+      preserveSourceFormat: true,
+    })
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('选题背景的正文段落。')
+    expect(document).toContain('相关研究现状。')
+  })
+
+  it('标题层级映射：二级标题改为一级时输出 Heading1 样式', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, CARD, {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      // 源文档第二节本来按 level 2 传入，调用方（网关映射）已把它改写成 1
+      chapters: [
+        { level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 },
+        { level: 1, headingText: '硬件系统框图', blockStart: 3, blockEnd: 4 },
+      ],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+    })
+    const { document } = await unzipXml(bytes)
+    const headingRuns = document.match(/<w:pStyle w:val="Heading1"\/>/g) ?? []
+    expect(headingRuns.length).toBeGreaterThanOrEqual(2)
+  })
+})
