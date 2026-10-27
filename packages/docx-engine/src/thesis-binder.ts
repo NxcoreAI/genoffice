@@ -117,6 +117,11 @@ export interface ThesisBindingSpecInput {
   appendixBlocks: { start: number; end: number } | null
   acknowledgementParagraphs: string[]
   achievements: string[]
+  /**
+   * v2 槽位映射的「未归类内容」：模板没有对应槽位、但绝不能丢的源块区间。
+   * 渲染为正文末尾的独立小节，整段红色高亮 + 说明，供用户人工归位。
+   */
+  unmatchedBlocks?: Array<{ start: number; end: number; label?: string }>
 }
 
 function mm(mmValue: number): number {
@@ -139,6 +144,19 @@ function textRun(card: ThesisFontCard, text: string, bold = card.bold): Run {
     sizeHalfPoints: halfPoints(card.size),
     bold,
   }
+}
+
+/** 未匹配内容的标记样式：红字 + 黄色高亮（与方案 §6.8 一致，Word 里一眼可见）。 */
+const MARK_COLOR = 'C00000'
+const MARK_HIGHLIGHT = 'yellow'
+
+function markedRun(card: ThesisFontCard, text: string): Run {
+  return { ...textRun(card, text), color: MARK_COLOR, highlight: MARK_HIGHLIGHT }
+}
+
+/** 标记段落：整段红字高亮（用于「未归类内容」的小节标记与说明）。 */
+function markedParagraph(card: ThesisFontCard, text: string, format: ParaFormat): SaveBlock {
+  return generated([markedRun(card, text)], format)
 }
 
 /** 行距规则：固定磅值（exact）优先于多倍行距（auto）。 */
@@ -451,6 +469,23 @@ export async function buildThesisDocx(
     finalBlocks.push(partTitleOf(card, 'achievements', '攻读学位期间的研究成果'))
     for (const entry of spec.achievements) {
       finalBlocks.push(generated([textRun(card.references.listFont, entry)], refFormat))
+    }
+  }
+
+  // ---- 未归类内容（v2 映射兜底）----
+  // 模板没有对应槽位的源块必须原样保留：单独成节 + 红色高亮标记 + 逐段说明，
+  // 让用户在 Word 里一眼找到并人工归位（方案不变量 I3：不丢内容）。
+  if (spec.unmatchedBlocks && spec.unmatchedBlocks.length > 0) {
+    finalBlocks.push(generated([markedRun(card.base.font, '未归类内容（模板无对应槽位，请人工归位）')], bodyFormat(card)))
+    for (const range of spec.unmatchedBlocks) {
+      if (range.label) finalBlocks.push(markedParagraph(card.base.font, `〔未匹配：${range.label}〕`, bodyFormat(card)))
+      for (let i = range.start; i < range.end; i += 1) {
+        const block = visible[i]
+        if (!block) continue
+        if (block.originalXml?.includes('<w:sectPr')) continue
+        const adapted = adaptBodyBlock(block, card)
+        if (adapted) finalBlocks.push(adapted)
+      }
     }
   }
 

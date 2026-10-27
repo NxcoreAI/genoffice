@@ -234,3 +234,45 @@ describe('thesis-binder', () => {
     expect(document).not.toMatch(/w:lineRule="auto"[^/]*\/><\/w:spacing>/)
   })
 })
+
+describe('thesis-binder · 未归类内容（v2 映射兜底）', () => {
+  it('未匹配块渲染为正文末尾的独立小节，且红色高亮标记', async () => {
+    const source = await sourceDocx()
+    const spec: ThesisBindingSpecInput = {
+      title: '开题与需求、系统设计报告',
+      coverFields: { title: '开题与需求、系统设计报告' },
+      abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 1 }],
+      references: [],
+      appendixBlocks: null,
+      acknowledgementParagraphs: [],
+      achievements: [],
+      unmatchedBlocks: [{ start: 1, end: 3, label: '位于首个章节之前的说明段' }],
+    }
+    const bytes = await buildThesisDocx(source, CARD, spec)
+    const { document } = await unzipXml(bytes)
+
+    // 小节标题 + 说明都在，且带高亮
+    expect(document).toContain('未归类内容（模板无对应槽位，请人工归位）')
+    expect(document).toContain('〔未匹配：位于首个章节之前的说明段〕')
+    expect(document).toContain('w:highlight w:val="yellow"')
+    expect(document).toContain('w:color w:val="C00000"')
+    // 未匹配块的内容没有丢
+    expect(document).toContain('选题背景的正文段落。')
+    expect(document).toContain('相关研究现状。')
+    // 标记小节排在参考文献/致谢之后（正文末尾）
+    expect(document.indexOf('未归类内容')).toBeGreaterThan(document.indexOf('致谢'))
+  })
+
+  it('没有未匹配块时不生成该小节', async () => {
+    const source = await sourceDocx()
+    const spec: ThesisBindingSpecInput = {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 }],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+    }
+    const bytes = await buildThesisDocx(source, CARD, spec)
+    const { document } = await unzipXml(bytes)
+    expect(document).not.toContain('未归类内容')
+  })
+})
