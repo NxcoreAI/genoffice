@@ -2835,6 +2835,8 @@ export type DocsThesisPanelAction =
   | { kind: 'list' }
   | { kind: 'pick' }
   | { kind: 'remove'; cardId: string }
+  /** 删除模版：文件 + 格式卡；keepCard=true 只删文件、保留格式卡。 */
+  | { kind: 'delete-template'; cardId: string; keepCard?: boolean }
   | { kind: 'reformat'; cardId?: string }
 
 let thesisPanelHook:
@@ -3068,6 +3070,11 @@ export function registerDocsIpc(): void {
     runThesisPanel<{ canceled: boolean; cardId: string; sourceName: string }>(event.sender.id, { kind: 'pick' }))
   ipcMain.handle('docs:thesis-remove', (event, cardId: string) =>
     runThesisPanel<null>(event.sender.id, { kind: 'remove', cardId }))
+  ipcMain.handle('docs:thesis-delete-template', (event, cardId: string, keepCard?: boolean) =>
+    runThesisPanel<{ fileDeleted: boolean; hadFile: boolean; cardKept: boolean }>(
+      event.sender.id,
+      { kind: 'delete-template', cardId, ...(keepCard ? { keepCard: true } : {}) },
+    ))
   ipcMain.handle('docs:thesis-reformat', (event, cardId: string | null) =>
     runThesisPanel<{ originalName: string }>(event.sender.id, { kind: 'reformat', cardId: cardId ?? undefined }))
 

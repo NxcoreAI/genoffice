@@ -241,6 +241,16 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [previewCard, setPreviewCard] = useState<Record<string, unknown> | null>(null)
+  /** 正在删除模版的卡片 id（文件+卡，或只删文件）。 */
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  /** v2 槽位映射报告：排版完成后在面板里给出守恒/未匹配/待复核摘要。 */
+  const [report, setReport] = useState<{
+    matched?: number
+    total?: number
+    unmatched?: number
+    appended?: number
+    needsReview?: number
+  } | null>(null)
   const open = dropdown === 'thesis'
 
   const refresh = useCallback(() => {
@@ -259,19 +269,57 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     if (!open) return
     setCards(null)
     setError(null)
+    setReport(null)
     refresh()
     return window.desktop.onThesisCardsChanged(refresh)
   }, [open, refresh])
 
+  /**
+   * 上传论文模版：只收 Word（用户预期「可导入 word 格式」）。
+   * 解析成功后**直接对当前打开的文档排版**——导入模版的下一步就是排版，
+   * 不再让用户多点一次（长任务最怕「点了没反应」）。
+   */
   const uploadTemplate = async () => {
     setUploading(true)
+    setError(null)
+    setReport(null)
     try {
       const outcome = await window.desktop.thesisPickTemplate()
-      if (!outcome.ok && outcome.message) setError(outcome.message)
+      if (!outcome.ok) {
+        if (outcome.message) setError(outcome.message)
+        return
+      }
+      const meta = outcome.value as { canceled?: boolean; cardId?: string; factGaps?: string[] } | undefined
+      if (!meta || meta.canceled) return
+      refresh()
+      if (meta.factGaps && meta.factGaps.length > 0) {
+        setError(t('aiThesisPartial', { gaps: meta.factGaps.join('；') }))
+      }
+      if (meta.cardId && hasDoc) await reformatWith(meta.cardId)
     } catch (err) {
       setError(errorMessage(err))
     } finally {
       setUploading(false)
+    }
+  }
+
+  /** 删除模版：keepCard=false 连格式卡一起删（删干净）；true 只删文件、卡留着。 */
+  const deleteTemplate = async (cardId: string, name: string, keepCard: boolean) => {
+    const question = keepCard ? t('aiThesisDeleteFileConfirm', { name }) : t('aiThesisDeleteConfirm', { name })
+    if (!window.confirm(question)) return
+    setDeletingId(cardId)
+    setError(null)
+    try {
+      const outcome = await window.desktop.thesisDeleteTemplate(cardId, keepCard)
+      if (!outcome.ok) throw new Error(outcome.message || t('aiThesisFailed'))
+      const result = outcome.value as { fileDeleted?: boolean; hadFile?: boolean; cardKept?: boolean } | null
+      if (result?.hadFile && !result.fileDeleted) setError(t('aiThesisDeleteFileFailed'))
+      onNotice?.(keepCard ? t('aiThesisFileDeleted') : t('aiThesisDeleted'))
+      refresh()
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -293,7 +341,27 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     try {
       const outcome = await window.desktop.thesisReformat(cardId)
       if (!outcome.ok) throw new Error(outcome.message || t('aiThesisFailed'))
-      onNotice?.(t('aiThesisDone', { name: outcome.value.originalName }))
+      const value = outcome.value as {
+        originalName: string
+        report?: {
+          conservation?: { matched?: number; total?: number; unmatched?: number }
+          report?: { appendedChapters?: number }
+          needsReview?: unknown[]
+        }
+      }
+      onNotice?.(t('aiThesisDone', { name: value.originalName }))
+      // v2 映射报告：留在面板里（不打断，不弹窗）
+      const conservation = value.report?.conservation
+      if (conservation) {
+        setReport({
+          matched: conservation.matched ?? 0,
+          total: conservation.total ?? 0,
+          unmatched: conservation.unmatched ?? 0,
+          appended: value.report?.report?.appendedChapters ?? 0,
+          needsReview: value.report?.needsReview?.length ?? 0,
+        })
+        setDropdown(() => 'thesis')
+      }
     } catch (err) {
       setError(errorMessage(err))
       setDropdown(() => 'thesis')
@@ -372,13 +440,29 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                               <circle cx="12" cy="12" r="3" />
                             </svg>
                           </button>
+                          {row.sourceFileEntryId ? (
+                            <button
+                              className="ai-thesis-card-act"
+                              title={t('aiThesisDeleteFileTip')}
+                              disabled={deletingId === row.id}
+                              onClick={() => void deleteTemplate(row.id, row.sourceName, true)}
+                            >
+                              {deletingId === row.id ? (
+                                <span className="ai-thesis-spinner" />
+                              ) : (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+                                </svg>
+                              )}
+                            </button>
+                          ) : null}
                           <button
                             className="ai-thesis-card-act is-danger"
                             title={t('aiThesisRemove')}
-                            disabled={removingId === row.id}
-                            onClick={() => void removeCard(row.id)}
+                            disabled={deletingId === row.id}
+                            onClick={() => void deleteTemplate(row.id, row.sourceName, false)}
                           >
-                            {removingId === row.id ? (
+                            {deletingId === row.id ? (
                               <span className="ai-thesis-spinner" />
                             ) : (
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -394,6 +478,13 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                     </button>
                   </>
                 )}
+                {report && report.total ? (
+                  <div className="ai-thesis-report" role="status">
+                    <p>{t('aiThesisReport', { matched: report.matched ?? 0, total: report.total })}</p>
+                    {report.unmatched ? <p className="is-warn">{t('aiThesisReportUnmatched', { count: report.unmatched })}</p> : null}
+                    {report.needsReview ? <p className="is-warn">{t('aiThesisReportReview', { count: report.needsReview })}</p> : null}
+                  </div>
+                ) : null}
                 {error ? <p className="ai-thesis-error">{error}</p> : null}
               </div>
             )}

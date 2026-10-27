@@ -153,6 +153,8 @@ const api: DesktopApi = {
   thesisListCards: () => ipcRenderer.invoke('docs:thesis-list'),
   thesisPickTemplate: () => ipcRenderer.invoke('docs:thesis-pick'),
   thesisRemoveCard: (cardId: string) => ipcRenderer.invoke('docs:thesis-remove', cardId),
+  thesisDeleteTemplate: (cardId: string, keepCard?: boolean) =>
+    ipcRenderer.invoke('docs:thesis-delete-template', cardId, keepCard === true),
   thesisReformat: (cardId?: string) => ipcRenderer.invoke('docs:thesis-reformat', cardId ?? null),
   onThesisCardsChanged: (handler: () => void) => {
     const listener = () => handler()

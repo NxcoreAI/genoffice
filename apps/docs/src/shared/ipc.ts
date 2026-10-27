@@ -355,9 +355,18 @@ export interface DesktopApi {
    * from this view's webContents id, so the renderer passes no ids.
    */
   thesisListCards(): Promise<ThesisPanelOutcome<ThesisPanelCard[]>>
-  thesisPickTemplate(): Promise<ThesisPanelOutcome<{ canceled: boolean; cardId: string; sourceName: string }>>
+  thesisPickTemplate(): Promise<
+    ThesisPanelOutcome<{ canceled: boolean; cardId: string; sourceName: string; factGaps?: string[] }>
+  >
   thesisRemoveCard(cardId: string): Promise<ThesisPanelOutcome<null>>
-  thesisReformat(cardId?: string): Promise<ThesisPanelOutcome<{ originalName: string }>>
+  /** 删除模版：keepCard=true 只删模版文件、保留格式卡。 */
+  thesisDeleteTemplate(
+    cardId: string,
+    keepCard?: boolean,
+  ): Promise<ThesisPanelOutcome<{ fileDeleted: boolean; hadFile: boolean; cardKept: boolean }>>
+  thesisReformat(
+    cardId?: string,
+  ): Promise<ThesisPanelOutcome<{ originalName: string; report?: Record<string, unknown> }>>
   onThesisCardsChanged(handler: () => void): () => void
 }
 
@@ -367,6 +376,8 @@ export interface ThesisPanelCard {
   sourceName: string
   updatedAt: string
   card: Record<string, unknown>
+  /** 模版来源文件 id（资料区文件）；直传解析的模版为 null/缺省。 */
+  sourceFileEntryId?: string | null
 }
 
 /**
