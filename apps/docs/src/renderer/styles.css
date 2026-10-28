@@ -9979,10 +9979,14 @@ tr > .page-gap-cut {
 }
 
 .ai-thesis-card {
-  display: flex;
+  position: relative;
+  /* grid 而非 flex：minmax(0,1fr) 让文件名列可以真正收缩到 0，
+     右侧两颗按钮永远是独立的 auto 列 —— 行宽不可能超过弹窗，也就不会出现横向滚动条 */
+  display: grid;
   width: 100%;
   min-width: 0;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: 4px;
 }
 
@@ -10036,6 +10040,8 @@ tr > .page-gap-cut {
 
 .ai-thesis-card-act {
   display: inline-flex;
+  grid-column: -3 / -2;
+  justify-self: end;
   width: 28px;
   align-items: center;
   justify-content: center;
@@ -10067,6 +10073,81 @@ tr > .page-gap-cut {
   cursor: default;
 }
 
+/* 删除确认条：绝对覆盖在卡片上，不参与行布局。
+   之前这段没有样式，作为 flex 子元素把整行撑宽，逼出了横向滚动条、还把文件名挤没了。 */
+.ai-thesis-card-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.08);
+}
+
+.ai-thesis-card-confirm-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.ai-thesis-card-confirm-text em {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-thesis-card-confirm-cancel,
+.ai-thesis-card-confirm-ok {
+  display: inline-flex;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ai-thesis-card-confirm-cancel:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.ai-thesis-card-confirm-ok {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: var(--danger);
+  color: #fff;
+  font-weight: 650;
+}
+
+.ai-thesis-card-confirm-ok:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+}
+
+.ai-thesis-card-confirm-ok:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* 模版行的删除按钮：右侧小巧图标，常态浅灰、hover 转红提示危险操作。
    绝对定位到右上角，不参与卡片主区布局（长文件名也不会被挤变形）。 */
 .ai-thesis-card {
@@ -10080,6 +10161,9 @@ tr > .page-gap-cut {
   height: 28px;
   flex: 0 0 auto;
   flex-shrink: 0;
+  /* grid 最后一列 + 右对齐：恒定停在卡片最右侧，不需要横向滚动就能点到 */
+  grid-column: -2 / -1;
+  justify-self: end;
   align-self: center;
   padding: 0 6px;
   border-radius: 6px;
