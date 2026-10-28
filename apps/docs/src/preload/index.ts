@@ -166,6 +166,7 @@ const api: DesktopApi = {
     },
   ) => ipcRenderer.invoke('docs:thesis-reformat-job', cardId ?? null, options),
   thesisReformatJobStatus: (jobId: string) => ipcRenderer.invoke('docs:thesis-reformat-job-status', jobId),
+  thesisPreviewTemplate: (cardId: string) => ipcRenderer.invoke('docs:thesis-preview', cardId),
   onThesisCardsChanged: (handler: () => void) => {
     const listener = () => handler()
     ipcRenderer.on('docs:thesis-changed', listener)

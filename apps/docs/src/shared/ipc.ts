@@ -382,6 +382,10 @@ export interface DesktopApi {
   ): Promise<
     ThesisPanelOutcome<{ jobId: string; phase: string }>
   >
+  /** 真预览：宿主用自带 Office 渲染器打开模板原文件（多页、表格、图片完整）。 */
+  thesisPreviewTemplate(cardId: string): Promise<
+    ThesisPanelOutcome<{ opened: boolean; reason?: string }>
+  >
   thesisReformatJobStatus(jobId: string): Promise<
     ThesisPanelOutcome<{
       id: string

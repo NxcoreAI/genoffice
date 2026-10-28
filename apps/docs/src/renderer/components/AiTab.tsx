@@ -141,87 +141,6 @@ function ThesisMiniPaper({ card }: { card: ThesisCardView }) {
   )
 }
 
-const SAMPLE_TITLE = '基于深度学习的×××研究'
-const SAMPLE_PARAGRAPHS = [
-  '本课题围绕×××展开研究。首先分析国内外研究现状，然后给出总体设计方案，最后通过实验验证方案的有效性。',
-  '实验结果表明，所提出的方法在准确率与运行效率两方面均优于基线方案，达到了预期的设计目标。',
-]
-
-/** 大预览：封面页 + 正文页，按 mm/pt 真实比例换算（paperWidthPx 为纸宽像素）。 */
-function ThesisFullPaper({ card }: { card: ThesisCardView }) {
-  const paperWidthPx = 460
-  const pxPerMm = paperWidthPx / card.widthMm
-  const ptToPx = (pt: number) => pt * 0.3528 * pxPerMm
-  const pageStyle = {
-    width: paperWidthPx,
-    height: Math.round(card.heightMm * pxPerMm),
-    paddingTop: Math.round(card.marginTopMm * pxPerMm),
-    paddingBottom: Math.round(card.marginBottomMm * pxPerMm),
-    paddingLeft: Math.round(card.marginLeftMm * pxPerMm),
-    paddingRight: Math.round(card.marginRightMm * pxPerMm),
-  } as const
-  const bodyFont = {
-    fontFamily: paperFont(card.eastAsia, card.ascii),
-    fontSize: ptToPx(card.baseSizePt),
-    lineHeight: card.lineSpacingMultiple,
-  } as const
-  return (
-    <div className="ai-thesis-full-wrap">
-      <section className="ai-thesis-full-paper" style={pageStyle}>
-        <div
-          className="ai-thesis-full-school"
-          style={{
-            fontFamily: paperFont(card.eastAsia, card.ascii),
-            fontSize: ptToPx(card.schoolSizePt),
-            fontWeight: card.schoolBold ? 700 : 400,
-          }}
-        >
-          {card.schoolName}
-        </div>
-        <div className="ai-thesis-full-degree" style={{ ...bodyFont, fontSize: ptToPx(card.baseSizePt + 4) }}>
-          {card.degreeLine}
-        </div>
-        <div className="ai-thesis-full-fields">
-          {card.coverFields.map((label) => (
-            <span key={label} className="ai-thesis-full-field" style={bodyFont}>
-              <em>{label}</em>
-              <u aria-hidden="true" />
-            </span>
-          ))}
-        </div>
-        <div className="ai-thesis-full-year" style={bodyFont}>{card.yearLine}</div>
-        {card.footerLine ? <div className="ai-thesis-full-cover-footer" style={bodyFont}>{card.footerLine}</div> : null}
-      </section>
-      <section className="ai-thesis-full-paper" style={pageStyle}>
-        {card.headerEnabled ? (
-          <header
-            className="ai-thesis-full-header"
-            style={{ ...bodyFont, borderBottom: card.headerUnderline ? '1px solid currentColor' : undefined }}
-          >
-            {card.headerTemplate.replace('{title}', SAMPLE_TITLE)}
-          </header>
-        ) : null}
-        <h3
-          className="ai-thesis-full-h1"
-          style={{
-            fontFamily: paperFont(card.h1.eastAsia, card.h1.ascii),
-            fontSize: ptToPx(card.h1.sizePt),
-            fontWeight: card.h1.bold ? 700 : 400,
-            textAlign: card.h1.align === 'left' ? 'left' : 'center',
-          }}
-        >
-          第一章&nbsp;&nbsp;绪论
-        </h3>
-        {SAMPLE_PARAGRAPHS.map((paragraph, index) => (
-          <p key={index} className="ai-thesis-full-para" style={{ ...bodyFont, textIndent: `${card.firstLineIndentChars}em` }}>
-            {paragraph}
-          </p>
-        ))}
-        <footer className="ai-thesis-full-footer" style={bodyFont}>1</footer>
-      </section>
-    </div>
-  )
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -240,7 +159,6 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   const [uploading, setUploading] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [previewCard, setPreviewCard] = useState<Record<string, unknown> | null>(null)
   /** 正在删除模版的卡片 id（文件+卡，或只删文件）。 */
   const [deletingId, setDeletingId] = useState<string | null>(null)
   /** 待确认删除的卡片 id：面板内联二次确认（不用 window.confirm——它会抢焦点，
@@ -250,6 +168,30 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   const [pendingDuplicate, setPendingDuplicate] = useState<{ name: string } | null>(null)
   /** 排版作业：{ phase, progress, elapsed } → 面板顶部进度条；null = 空闲。 */
   const [job, setJob] = useState<{ phase: string; progress: number; elapsed: number } | null>(null)
+  /** 正在打开真预览的模版行。 */
+  const [previewingId, setPreviewingId] = useState<string | null>(null)
+
+  /**
+   * 预览模板：不再用格式卡重建示意（那只是缩略示意，看不出真实文档），
+   * 而是让宿主用应用自带的 Office 渲染器打开模板原文件——多页滚动、
+   * 文字/表格/图片/排版完整还原，所见即所得。
+   */
+  const previewTemplate = async (cardId: string) => {
+    setPreviewingId(cardId)
+    setError(null)
+    try {
+      const outcome = await window.desktop.thesisPreviewTemplate(cardId)
+      if (!outcome.ok) throw new Error(outcome.message || t('aiThesisFailed'))
+      const result = outcome.value as { opened?: boolean; reason?: string }
+      if (!result.opened) {
+        setError(result.reason === 'no_file' ? t('aiThesisPreviewNoFile') : t('aiThesisPreviewFailed'))
+      }
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setPreviewingId(null)
+    }
+  }
   /** 目录融合模式：strict=只保留能对上模板目录的内容；blend=全部保留，未匹配的单独追加。 */
   const [mode, setMode] = useState<'strict' | 'blend'>('blend')
   /** v2 槽位映射报告：排版完成后在面板里给出守恒/未匹配/待复核摘要。 */
@@ -540,7 +482,8 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                           <button
                             className="ai-thesis-card-act"
                             title={t('aiThesisPreview')}
-                            onClick={() => setPreviewCard(row.card)}
+                            disabled={previewingId === row.id}
+                            onClick={() => void previewTemplate(row.id)}
                           >
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                               <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
@@ -641,22 +584,6 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
         <div className="ribbon-group-label">{t('aiThesisGroupLabel')}</div>
       </div>
 
-      {previewCard ? (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => event.target === event.currentTarget && setPreviewCard(null)}
-        >
-          <div className="modal ai-thesis-preview-modal">
-            <h2>{t('aiThesisPreview')}</h2>
-            <div className="ai-thesis-preview-body">
-              <ThesisFullPaper card={readThesisCardView(previewCard)} />
-            </div>
-            <div className="modal-actions">
-              <button className="btn" onClick={() => setPreviewCard(null)}>{t('appClose')}</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </>
   )
 }

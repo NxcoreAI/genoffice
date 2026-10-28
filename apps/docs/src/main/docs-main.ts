@@ -2849,6 +2849,7 @@ export type DocsThesisPanelAction =
       }
     }
   | { kind: 'reformat-job-status'; jobId: string }
+  | { kind: 'preview-template'; cardId: string }
 
 let thesisPanelHook:
   | ((wcId: number, action: DocsThesisPanelAction) => Promise<ThesisPanelOutcome<unknown>>)
@@ -3109,6 +3110,8 @@ export function registerDocsIpc(): void {
         options,
       }),
   )
+  ipcMain.handle('docs:thesis-preview', (event, cardId: string) =>
+    runThesisPanel<{ opened: boolean; reason?: string }>(event.sender.id, { kind: 'preview-template', cardId }))
   ipcMain.handle('docs:thesis-reformat-job-status', (event, jobId: string) =>
     runThesisPanel<{
       id: string
