@@ -1784,7 +1784,7 @@ export async function createSheetsWindow(
 
 /** tab-mode equivalent of createSheetsWindow: same runtime/IPC wiring, no BrowserWindow of its own. */
 export function createSheetsView(
-  options: { includeAiHandlers?: boolean; readonly?: boolean; sideDock?: boolean } = {},
+  options: { includeAiHandlers?: boolean; readonly?: boolean; sideDock?: boolean; dockAgentSrc?: string } = {},
 ): WebContentsView {
   const client = sidecar ?? new XlsxSidecarClient(resolveSidecarPath())
   sidecar = client
@@ -1816,6 +1816,7 @@ export function createSheetsView(
     devUrl.searchParams.set('mode', 'tab')
     if (options.readonly) devUrl.searchParams.set('readonly', '1')
     if (options.sideDock) devUrl.searchParams.set('dock', '1')
+    if (options.dockAgentSrc) devUrl.searchParams.set('docksrc', options.dockAgentSrc)
     void view.webContents.loadURL(devUrl.toString())
   } else {
     void view.webContents.loadFile(runtime.rendererFile, {
@@ -1823,6 +1824,7 @@ export function createSheetsView(
         mode: 'tab',
         ...(options.readonly ? { readonly: '1' } : {}),
         ...(options.sideDock ? { dock: '1' } : {}),
+        ...(options.dockAgentSrc ? { docksrc: options.dockAgentSrc } : {}),
       },
     })
   }
