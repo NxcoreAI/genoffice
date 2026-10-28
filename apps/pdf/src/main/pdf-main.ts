@@ -1454,7 +1454,7 @@ function grantAndTrack(wc: WebContents, openPath?: string | null): void {
 
 export function createPdfView(
   openPath?: string | null,
-  options?: { readonly?: boolean; sideDock?: boolean },
+  options?: { readonly?: boolean; sideDock?: boolean; dockAgentSrc?: string },
 ): WebContentsView {
   registerPdfIpc()
   const view = new WebContentsView({
@@ -1472,12 +1472,14 @@ export function createPdfView(
     const url = new URL(runtime.rendererUrl)
     if (options?.readonly) url.searchParams.set('readonly', '1')
     if (options?.sideDock) url.searchParams.set('dock', '1')
+    if (options?.dockAgentSrc) url.searchParams.set('docksrc', options.dockAgentSrc)
     void view.webContents.loadURL(url.toString())
   } else if (runtime.rendererFile) {
     void view.webContents.loadFile(runtime.rendererFile, {
       query: {
         ...(options?.readonly ? { readonly: '1' } : {}),
         ...(options?.sideDock ? { dock: '1' } : {}),
+        ...(options?.dockAgentSrc ? { docksrc: options.dockAgentSrc } : {}),
       },
     })
   }

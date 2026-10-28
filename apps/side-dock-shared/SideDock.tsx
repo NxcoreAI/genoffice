@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import './side-dock.css'
@@ -8,9 +8,22 @@ import './side-dock.css'
  * GenOffice editor when the host opens the view with the `dock=1` query
  * parameter. Self-contained by design: no app dependencies, inline icons,
  * mock data included — the host wires the real Agent bridge in later stages.
+ *
+ * `docksrc=<url>`: the host may supply the URL of its own Agent chat page
+ * (EverRoom ported chat); the Agent tab then renders it in a filling iframe
+ * instead of the built-in mock chat, keeping the dock geometry unchanged.
  */
 
 export type SideDockKind = 'docs' | 'sheets' | 'slides' | 'pdf'
+
+const DOCK_AGENT_SRC: string | null = (() => {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('docksrc')
+    return raw && raw.length > 0 ? raw : null
+  } catch {
+    return null
+  }
+})()
 
 /* ───────────── mock 数据（按编辑器类型） ───────────── */
 
@@ -171,7 +184,12 @@ export function SideDock({ kind, fileName }: { kind: SideDockKind; fileName?: st
         <>
           <div className="evsd-resize" onPointerDown={startResize} role="separator" aria-orientation="vertical" />
           <div className="evsd-body">
-            {tab === 'agent' && <AgentView kind={kind} fileName={fileName} say={say} />}
+            {tab === 'agent' &&
+              (DOCK_AGENT_SRC ? (
+                <AgentFrame kind={kind} fileName={fileName} />
+              ) : (
+                <AgentView kind={kind} fileName={fileName} say={say} />
+              ))}
             {tab === 'materials' && <MaterialsView kind={kind} say={say} />}
             {tab === 'history' && <HistoryView kind={kind} say={say} />}
           </div>
@@ -191,6 +209,22 @@ export function SideDock({ kind, fileName }: { kind: SideDockKind; fileName?: st
         ))}
       </div>
       {toast && <div className="evsd-toast">{toast}</div>}
+    </div>
+  )
+}
+
+/* ── Agent（宿主聊天页装载） ── */
+
+function AgentFrame({ kind, fileName }: { kind: SideDockKind; fileName?: string }) {
+  const src = useMemo(() => {
+    const url = new URL(DOCK_AGENT_SRC!, window.location.href)
+    url.searchParams.set('kind', kind)
+    if (fileName) url.searchParams.set('file', fileName)
+    return url.toString()
+  }, [kind, fileName])
+  return (
+    <div className="evsd-agent-frame">
+      <iframe src={src} title="Agent" />
     </div>
   )
 }

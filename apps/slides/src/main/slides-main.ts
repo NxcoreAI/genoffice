@@ -4490,7 +4490,7 @@ function armVibrancy(view: WebContentsView): void {
 /** Tab version of createSlidesWindow: same runtime/IPC, hosted in the shell's WebContentsView */
 export function createSlidesView(
   openPath?: string | null,
-  options?: { readonly?: boolean; sideDock?: boolean },
+  options?: { readonly?: boolean; sideDock?: boolean; dockAgentSrc?: string },
 ): WebContentsView {
   const view = new WebContentsView({
     webPreferences: {
@@ -4513,6 +4513,7 @@ export function createSlidesView(
     devUrl.searchParams.set('mode', 'tab')
     if (options?.readonly) devUrl.searchParams.set('readonly', '1')
     if (options?.sideDock) devUrl.searchParams.set('dock', '1')
+    if (options?.dockAgentSrc) devUrl.searchParams.set('docksrc', options.dockAgentSrc)
     void view.webContents.loadURL(devUrl.toString())
   } else if (runtime.rendererFilePath)
     void view.webContents.loadFile(runtime.rendererFilePath, {
@@ -4520,6 +4521,7 @@ export function createSlidesView(
         mode: 'tab',
         ...(options?.readonly ? { readonly: '1' } : {}),
         ...(options?.sideDock ? { dock: '1' } : {}),
+        ...(options?.dockAgentSrc ? { docksrc: options.dockAgentSrc } : {}),
       },
     })
   return view
