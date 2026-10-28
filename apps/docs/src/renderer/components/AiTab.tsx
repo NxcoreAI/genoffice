@@ -246,6 +246,8 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   /** 待确认删除的卡片 id：面板内联二次确认（不用 window.confirm——它会抢焦点，
    *  确认框关闭时下拉面板被判定为「点到外部」而收起）。 */
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  /** 重名模版待确认：非 null = 已存在同名模版，等用户选「替换原文件 / 取消上传」。 */
+  const [pendingDuplicate, setPendingDuplicate] = useState<{ name: string } | null>(null)
   /** v2 槽位映射报告：排版完成后在面板里给出守恒/未匹配/待复核摘要。 */
   const [report, setReport] = useState<{
     matched?: number
@@ -283,18 +285,37 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
    * 解析成功后**直接对当前打开的文档排版**——导入模版的下一步就是排版，
    * 不再让用户多点一次（长任务最怕「点了没反应」）。
    */
-  const uploadTemplate = async () => {
+  /**
+   * 上传模版。
+   *
+   * 重名校验：同名模版已在列表里时**不直接覆盖**（解析要几分钟，覆盖了没法撤回），
+   * 先返回 duplicate，让用户选「替换原文件 / 取消上传」。
+   * overwrite=true = 用户已确认替换，复用主进程暂存的那份文件直接解析。
+   */
+  const uploadTemplate = async (overwrite = false) => {
     setUploading(true)
     setError(null)
     setReport(null)
+    setPendingDuplicate(null)
     try {
-      const outcome = await window.desktop.thesisPickTemplate()
+      const outcome = await window.desktop.thesisPickTemplate(overwrite)
       if (!outcome.ok) {
         if (outcome.message) setError(outcome.message)
         return
       }
-      const meta = outcome.value as { canceled?: boolean; cardId?: string; factGaps?: string[] } | undefined
+      const meta = outcome.value as {
+        canceled?: boolean
+        cardId?: string
+        sourceName?: string
+        factGaps?: string[]
+        duplicate?: boolean
+      } | undefined
       if (!meta || meta.canceled) return
+      // 同名冲突：宿主还没解析，弹「替换 / 取消」
+      if (meta.duplicate) {
+        setPendingDuplicate({ name: meta.sourceName ?? '' })
+        return
+      }
       refresh()
       if (meta.factGaps && meta.factGaps.length > 0) {
         setError(t('aiThesisPartial', { gaps: meta.factGaps.join('；') }))
@@ -395,6 +416,27 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
             {open && (
               <div data-rb-panel="" className="layout-menu ai-thesis-panel">
                 <p className="ai-thesis-title">{t('aiThesisPanelTitle')}</p>
+                {pendingDuplicate ? (
+                  <div className="ai-thesis-dup" role="alertdialog" aria-label={t('aiThesisDuplicateTitle')}>
+                    <p>
+                      <b>{t('aiThesisDuplicateTitle')}</b>
+                      <em>{pendingDuplicate.name}</em>
+                    </p>
+                    <div className="ai-thesis-dup-acts">
+                      <button type="button" className="ai-thesis-dup-cancel" onClick={() => setPendingDuplicate(null)}>
+                        {t('aiThesisDuplicateCancel')}
+                      </button>
+                      <button
+                        type="button"
+                        className="ai-thesis-dup-replace"
+                        disabled={uploading}
+                        onClick={() => void uploadTemplate(true)}
+                      >
+                        {uploading ? <span className="ai-thesis-spinner" /> : t('aiThesisDuplicateReplace')}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 {cards === null ? (
                   <div className="ai-thesis-loading" aria-live="polite">
                     <span className="ai-thesis-spinner" />

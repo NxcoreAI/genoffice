@@ -10106,6 +10106,83 @@ tr > .page-gap-cut {
 
 
 
+/* 同名模版确认条：警示色 + 两颗动作按钮（替换 / 取消） */
+.ai-thesis-dup {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+.ai-thesis-dup p {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  color: var(--danger);
+  font-size: 11.5px;
+}
+
+.ai-thesis-dup b {
+  font-weight: 650;
+}
+
+.ai-thesis-dup em {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-thesis-dup-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ai-thesis-dup-cancel,
+.ai-thesis-dup-replace {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ai-thesis-dup-cancel:hover {
+  border-color: var(--border-strong);
+}
+
+.ai-thesis-dup-replace {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  color: var(--danger);
+  font-weight: 650;
+}
+
+.ai-thesis-dup-replace:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+.ai-thesis-dup-replace:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .ai-thesis-upload {
   display: flex;
   width: 100%;

@@ -355,8 +355,15 @@ export interface DesktopApi {
    * from this view's webContents id, so the renderer passes no ids.
    */
   thesisListCards(): Promise<ThesisPanelOutcome<ThesisPanelCard[]>>
-  thesisPickTemplate(): Promise<
-    ThesisPanelOutcome<{ canceled: boolean; cardId: string; sourceName: string; factGaps?: string[] }>
+  thesisPickTemplate(overwrite?: boolean): Promise<
+    ThesisPanelOutcome<{
+      canceled: boolean
+      cardId: string
+      sourceName: string
+      factGaps?: string[]
+      /** 同名模版已存在：宿主尚未解析，UI 弹「替换原文件 / 取消上传」 */
+      duplicate?: boolean
+    }>
   >
   thesisRemoveCard(cardId: string): Promise<ThesisPanelOutcome<null>>
   /** 删除模版：keepCard=true 只删模版文件、保留格式卡。 */

@@ -2833,7 +2833,7 @@ function notifyFileSaved(wc: WebContents, filePath: string): void {
  */
 export type DocsThesisPanelAction =
   | { kind: 'list' }
-  | { kind: 'pick' }
+  | { kind: 'pick'; overwrite?: boolean }
   | { kind: 'remove'; cardId: string }
   /** 删除模版：文件 + 格式卡；keepCard=true 只删文件、保留格式卡。 */
   | { kind: 'delete-template'; cardId: string; keepCard?: boolean }
@@ -3066,8 +3066,15 @@ export function registerDocsIpc(): void {
   // EverRoom embed: AI tab thesis panel (no-op outcome when no host hook).
   ipcMain.handle('docs:thesis-list', (event) =>
     runThesisPanel<ThesisPanelCard[]>(event.sender.id, { kind: 'list' }))
-  ipcMain.handle('docs:thesis-pick', (event) =>
-    runThesisPanel<{ canceled: boolean; cardId: string; sourceName: string }>(event.sender.id, { kind: 'pick' }))
+  ipcMain.handle('docs:thesis-pick', (event, overwrite?: boolean) =>
+    runThesisPanel<{
+      canceled: boolean
+      cardId: string
+      sourceName: string
+      factGaps?: string[]
+      /** true = 同名模版已存在（宿主未解析），UI 需弹「替换 / 取消」 */
+      duplicate?: boolean
+    }>(event.sender.id, { kind: 'pick', ...(overwrite ? { overwrite: true } : {}) }))
   ipcMain.handle('docs:thesis-remove', (event, cardId: string) =>
     runThesisPanel<null>(event.sender.id, { kind: 'remove', cardId }))
   ipcMain.handle('docs:thesis-delete-template', (event, cardId: string, keepCard?: boolean) =>

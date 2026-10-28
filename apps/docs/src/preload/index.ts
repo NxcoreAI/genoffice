@@ -151,7 +151,7 @@ const api: DesktopApi = {
   },
   reportCloseSaveResult: (ok: boolean) => ipcRenderer.send('docs:close-save-result', ok === true),
   thesisListCards: () => ipcRenderer.invoke('docs:thesis-list'),
-  thesisPickTemplate: () => ipcRenderer.invoke('docs:thesis-pick'),
+  thesisPickTemplate: (overwrite?: boolean) => ipcRenderer.invoke('docs:thesis-pick', overwrite === true),
   thesisRemoveCard: (cardId: string) => ipcRenderer.invoke('docs:thesis-remove', cardId),
   thesisDeleteTemplate: (cardId: string, keepCard?: boolean) =>
     ipcRenderer.invoke('docs:thesis-delete-template', cardId, keepCard === true),
