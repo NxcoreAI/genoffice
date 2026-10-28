@@ -9929,13 +9929,12 @@ tr > .page-gap-cut {
   --ai-thesis-paper-shadow: rgba(31, 31, 31, 0.08);
   --ai-thesis-paper-ink: #1f1f1f;
   --ai-thesis-paper-muted: #6b7280;
-  /* 宽度按内容自适应；上限同时受视口限制，避免浮层顶到窗口右边出现横向滚动条 */
+  /* 宽度随视口自适应：窄窗口跟着收窄，宽窗口不超过 336px；不裁剪内容 */
   box-sizing: border-box;
-  width: fit-content;
-  /* min-width 保住既有观感，max-width 三重上限：内容宽度 / 视口内收 / 100% 兜底 */
-  min-width: min(280px, 100%);
-  max-width: min(336px, calc(100vw - 24px), 100%);
-  overflow-x: hidden;
+  width: min(336px, calc(100vw - 24px));
+  max-width: 100%;
+  min-width: 0;
+  overflow: visible;
   padding: 10px;
 }
 
@@ -9976,7 +9975,6 @@ tr > .page-gap-cut {
   max-height: 276px;
   flex-direction: column;
   gap: 4px;
-  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -9990,8 +9988,10 @@ tr > .page-gap-cut {
 
 .ai-thesis-card-main {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  /* 文件名超长时在自身内部截断，绝不把右侧按钮顶出容器 */
+  overflow: hidden;
   align-items: center;
   gap: 8px;
   padding: 6px;
