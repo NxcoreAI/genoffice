@@ -571,41 +571,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                               </svg>
                             )}
                           </button>
-                          {pendingDeleteId === row.id ? (
-                            <div
-                              className="ai-thesis-card-confirm"
-                              role="alertdialog"
-                              aria-label={t('aiThesisDeleteConfirmInline')}
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              <span className="ai-thesis-card-confirm-text">
-                                {t('aiThesisDeleteConfirmInline')}
-                                <em>{t('aiThesisDeleteConfirmNote')}</em>
-                              </span>
-                              <button
-                                type="button"
-                                className="ai-thesis-card-confirm-cancel"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setPendingDeleteId(null);
-                                }}
-                              >
-                                {t('aiThesisDeleteCancel')}
-                              </button>
-                              <button
-                                type="button"
-                                className="ai-thesis-card-confirm-ok"
-                                disabled={deletingId === row.id}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  event.preventDefault();
-                                  void deleteTemplate(row.id);
-                                }}
-                              >
-                                {deletingId === row.id ? <span className="ai-thesis-spinner" /> : t('aiThesisDeleteOk')}
-                              </button>
-                            </div>
-                          ) : null}
+
                         </div>
                       ))}
                     </div>
@@ -624,6 +590,42 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                     </button>
                   </>
                 )}
+                {pendingDeleteId ? (
+                  <div
+                    className="ai-thesis-modal-mask"
+                    role="presentation"
+                    onClick={() => setPendingDeleteId(null)}
+                  >
+                    <div
+                      className="ai-thesis-modal"
+                      role="alertdialog"
+                      aria-modal="true"
+                      aria-label={t('aiThesisDeleteConfirmTitle')}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <p className="ai-thesis-modal-title">{t('aiThesisDeleteConfirmTitle')}</p>
+                      <p className="ai-thesis-modal-text">{t('aiThesisDeleteConfirmNote')}</p>
+                      <div className="ai-thesis-modal-acts">
+                        <button
+                          type="button"
+                          className="ai-thesis-modal-cancel"
+                          onClick={() => setPendingDeleteId(null)}
+                        >
+                          {t('aiThesisDeleteCancel')}
+                        </button>
+                        <button
+                          type="button"
+                          className="ai-thesis-modal-ok"
+                          autoFocus
+                          disabled={deletingId !== null}
+                          onClick={() => void deleteTemplate(pendingDeleteId)}
+                        >
+                          {deletingId ? <span className="ai-thesis-spinner" /> : t('aiThesisDeleteConfirmOk')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {report && report.total ? (
                   <div className="ai-thesis-report" role="status">
                     <p>{t('aiThesisReport', { matched: report.matched ?? 0, total: report.total })}</p>

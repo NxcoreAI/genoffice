@@ -10073,6 +10073,89 @@ tr > .page-gap-cut {
   cursor: default;
 }
 
+/* 删除确认弹窗：面板内居中模态（遮罩 + 白卡片 + 两颗按钮）。
+   不用 window.confirm——它会抢焦点把下拉面板收起。 */
+.ai-thesis-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 18, 24, 0.42);
+}
+
+.ai-thesis-modal {
+  display: flex;
+  min-width: 216px;
+  max-width: min(300px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.ai-thesis-modal-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.ai-thesis-modal-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ai-thesis-modal-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.ai-thesis-modal-cancel,
+.ai-thesis-modal-ok {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ai-thesis-modal-cancel:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+
+.ai-thesis-modal-ok {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+  font-weight: 650;
+}
+
+.ai-thesis-modal-ok:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+}
+
+.ai-thesis-modal-ok:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* 删除确认条：绝对覆盖在卡片上，不参与行布局。
    之前这段没有样式，作为 flex 子元素把整行撑宽，逼出了横向滚动条、还把文件名挤没了。 */
 .ai-thesis-card-confirm {
