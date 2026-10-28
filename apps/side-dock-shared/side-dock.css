@@ -235,3 +235,8 @@
 /* 宿主聊天页（docksrc）装载：iframe 铺满停靠栏内容区 */
 .evsd-agent-frame { flex: 1; min-height: 0; min-width: 0; display: flex; }
 .evsd-agent-frame iframe { flex: 1; width: 100%; height: 100%; border: 0; background: #fff; }
+
+/* 硬裁剪：即使宿主聊天页将来出现横向溢出，也不允许 OOPIF 合成层
+   画到停靠栏图标条底下（content-box 缺重置那类 bug 的保险）。 */
+.evsd-agent-frame { overflow: clip; }
+.evsd-agent-frame iframe { clip-path: inset(0); }
