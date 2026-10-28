@@ -27,13 +27,64 @@ const DOCK_AGENT_SRC: string | null = (() => {
 
 /* ───────────── mock 数据（按编辑器类型） ───────────── */
 
+/** 材料库 = 用户挂给当前文档、供 Agent 引用的本地文件。 */
+type MaterialKind = 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'md' | 'image' | 'txt' | 'other'
+
 interface MaterialItem {
   id: string
-  kind: 'mail' | 'meeting' | 'wiki' | 'fact' | 'file'
+  kind: MaterialKind
+  /** 文件名（含扩展名）。 */
   title: string
-  excerpt: string
-  meta: string
+  /** 展示用大小，如「86 KB」。 */
+  sizeLabel: string
   addedLabel: string
+}
+
+const MATERIAL_LABEL: Record<MaterialKind, string> = {
+  docx: '文档',
+  xlsx: '表格',
+  pptx: '演示',
+  pdf: 'PDF',
+  md: '笔记',
+  image: '图片',
+  txt: '文本',
+  other: '文件',
+}
+
+/** 本地添加的文件只有名字可用，按扩展名推导类型。 */
+const kindFromName = (name: string): MaterialKind => {
+  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+  if (ext === 'docx' || ext === 'doc') return 'docx'
+  if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') return 'xlsx'
+  if (ext === 'pptx' || ext === 'ppt') return 'pptx'
+  if (ext === 'pdf') return 'pdf'
+  if (ext === 'md' || ext === 'markdown') return 'md'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic'].includes(ext)) return 'image'
+  if (ext === 'txt' || ext === 'text' || ext === 'log') return 'txt'
+  return 'other'
+}
+
+const MOCK_MATERIALS: Record<SideDockKind, MaterialItem[]> = {
+  docs: [
+    { id: 'm1', kind: 'docx', title: '上周周报-1021.docx', sizeLabel: '86 KB', addedLabel: '今天添加' },
+    { id: 'm2', kind: 'xlsx', title: '连接器排期总表.xlsx', sizeLabel: '24 KB', addedLabel: '今天添加' },
+    { id: 'm3', kind: 'image', title: '视觉定稿-终版.png', sizeLabel: '2.3 MB', addedLabel: '昨天' },
+    { id: 'm4', kind: 'pdf', title: '动效规范-V1.pdf', sizeLabel: '1.2 MB', addedLabel: '3 天前' },
+  ],
+  sheets: [
+    { id: 'm1', kind: 'pdf', title: '供应商报价Q4.pdf', sizeLabel: '1.2 MB', addedLabel: '今天添加' },
+    { id: 'm2', kind: 'xlsx', title: '报价明细-三家对比.csv', sizeLabel: '18 KB', addedLabel: '今天添加' },
+    { id: 'm3', kind: 'txt', title: '预算上限说明.txt', sizeLabel: '3 KB', addedLabel: '上周添加' },
+  ],
+  slides: [
+    { id: 'm1', kind: 'pdf', title: 'V1视觉规范.pdf', sizeLabel: '2.8 MB', addedLabel: '上周添加' },
+    { id: 'm2', kind: 'docx', title: '发布评审0926纪要.docx', sizeLabel: '64 KB', addedLabel: '上周添加' },
+    { id: 'm3', kind: 'pptx', title: '时间线页-旧版.pptx', sizeLabel: '1.6 MB', addedLabel: '上周添加' },
+  ],
+  pdf: [
+    { id: 'm1', kind: 'md', title: '竞品跟踪-1024.md', sizeLabel: '12 KB', addedLabel: '上周添加' },
+    { id: 'm2', kind: 'image', title: 'Notion-AI-定价页.png', sizeLabel: '640 KB', addedLabel: '上周添加' },
+  ],
 }
 
 interface HistoryEntry {
@@ -43,33 +94,6 @@ interface HistoryEntry {
   detail?: string
   restorable?: boolean
   diffable?: boolean
-}
-
-const MATERIAL_ICONS: Record<MaterialItem['kind'], string> = {
-  mail: '✉️',
-  meeting: '🗓️',
-  wiki: '📘',
-  fact: '💡',
-  file: '📄',
-}
-
-const MOCK_MATERIALS: Record<SideDockKind, MaterialItem[]> = {
-  docs: [
-    { id: 'm1', kind: 'mail', title: '设计周报：V1 视觉定稿', excerpt: 'V1 视觉已定稿，动效统一 240ms，列表类内容做 40ms 错峰。', meta: '邮件 · 林薇 · 2 天前', addedLabel: '2 天前添加' },
-    { id: 'm2', kind: 'meeting', title: '周会：连接器排期', excerpt: '阶段一范围确认：身份合并 + 命名对齐，联调窗口 10/28–11/05。', meta: '会议 · 52 分钟 · 3 天前', addedLabel: '3 天前添加' },
-    { id: 'm3', kind: 'wiki', title: 'Wiki · 双链路收敛', excerpt: 'Gmail 双链路并入统一格式层，映射表三处同值待收口。', meta: '知识库 · Wiki', addedLabel: '上周添加' },
-  ],
-  sheets: [
-    { id: 'm1', kind: 'mail', title: '供应商报价（Q4）', excerpt: '三家供应商报价见正文，请确认后回复，交期以报价单为准。', meta: '邮件 · 采购部 · 5 小时前', addedLabel: '今天添加' },
-    { id: 'm2', kind: 'fact', title: '事实 · 预算上限', excerpt: 'Q4 采购预算上限 50 万，超限需 VP 审批。', meta: '自动提炼 · 9/20', addedLabel: '上周添加' },
-  ],
-  slides: [
-    { id: 'm1', kind: 'wiki', title: 'Wiki · V1 视觉规范', excerpt: '字阶 L1–L4、240ms 动效、颜色守门清单。', meta: '设计系统 · Wiki', addedLabel: '上周添加' },
-    { id: 'm2', kind: 'meeting', title: '发布评审 0926', excerpt: '11 月第一周灰度、第二周全量，回滚预案齐备。', meta: '会议 · 28 分钟', addedLabel: '上周添加' },
-  ],
-  pdf: [
-    { id: 'm1', kind: 'wiki', title: 'Wiki · 竞品跟踪', excerpt: 'Notion AI 定价与能力清单（每月更新）。', meta: '设计系统 · Wiki', addedLabel: '上周添加' },
-  ],
 }
 
 const MOCK_HISTORY: Record<SideDockKind, HistoryEntry[]> = {
@@ -125,13 +149,55 @@ const RESTORE_ICON = icon(<><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v4h4"
 const DIFF_ICON = icon(<><path d="M12 3v14" /><path d="M8 7h8" /><path d="M8 17h8" /><path d="M6 21h12" /></>, 12)
 const USER_ICON = icon(<><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6" /></>, 11)
 
+/* 材料库文件类型 squircle 图标（自包含，配色与宿主文件岛的类型图标一致）。 */
+const MATERIAL_THEMES: Record<MaterialKind, { from: string; to: string; letters: string }> = {
+  docx: { from: '#4aa3ff', to: '#0a6fe8', letters: 'W' },
+  xlsx: { from: '#4cc478', to: '#1f9450', letters: 'S' },
+  pptx: { from: '#ffb340', to: '#ef7d0e', letters: 'P' },
+  pdf: { from: '#ff6f61', to: '#e0362a', letters: 'PDF' },
+  md: { from: '#b9bbc2', to: '#83868f', letters: 'MD' },
+  image: { from: '#b78aff', to: '#7d3fe0', letters: 'IMG' },
+  txt: { from: '#4ec3d4', to: '#0f92a3', letters: 'TXT' },
+  other: { from: '#b9bbc2', to: '#83868f', letters: 'FILE' },
+}
+
+function FileGlyph({ kind }: { kind: MaterialKind }) {
+  const th = MATERIAL_THEMES[kind]
+  const letters = th.letters
+  const fs = letters.length > 1 ? 12.5 : 20
+  return (
+    <svg width="28" height="28" viewBox="0 0 48 48" aria-hidden="true" style={{ flex: 'none' }}>
+      <defs>
+        <linearGradient id={`evsd-ftg-${kind}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={th.from} />
+          <stop offset="1" stopColor={th.to} />
+        </linearGradient>
+        <linearGradient id={`evsd-ftg-${kind}-g`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.32" />
+          <stop offset="1" stopColor="#fff" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <rect x="1.5" y="1.5" width="45" height="45" rx="11.5" fill={`url(#evsd-ftg-${kind})`} />
+      <path d="M1.5 13 A11.5 11.5 0 0 1 13 1.5 H35 A11.5 11.5 0 0 1 46.5 13 V21 H1.5 Z" fill={`url(#evsd-ftg-${kind}-g)`} />
+      <text
+        x="24" y="25.5" textAnchor="middle" dominantBaseline="central"
+        fill="#fff" fontWeight="800" fontSize={fs}
+        letterSpacing={letters.length > 1 ? 0.8 : 0}
+        fontFamily="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif"
+      >
+        {letters}
+      </text>
+    </svg>
+  )
+}
+
 /* ───────────── 组件 ───────────── */
 
 type DockTab = 'agent' | 'materials' | 'history'
 
 const TABS: Array<{ key: DockTab; label: string; icon: ReactNode }> = [
   { key: 'agent', label: 'Agent', icon: AGENT_ICON },
-  { key: 'materials', label: '材料', icon: MATERIALS_ICON },
+  { key: 'materials', label: '材料库', icon: MATERIALS_ICON },
   { key: 'history', label: '历史记录', icon: HISTORY_ICON },
 ]
 
@@ -371,7 +437,7 @@ function AgentView({ kind, fileName, say }: { kind: SideDockKind; fileName?: str
         {active.items.length === 0 && (
           <div className="evsd-empty">
             <div className="evsd-empty-title">和 Agent 一起处理这份{KIND_LABEL[kind]}</div>
-            <div className="evsd-empty-hint">它能看到「材料」里的内容，写入前会先请你审阅</div>
+            <div className="evsd-empty-hint">它能看到「材料库」里的文件，写入前会先请你审阅</div>
             <div className="evsd-prompts">
               {STARTER_PROMPTS[kind].map((p) => (
                 <button key={p} type="button" onClick={() => setDraft(p)}>
@@ -459,59 +525,122 @@ function AgentView({ kind, fileName, say }: { kind: SideDockKind; fileName?: str
   )
 }
 
-/* ── 材料 ── */
+/* ── 材料库（本地文件架） ── */
 
 function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
   return `${bytes} B`
 }
 
+const SIZE_RE = /^([\d.]+)\s*(B|KB|MB|GB)$/
+const SIZE_UNITS: Record<string, number> = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 }
+
+/** mock 只有展示字符串，统计总量时反解析 sizeLabel。 */
+function parseSize(label: string): number {
+  const m = SIZE_RE.exec(label.trim())
+  return m ? parseFloat(m[1]) * SIZE_UNITS[m[2]] : 0
+}
+
 function MaterialsView({ kind, say }: { kind: SideDockKind; say: (msg: string) => void }) {
   const [items, setItems] = useState<MaterialItem[]>(() => MOCK_MATERIALS[kind])
+  const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const onFiles = (files: FileList | null): void => {
-    if (!files || files.length === 0) return
-    const added: MaterialItem[] = Array.from(files).map((f, i) => ({
+  const addFiles = (files: Array<{ name: string; size: number }>): void => {
+    if (files.length === 0) return
+    const added: MaterialItem[] = files.map((f, i) => ({
       id: `local-${Date.now()}-${i}`,
-      kind: 'file',
+      kind: kindFromName(f.name),
       title: f.name,
-      excerpt: `本地文件 · ${formatSize(f.size)}`,
-      meta: '本地文件',
+      sizeLabel: formatSize(f.size),
       addedLabel: '刚刚添加',
     }))
-    setItems((prev) => [...prev, ...added])
-    say(`已添加 ${added.length} 份材料，Agent 可直接引用`)
+    setItems((prev) => [...added, ...prev])
+    say(`已添加 ${added.length} 个文件，Agent 可直接引用`)
   }
 
+  const total = formatSize(items.reduce((sum, m) => sum + parseSize(m.sizeLabel), 0))
+
   return (
-    <div className="evsd-materials">
+    <div
+      className="evsd-materials"
+      onDragOver={(e) => {
+        if (!Array.from(e.dataTransfer.types).includes('Files')) return
+        e.preventDefault()
+        setDragOver(true)
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false)
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragOver(false)
+        addFiles(Array.from(e.dataTransfer.files).map((f) => ({ name: f.name, size: f.size })))
+      }}
+    >
       <div className="evsd-materials-list">
-        <div className="evsd-hint">Agent 处理这份{KIND_LABEL[kind]}时可以引用的材料</div>
-        {items.length === 0 && <div className="evsd-blank">还没有材料，从底部添加一份试试</div>}
+        {items.length > 0 && (
+          <div className="evsd-hint">{items.length} 个文件 · {total} · 供 Agent 引用</div>
+        )}
+        {items.length === 0 && (
+          <div className="evsd-materials-empty">
+            <div className="evsd-materials-empty-title">拖入文件，或点下方按钮添加</div>
+            <div className="evsd-materials-empty-sub">添加后 Agent 处理这份{KIND_LABEL[kind]}时可以直接引用</div>
+          </div>
+        )}
         {items.map((m) => (
-          <div key={m.id} className="evsd-material">
-            <span className="evsd-material-icon">{MATERIAL_ICONS[m.kind]}</span>
+          <div
+            key={m.id}
+            className="evsd-material"
+            role="button"
+            tabIndex={0}
+            title={m.title}
+            onClick={() => say(`「${m.title}」的预览将在下一阶段接入`)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                say(`「${m.title}」的预览将在下一阶段接入`)
+              }
+            }}
+          >
+            <FileGlyph kind={m.kind} />
             <div className="evsd-material-body">
               <div className="evsd-material-title">{m.title}</div>
-              <div className="evsd-material-excerpt">「{m.excerpt}」</div>
-              <div className="evsd-material-meta">{m.meta} · {m.addedLabel}</div>
+              <div className="evsd-material-meta">{MATERIAL_LABEL[m.kind]} · {m.sizeLabel} · {m.addedLabel}</div>
             </div>
-            <button type="button" className="evsd-material-del" title="移除材料" onClick={() => {
-              setItems((prev) => prev.filter((x) => x.id !== m.id))
-              say(`已移除材料「${m.title}」`)
-            }}>
+            <button
+              type="button"
+              className="evsd-material-del"
+              title="移除文件"
+              onClick={(e) => {
+                e.stopPropagation()
+                setItems((prev) => prev.filter((x) => x.id !== m.id))
+                say(`已移除「${m.title}」`)
+              }}
+            >
               {X_ICON}
             </button>
           </div>
         ))}
       </div>
+      {dragOver && <div className="evsd-materials-dropzone">松开添加到材料库</div>}
       <div className="evsd-materials-foot">
-        <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => { onFiles(e.target.files); e.target.value = '' }} />
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            addFiles(Array.from(e.target.files ?? []).map((f) => ({ name: f.name, size: f.size })))
+            e.target.value = ''
+          }}
+        />
         <button type="button" className="evsd-materials-add" onClick={() => fileRef.current?.click()}>
-          {PLUS_ICON} 添加材料（本地文件）
+          {PLUS_ICON} 添加文件
         </button>
+        <div className="evsd-materials-foot-hint">也可把文件直接拖进面板</div>
       </div>
     </div>
   )

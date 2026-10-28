@@ -157,32 +157,39 @@
 }
 .evsd-send:disabled { background: rgba(0, 0, 0, 0.12); }
 
-/* ── 材料 ── */
-.evsd-materials { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.evsd-materials-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.evsd-hint { font-size: 12px; color: #6e6e73; padding: 0 2px 2px; }
+/* ── 材料库：本地文件架（行式） ── */
+.evsd-materials { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+.evsd-materials-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.evsd-hint { font-size: 12px; color: #6e6e73; padding: 0 2px 4px; }
 .evsd-blank { font-size: 12.5px; color: #aeaeb2; text-align: center; padding: 26px 10px; }
 .evsd-material {
-  display: flex; gap: 9px; align-items: flex-start;
-  border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 10px; padding: 10px; background: #fff;
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 10px; background: #fff; cursor: pointer;
 }
 .evsd-material:hover { border-color: rgba(0, 0, 0, 0.18); }
-.evsd-material-icon { font-size: 17px; line-height: 1.2; flex: none; }
+.evsd-material:focus-visible { outline: 2px solid #007aff; outline-offset: -2px; }
 .evsd-material-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .evsd-material-title { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.evsd-material-excerpt {
-  font-size: 12px; color: #6e6e73; line-height: 1.5;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
 .evsd-material-meta { font-size: 11px; color: #aeaeb2; }
 .evsd-material-del {
   width: 20px; height: 20px; flex: none; border: none; border-radius: 6px;
   background: transparent; color: #aeaeb2; display: grid; place-items: center;
   opacity: 0; transition: opacity 120ms ease;
 }
-.evsd-material:hover .evsd-material-del { opacity: 1; }
+.evsd-material:hover .evsd-material-del, .evsd-material:focus-within .evsd-material-del { opacity: 1; }
 .evsd-material-del:hover { background: rgba(217, 80, 74, 0.12); color: #d9504a; }
-.evsd-materials-foot { flex: none; border-top: 1px solid rgba(0, 0, 0, 0.08); padding: 10px 12px; }
+.evsd-materials-empty { padding: 44px 16px; display: flex; flex-direction: column; gap: 6px; text-align: center; }
+.evsd-materials-empty-title { font-size: 12.5px; color: #6e6e73; }
+.evsd-materials-empty-sub { font-size: 11.5px; color: #aeaeb2; line-height: 1.5; }
+.evsd-materials-dropzone {
+  position: absolute; inset: 0; z-index: 3; margin: 8px;
+  display: grid; place-items: center;
+  border: 1.5px dashed #007aff; border-radius: 12px;
+  background: rgba(0, 122, 255, 0.08);
+  font-size: 13px; color: #007aff; pointer-events: none;
+}
+.evsd-materials-foot { flex: none; border-top: 1px solid rgba(0, 0, 0, 0.08); padding: 10px 12px; display: flex; flex-direction: column; gap: 5px; }
+.evsd-materials-foot-hint { font-size: 11px; color: #aeaeb2; text-align: center; }
 .evsd-materials-add {
   width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
   border: 1px dashed rgba(0, 0, 0, 0.2); border-radius: 9px; padding: 9px;
