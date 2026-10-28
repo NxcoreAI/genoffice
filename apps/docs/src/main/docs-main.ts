@@ -2838,6 +2838,17 @@ export type DocsThesisPanelAction =
   /** 删除模版：文件 + 格式卡；keepCard=true 只删文件、保留格式卡。 */
   | { kind: 'delete-template'; cardId: string; keepCard?: boolean }
   | { kind: 'reformat'; cardId?: string }
+  | {
+      kind: 'reformat-job'
+      cardId?: string
+      options?: {
+        mode?: 'strict' | 'blend'
+        keepLogo?: boolean
+        keepHeaderFooter?: boolean
+        headingMapping?: { chapter?: number; section?: number; subsection?: number }
+      }
+    }
+  | { kind: 'reformat-job-status'; jobId: string }
 
 let thesisPanelHook:
   | ((wcId: number, action: DocsThesisPanelAction) => Promise<ThesisPanelOutcome<unknown>>)
@@ -3084,6 +3095,29 @@ export function registerDocsIpc(): void {
     ))
   ipcMain.handle('docs:thesis-reformat', (event, cardId: string | null) =>
     runThesisPanel<{ originalName: string }>(event.sender.id, { kind: 'reformat', cardId: cardId ?? undefined }))
+  ipcMain.handle(
+    'docs:thesis-reformat-job',
+    (event, cardId: string | null, options?: Parameters<typeof runThesisPanel>[1] extends never ? never : {
+      mode?: 'strict' | 'blend'
+      keepLogo?: boolean
+      keepHeaderFooter?: boolean
+      headingMapping?: { chapter?: number; section?: number; subsection?: number }
+    }) =>
+      runThesisPanel<{ jobId: string; phase: string }>(event.sender.id, {
+        kind: 'reformat-job',
+        cardId: cardId ?? undefined,
+        options,
+      }),
+  )
+  ipcMain.handle('docs:thesis-reformat-job-status', (event, jobId: string) =>
+    runThesisPanel<{
+      id: string
+      status: 'running' | 'completed' | 'failed'
+      phase: string
+      progress: number
+      result?: unknown
+      error?: string
+    }>(event.sender.id, { kind: 'reformat-job-status', jobId }))
 
   ipcMain.handle('docs:open', async (event) => {
     const result = await openDialog(event, {

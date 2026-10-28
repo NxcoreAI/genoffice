@@ -173,6 +173,9 @@ export interface ThesisBindingSpecInput {
    * 渲染为正文末尾的独立小节，整段红色高亮 + 说明，供用户人工归位。
    */
   unmatchedBlocks?: Array<{ start: number; end: number; label?: string }>
+  /** 模板自有固定表单（教师评价表等，原样 OOXML）：prelim=正文首章前；appendix=全文末尾。
+   *  原样透传（kind:'xml'），模板自有内容不因重建而丢失。 */
+  fixedBlocks?: Array<{ placement: 'prelim' | 'appendix'; heading?: string; xml: string }>
   /**
    * 融合模式：正文块保留源文档自身的格式（原文透传），只让模版决定页面、
    * 页眉页脚、标题层级与编号。严格模式（缺省）= 全部按模版样式重建。
@@ -361,6 +364,7 @@ export async function buildThesisDocx(
   // 编号方案：优先用模板剖面（v2），否则回落 headings[].numbering 的老语义。
   const numberingScheme: ThesisNumberingScheme = card.numbering?.scheme
     ?? (card.headings.some((heading) => heading.numbering === 'numeric-tree') ? 'decimal-tree' : 'none')
+  let prelimFixedEmitted = false
   for (const chapter of spec.chapters) {
     if (numberingScheme !== 'none') {
       const idx = chapter.level - 1
@@ -478,6 +482,21 @@ export async function buildThesisDocx(
         format: headingFormat,
       },
     })
+    // 模板自有固定表单（prelim：教师评价表等）——在首个正文槽位的内容后原样回插一次
+    if (!prelimFixedEmitted && spec.fixedBlocks?.length) {
+      prelimFixedEmitted = true
+      for (const fixed of spec.fixedBlocks.filter((entry) => entry.placement === 'prelim')) {
+        if (fixed.heading) {
+          finalBlocks.push(
+            generated([textRun(card.headings[1]?.font ?? card.base.font, fixed.heading)], {
+              align: 'left',
+              ...spacingOf(card.headings[1]?.paragraph ?? card.base.paragraph),
+            }),
+          )
+        }
+        finalBlocks.push({ kind: 'xml', xml: fixed.xml })
+      }
+    }
     for (let i = chapter.blockStart + 1; i < chapter.blockEnd; i += 1) {
       const block = visible[i]
       if (!block) continue
@@ -539,6 +558,21 @@ export async function buildThesisDocx(
         const adapted = adaptBodyBlock(block, card)
         if (adapted) finalBlocks.push(adapted)
       }
+    }
+  }
+
+  // ---- 模板自有固定表单（appendix：附在全文末尾）----
+  if (spec.fixedBlocks?.some((entry) => entry.placement === 'appendix')) {
+    for (const fixed of spec.fixedBlocks.filter((entry) => entry.placement === 'appendix')) {
+      if (fixed.heading) {
+        finalBlocks.push(
+          generated([textRun(card.headings[1]?.font ?? card.base.font, fixed.heading)], {
+            align: 'left',
+            ...spacingOf(card.headings[1]?.paragraph ?? card.base.paragraph),
+          }),
+        )
+      }
+      finalBlocks.push({ kind: 'xml', xml: fixed.xml })
     }
   }
 

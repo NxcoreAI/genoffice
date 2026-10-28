@@ -371,6 +371,27 @@ export interface DesktopApi {
     cardId: string,
     keepCard?: boolean,
   ): Promise<ThesisPanelOutcome<{ fileDeleted: boolean; hadFile: boolean; cardKept: boolean }>>
+  thesisReformatJob(
+    cardId?: string,
+    options?: {
+      mode?: 'strict' | 'blend'
+      keepLogo?: boolean
+      keepHeaderFooter?: boolean
+      headingMapping?: { chapter?: number; section?: number; subsection?: number }
+    },
+  ): Promise<
+    ThesisPanelOutcome<{ jobId: string; phase: string }>
+  >
+  thesisReformatJobStatus(jobId: string): Promise<
+    ThesisPanelOutcome<{
+      id: string
+      status: 'running' | 'completed' | 'failed'
+      phase: string
+      progress: number
+      result?: unknown
+      error?: string
+    }>
+  >
   thesisReformat(
     cardId?: string,
   ): Promise<ThesisPanelOutcome<{ originalName: string; report?: Record<string, unknown> }>>

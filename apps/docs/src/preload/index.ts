@@ -156,6 +156,16 @@ const api: DesktopApi = {
   thesisDeleteTemplate: (cardId: string, keepCard?: boolean) =>
     ipcRenderer.invoke('docs:thesis-delete-template', cardId, keepCard === true),
   thesisReformat: (cardId?: string) => ipcRenderer.invoke('docs:thesis-reformat', cardId ?? null),
+  thesisReformatJob: (
+    cardId?: string,
+    options?: {
+      mode?: 'strict' | 'blend'
+      keepLogo?: boolean
+      keepHeaderFooter?: boolean
+      headingMapping?: { chapter?: number; section?: number; subsection?: number }
+    },
+  ) => ipcRenderer.invoke('docs:thesis-reformat-job', cardId ?? null, options),
+  thesisReformatJobStatus: (jobId: string) => ipcRenderer.invoke('docs:thesis-reformat-job-status', jobId),
   onThesisCardsChanged: (handler: () => void) => {
     const listener = () => handler()
     ipcRenderer.on('docs:thesis-changed', listener)

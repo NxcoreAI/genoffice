@@ -10190,6 +10190,71 @@ tr > .page-gap-cut {
 
 
 
+/* 排版作业进度：细进度条 + 阶段文案 + 已耗时 */
+.ai-thesis-progress {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.ai-thesis-progress-bar {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.ai-thesis-progress-bar span {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 600ms ease;
+}
+
+.ai-thesis-progress em {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+/* 目录融合模式单选（列表态并排一行） */
+.ai-thesis-mode-row {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.ai-thesis-mode-row .ai-thesis-mode {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-thesis-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.ai-thesis-mode input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.ai-thesis-mode span {
+  flex: 1;
+  min-width: 0;
+}
+
 /* 同名模版确认条：警示色 + 两颗动作按钮（替换 / 取消） */
 .ai-thesis-dup {
   display: flex;

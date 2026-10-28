@@ -248,6 +248,10 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   /** 重名模版待确认：非 null = 已存在同名模版，等用户选「替换原文件 / 取消上传」。 */
   const [pendingDuplicate, setPendingDuplicate] = useState<{ name: string } | null>(null)
+  /** 排版作业：{ phase, progress, elapsed } → 面板顶部进度条；null = 空闲。 */
+  const [job, setJob] = useState<{ phase: string; progress: number; elapsed: number } | null>(null)
+  /** 目录融合模式：strict=只保留能对上模板目录的内容；blend=全部保留，未匹配的单独追加。 */
+  const [mode, setMode] = useState<'strict' | 'blend'>('blend')
   /** v2 槽位映射报告：排版完成后在面板里给出守恒/未匹配/待复核摘要。 */
   const [report, setReport] = useState<{
     matched?: number
@@ -320,7 +324,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
       if (meta.factGaps && meta.factGaps.length > 0) {
         setError(t('aiThesisPartial', { gaps: meta.factGaps.join('；') }))
       }
-      if (meta.cardId && hasDoc) await reformatWith(meta.cardId)
+      if (meta.cardId && hasDoc) await reformatWith(meta.cardId, { mode })
     } catch (err) {
       setError(errorMessage(err))
     } finally {
@@ -353,38 +357,76 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   }
 
 
-  const reformatWith = async (cardId: string) => {
+  /**
+   * 按模版排版当前文档（任务化）：
+   * 提交作业立即返回 → 每 900ms 轮询阶段进度（parsing/mapping/rendering），
+   * 面板顶部走真实进度条；10 分钟未完成主动放弃并给出明确提示。
+   */
+  const reformatWith = async (cardId: string, options?: {
+    mode?: 'strict' | 'blend'
+    keepLogo?: boolean
+    keepHeaderFooter?: boolean
+    headingMapping?: { chapter?: number; section?: number; subsection?: number }
+  }) => {
+    const startedAt = Date.now()
+    const TIMEOUT_MS = 10 * 60 * 1000 // 10 分钟硬上限
     setBusy(true)
-    setDropdown(() => null)
+    setJob({ phase: 'queued', progress: 5, elapsed: 0 })
     try {
-      const outcome = await window.desktop.thesisReformat(cardId)
-      if (!outcome.ok) throw new Error(outcome.message || t('aiThesisFailed'))
-      const value = outcome.value as {
-        originalName: string
-        report?: {
-          conservation?: { matched?: number; total?: number; unmatched?: number }
-          report?: { appendedChapters?: number }
-          needsReview?: unknown[]
+      const submit = await window.desktop.thesisReformatJob(cardId, options)
+      if (!submit.ok) throw new Error(submit.message || t('aiThesisFailed'))
+      const { jobId } = submit.value as { jobId: string }
+
+      // 轮询循环：完成 / 失败 / 超时三种出口
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 900))
+        const elapsed = Date.now() - startedAt
+        if (elapsed > TIMEOUT_MS) {
+          throw new Error(t('aiThesisTimeout'))
+        }
+        const poll = await window.desktop.thesisReformatJobStatus(jobId)
+        if (!poll.ok) throw new Error(poll.message || t('aiThesisFailed'))
+        const snapshot = poll.value as {
+          status: 'running' | 'completed' | 'failed'
+          phase: string
+          progress: number
+          result?: unknown
+          error?: string
+        }
+        setJob({ phase: snapshot.phase, progress: snapshot.progress, elapsed })
+        if (snapshot.status === 'failed') {
+          throw new Error(snapshot.error || t('aiThesisFailed'))
+        }
+        if (snapshot.status === 'completed') {
+          const value = (snapshot.result ?? {}) as {
+            originalName: string
+            report?: {
+              conservation?: { matched?: number; total?: number; unmatched?: number }
+              report?: { appendedChapters?: number }
+              needsReview?: unknown[]
+            }
+          }
+          onNotice?.(t('aiThesisDone', { name: value.originalName }))
+          const conservation = value.report?.conservation
+          if (conservation) {
+            setReport({
+              matched: conservation.matched ?? 0,
+              total: conservation.total ?? 0,
+              unmatched: conservation.unmatched ?? 0,
+              appended: value.report?.report?.appendedChapters ?? 0,
+              needsReview: value.report?.needsReview?.length ?? 0,
+            })
+          }
+          return
         }
       }
-      onNotice?.(t('aiThesisDone', { name: value.originalName }))
-      // v2 映射报告：留在面板里（不打断，不弹窗）
-      const conservation = value.report?.conservation
-      if (conservation) {
-        setReport({
-          matched: conservation.matched ?? 0,
-          total: conservation.total ?? 0,
-          unmatched: conservation.unmatched ?? 0,
-          appended: value.report?.report?.appendedChapters ?? 0,
-          needsReview: value.report?.needsReview?.length ?? 0,
-        })
-        setDropdown(() => 'thesis')
-      }
     } catch (err) {
-      setError(errorMessage(err))
+      const message = errorMessage(err)
+      setError(message === t('aiThesisTimeout') ? t('aiThesisTimeout') : message)
       setDropdown(() => 'thesis')
     } finally {
       setBusy(false)
+      setJob(null)
     }
   }
 
@@ -416,6 +458,24 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
             {open && (
               <div data-rb-panel="" className="layout-menu ai-thesis-panel">
                 <p className="ai-thesis-title">{t('aiThesisPanelTitle')}</p>
+                {job ? (
+                  <div className="ai-thesis-progress" role="status">
+                    <div className="ai-thesis-progress-bar">
+                      <span style={{ width: `${Math.max(4, Math.min(100, job.progress))}%` }} />
+                    </div>
+                    <em>
+                      {job.phase === 'parsing'
+                        ? t('aiThesisPhaseParsing')
+                        : job.phase === 'mapping'
+                          ? t('aiThesisPhaseMapping')
+                          : job.phase === 'rendering'
+                            ? t('aiThesisPhaseRendering')
+                            : t('aiThesisPhaseQueued')}
+                      {' · '}
+                      {Math.floor(job.elapsed / 1000)}s
+                    </em>
+                  </div>
+                ) : null}
                 {pendingDuplicate ? (
                   <div className="ai-thesis-dup" role="alertdialog" aria-label={t('aiThesisDuplicateTitle')}>
                     <p>
@@ -446,6 +506,14 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                 ) : cards.length === 0 ? (
                   <div className="ai-thesis-empty">
                     <p>{t('aiThesisPanelEmpty')}</p>
+                    <label className="ai-thesis-mode">
+                      <input type="radio" name="ai-thesis-mode" checked={mode === 'blend'} onChange={() => setMode('blend')} />
+                      <span>{t('aiThesisModeBlend')}</span>
+                    </label>
+                    <label className="ai-thesis-mode">
+                      <input type="radio" name="ai-thesis-mode" checked={mode === 'strict'} onChange={() => setMode('strict')} />
+                      <span>{t('aiThesisModeStrict')}</span>
+                    </label>
                     <button className="ai-thesis-upload" disabled={uploading} onClick={() => void uploadTemplate()}>
                       {uploading ? <span className="ai-thesis-spinner" /> : t('aiThesisUpload')}
                     </button>
@@ -459,7 +527,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                             className="ai-thesis-card-main"
                             disabled={busy}
                             title={t('aiThesisUseTip')}
-                            onClick={() => void reformatWith(row.id)}
+                            onClick={() => void reformatWith(row.id, { mode })}
                           >
                             <ThesisMiniPaper card={readThesisCardView(row.card)} />
                             <span className="ai-thesis-card-body">
@@ -540,6 +608,16 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                           ) : null}
                         </div>
                       ))}
+                    </div>
+                    <div className="ai-thesis-mode-row">
+                      <label className="ai-thesis-mode">
+                        <input type="radio" name="ai-thesis-mode" checked={mode === 'blend'} onChange={() => setMode('blend')} />
+                        <span>{t('aiThesisModeBlend')}</span>
+                      </label>
+                      <label className="ai-thesis-mode">
+                        <input type="radio" name="ai-thesis-mode" checked={mode === 'strict'} onChange={() => setMode('strict')} />
+                        <span>{t('aiThesisModeStrict')}</span>
+                      </label>
                     </div>
                     <button className="ai-thesis-upload" disabled={uploading} onClick={() => void uploadTemplate()}>
                       {uploading ? <span className="ai-thesis-spinner" /> : t('aiThesisUpload')}
