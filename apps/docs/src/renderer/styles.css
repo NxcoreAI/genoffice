@@ -9929,7 +9929,13 @@ tr > .page-gap-cut {
   --ai-thesis-paper-shadow: rgba(31, 31, 31, 0.08);
   --ai-thesis-paper-ink: #1f1f1f;
   --ai-thesis-paper-muted: #6b7280;
-  width: min(312px, calc(100vw - 24px));
+  /* 宽度按内容自适应；上限同时受视口限制，避免浮层顶到窗口右边出现横向滚动条 */
+  box-sizing: border-box;
+  width: fit-content;
+  /* min-width 保住既有观感，max-width 三重上限：内容宽度 / 视口内收 / 100% 兜底 */
+  min-width: min(280px, 100%);
+  max-width: min(336px, calc(100vw - 24px), 100%);
+  overflow-x: hidden;
   padding: 10px;
 }
 
@@ -9965,16 +9971,21 @@ tr > .page-gap-cut {
 
 .ai-thesis-cards {
   display: flex;
+  width: 100%;
+  min-width: 0;
   max-height: 276px;
   flex-direction: column;
   gap: 4px;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
 .ai-thesis-card {
   display: flex;
+  width: 100%;
+  min-width: 0;
   align-items: stretch;
-  gap: 2px;
+  gap: 4px;
 }
 
 .ai-thesis-card-main {
@@ -10025,10 +10036,12 @@ tr > .page-gap-cut {
 
 .ai-thesis-card-act {
   display: inline-flex;
-  width: 24px;
+  width: 28px;
   align-items: center;
   justify-content: center;
-  flex: none;
+  /* 关键：不能被长文件名挤压成一条缝 */
+  flex: 0 0 auto;
+  flex-shrink: 0;
   border: 0;
   border-radius: 6px;
   background: none;
@@ -10037,8 +10050,8 @@ tr > .page-gap-cut {
 }
 
 .ai-thesis-card-act svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .ai-thesis-card-act:hover:not(:disabled) {
@@ -10060,20 +10073,24 @@ tr > .page-gap-cut {
   position: relative;
 }
 
-/* 与其它行内按钮同尺寸（24×24 / 图标 14px），不再缩成角落小点 */
+/* 与其它行内按钮同尺寸，并保留足够点击区：28×28 + padding，窄窗口也点得到 */
 .ai-thesis-card-act.ai-thesis-card-del {
-  width: 24px;
-  min-width: 24px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  flex-shrink: 0;
   align-self: center;
-  border-radius: 5px;
+  padding: 0 6px;
+  border-radius: 6px;
   color: var(--text-muted);
   opacity: 0.85;
   transition: color 120ms ease, opacity 120ms ease, background 120ms ease;
 }
 
 .ai-thesis-card-act.ai-thesis-card-del svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .ai-thesis-card-act.ai-thesis-card-del:hover:not(:disabled) {
