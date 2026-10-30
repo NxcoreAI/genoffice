@@ -159,6 +159,8 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   const [uploading, setUploading] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** AI 补写空白小节：默认关闭，开启后空小节由 AI 生成并带标记。 */
+  const [aiFill, setAiFill] = useState(false)
   /** 正在删除模版的卡片 id（文件+卡，或只删文件）。 */
   const [deletingId, setDeletingId] = useState<string | null>(null)
   /** 待确认删除的卡片 id：面板内联二次确认（不用 window.confirm——它会抢焦点，
@@ -192,8 +194,6 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
       setPreviewingId(null)
     }
   }
-  /** 目录融合模式：strict=只保留能对上模板目录的内容；blend=全部保留，未匹配的单独追加。 */
-  const [mode, setMode] = useState<'strict' | 'blend'>('blend')
   /** v2 槽位映射报告：排版完成后在面板里给出守恒/未匹配/待复核摘要。 */
   const [report, setReport] = useState<{
     matched?: number
@@ -201,6 +201,8 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     unmatched?: number
     appended?: number
     needsReview?: number
+    /** 出稿提示（模版骨架回落、自检软伤）：必须显性展示，否则用户只看到成品、猜不到原因。 */
+    warnings?: string[]
   } | null>(null)
   const open = dropdown === 'thesis'
 
@@ -266,7 +268,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
       if (meta.factGaps && meta.factGaps.length > 0) {
         setError(t('aiThesisPartial', { gaps: meta.factGaps.join('；') }))
       }
-      if (meta.cardId && hasDoc) await reformatWith(meta.cardId, { mode })
+      if (meta.cardId && hasDoc) await reformatWith(meta.cardId)
     } catch (err) {
       setError(errorMessage(err))
     } finally {
@@ -305,17 +307,19 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
    * 面板顶部走真实进度条；10 分钟未完成主动放弃并给出明确提示。
    */
   const reformatWith = async (cardId: string, options?: {
-    mode?: 'strict' | 'blend'
     keepLogo?: boolean
     keepHeaderFooter?: boolean
+    aiFill?: boolean
     headingMapping?: { chapter?: number; section?: number; subsection?: number }
   }) => {
     const startedAt = Date.now()
-    const TIMEOUT_MS = 10 * 60 * 1000 // 10 分钟硬上限
+    // 20 分钟硬上限：映射（代理裁决）+ AI 补写两段代理调用叠起来经常超过 10 分钟，
+    // 上限比桥接层（20 分钟）短就会在产物已经生成时先报「超时」。
+    const TIMEOUT_MS = 20 * 60 * 1000
     setBusy(true)
     setJob({ phase: 'queued', progress: 5, elapsed: 0 })
     try {
-      const submit = await window.desktop.thesisReformatJob(cardId, options)
+      const submit = await window.desktop.thesisReformatJob(cardId, { ...options, aiFill })
       if (!submit.ok) throw new Error(submit.message || t('aiThesisFailed'))
       const { jobId } = submit.value as { jobId: string }
 
@@ -346,17 +350,23 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
               conservation?: { matched?: number; total?: number; unmatched?: number }
               report?: { appendedChapters?: number }
               needsReview?: unknown[]
+              warnings?: string[]
             }
           }
           onNotice?.(t('aiThesisDone', { name: value.originalName }))
           const conservation = value.report?.conservation
-          if (conservation) {
+          const warnings = Array.isArray(value.report?.warnings)
+            ? value.report.warnings.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+            : []
+          // 只有 warnings 没有 conservation 也要显示（v3 模板骨架路径没有 v2 守恒报告）
+          if (conservation || warnings.length > 0) {
             setReport({
-              matched: conservation.matched ?? 0,
-              total: conservation.total ?? 0,
-              unmatched: conservation.unmatched ?? 0,
+              matched: conservation?.matched ?? 0,
+              total: conservation?.total ?? 0,
+              unmatched: conservation?.unmatched ?? 0,
               appended: value.report?.report?.appendedChapters ?? 0,
               needsReview: value.report?.needsReview?.length ?? 0,
+              ...(warnings.length > 0 ? { warnings } : {}),
             })
           }
           return
@@ -448,20 +458,20 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                 ) : cards.length === 0 ? (
                   <div className="ai-thesis-empty">
                     <p>{t('aiThesisPanelEmpty')}</p>
-                    <label className="ai-thesis-mode">
-                      <input type="radio" name="ai-thesis-mode" checked={mode === 'blend'} onChange={() => setMode('blend')} />
-                      <span>{t('aiThesisModeBlend')}</span>
-                    </label>
-                    <label className="ai-thesis-mode">
-                      <input type="radio" name="ai-thesis-mode" checked={mode === 'strict'} onChange={() => setMode('strict')} />
-                      <span>{t('aiThesisModeStrict')}</span>
-                    </label>
                     <button className="ai-thesis-upload" disabled={uploading} onClick={() => void uploadTemplate()}>
                       {uploading ? <span className="ai-thesis-spinner" /> : t('aiThesisUpload')}
                     </button>
                   </div>
                 ) : (
                   <>
+                    <label className="ai-thesis-ai-fill">
+                      <input
+                        type="checkbox"
+                        checked={aiFill}
+                        onChange={(event) => setAiFill(event.target.checked)}
+                      />
+                      <span>AI 补写空白小节（生成内容会标注「AI补写，请认真核对」，文件名加 -ai补写版）</span>
+                    </label>
                     <div className="ai-thesis-cards" role="list">
                       {cards.map((row) => (
                         <div className="ai-thesis-card" key={row.id} role="listitem">
@@ -469,7 +479,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                             className="ai-thesis-card-main"
                             disabled={busy}
                             title={t('aiThesisUseTip')}
-                            onClick={() => void reformatWith(row.id, { mode })}
+                            onClick={() => void reformatWith(row.id)}
                           >
                             <ThesisMiniPaper card={readThesisCardView(row.card)} />
                             <span className="ai-thesis-card-body">
@@ -518,16 +528,6 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                         </div>
                       ))}
                     </div>
-                    <div className="ai-thesis-mode-row">
-                      <label className="ai-thesis-mode">
-                        <input type="radio" name="ai-thesis-mode" checked={mode === 'blend'} onChange={() => setMode('blend')} />
-                        <span>{t('aiThesisModeBlend')}</span>
-                      </label>
-                      <label className="ai-thesis-mode">
-                        <input type="radio" name="ai-thesis-mode" checked={mode === 'strict'} onChange={() => setMode('strict')} />
-                        <span>{t('aiThesisModeStrict')}</span>
-                      </label>
-                    </div>
                     <button className="ai-thesis-upload" disabled={uploading} onClick={() => void uploadTemplate()}>
                       {uploading ? <span className="ai-thesis-spinner" /> : t('aiThesisUpload')}
                     </button>
@@ -569,11 +569,14 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
                     </div>
                   </div>
                 ) : null}
-                {report && report.total ? (
+                {report && (report.total || report.warnings?.length) ? (
                   <div className="ai-thesis-report" role="status">
-                    <p>{t('aiThesisReport', { matched: report.matched ?? 0, total: report.total })}</p>
+                    {report.total ? <p>{t('aiThesisReport', { matched: report.matched ?? 0, total: report.total })}</p> : null}
                     {report.unmatched ? <p className="is-warn">{t('aiThesisReportUnmatched', { count: report.unmatched })}</p> : null}
                     {report.needsReview ? <p className="is-warn">{t('aiThesisReportReview', { count: report.needsReview })}</p> : null}
+                    {report.warnings?.length
+                      ? report.warnings.map((warning) => <p key={warning} className="is-warn">{warning}</p>)
+                      : null}
                   </div>
                 ) : null}
                 {error ? <p className="ai-thesis-error">{error}</p> : null}

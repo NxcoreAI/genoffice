@@ -157,7 +157,15 @@ export interface ParseExtras {
   chartParts: Record<string, string>
 }
 
-export async function parseDocx(bytes: Uint8Array): Promise<ParsedDoc & { extras: ParseExtras }> {
+export interface ParseDocxOptions {
+  /**
+   * 手打编号标题兜底：整篇几乎不用 Word 标题样式时，按文字认章节。
+   * 只给「论文排版」链路用（模版骨架 + 源文档定位），编辑器/预览保持原行为。
+   */
+  patternHeadings?: boolean
+}
+
+export async function parseDocx(bytes: Uint8Array, options?: ParseDocxOptions): Promise<ParsedDoc & { extras: ParseExtras }> {
   const zip = await loadDocxZip(bytes)
   assertZipWithinLimits(zip)
   const docPath = await resolveMainDocumentPath(zip)
@@ -287,7 +295,60 @@ export async function parseDocx(bytes: Uint8Array): Promise<ParsedDoc & { extras
     elements.push(el)
     blocks.push(await buildBlock(el, i, xml, buildCtx))
   }
+
+/**
+ * 「手打编号」标题兜底：整篇几乎不用 Word 标题样式时（学校模版里很常见），
+ * 按文字形态认章节（第一章 / 一、 / 1.1 / 参考文献 / 附录）。
+ *
+ * 只在标题数量极少（< 2）时启用，避免影响规范排版的文档；
+ * 判据刻意保守：短、无首行缩进、不是目录行、不在表格里。
+ */
+function textPatternHeadingLevel(block: Block): number | undefined {
+  if (block.type !== 'paragraph') return undefined
+  const text = (block.runs ?? []).map((run) => run.text ?? '').join('').trim()
+  if (!text || text.length > 40) return undefined
+  // 目录行：带引导点、或结尾跟页码（「第一章 前言 1」「1.1 目标2」）。
+  // 真标题不会以页码收尾——认错了会把论文正文插进模版目录里。
+  if (/[.．·…]{2,}\s*\d{1,4}$/.test(text)) return undefined
+  if (/\s\d{1,4}$/.test(text)) return undefined
+  const format = block.format as { indentFirstLine?: number } | undefined
+  if (format?.indentFirstLine && format.indentFirstLine > 0) return undefined
+  if (/^第[一二三四五六七八九十百零0-9]{1,4}[章篇]/.test(text)) return 1
+  if (/^第[一二三四五六七八九十百零0-9]{1,4}[节]/.test(text)) return 2
+  if (/^[一二三四五六七八九十]{1,3}\s*[、.．]/.test(text)) return 1
+  if (/^[（(][一二三四五六七八九十]{1,3}[）)]/.test(text)) return 2
+  const numbered = /^(\d{1,2}(?:\.\d{1,2}){1,2})\s*[、.．]?\s*[\u4e00-\u9fa5A-Za-z]/.exec(text)
+  if (numbered && !/^\d+\.\d+\s*(倍|万|元|%|cm|mm|kg)/.test(text)) {
+    return Math.min(4, numbered[1]!.split('.').length) as 1 | 2 | 3 | 4
+  }
+  // 「附录 A 源程序」「附录A」「参考文献」「致谢」都算章节
+  if (/^(参考文献|参考资料|附录|致谢)(\s|$|[：:、.．A-Za-z一二三四五六七八九十])/.test(text)) return 1
+  return undefined
+}
+
+/** 标题样式几乎不用时，把形似章节的段落升级为标题（原地改 type/level）。 */
+function applyTextPatternHeadings(blocks: Block[]): void {
+  for (const block of blocks) {
+    // 「Heading1 样式 + 自动编号」的段落被解析成 listItem（保留了编号信息），
+    // 排版链路要把它当章节标题：否则它既不是归类目标，也挡不住「本节待补充」
+    // 的探测——会把下一节正文误判成「本节已有内容」。
+    if (block.type === 'listItem') {
+      const styled = /^Heading\s*([1-4])$/i.exec(block.styleId ?? '')
+      if (styled) {
+        block.type = 'heading'
+        block.level = Number(styled[1]) as 1 | 2 | 3 | 4
+        continue
+      }
+    }
+    const level = textPatternHeadingLevel(block)
+    if (level === undefined) continue
+    block.type = 'heading'
+    block.level = level as 1 | 2 | 3 | 4
+  }
+}
+
   applyTocEntryNumbers(blocks, numbering)
+  if (options?.patternHeadings === true) applyTextPatternHeadings(blocks)
   normalizeImageZOrders(blocks)
   applyProtectedLeadingBreaks(blocks)
 

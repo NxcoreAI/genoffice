@@ -343,14 +343,15 @@ describe('thesis-binder · 融合模式与标题层级映射', () => {
     expect(document).toContain('选题背景的正文段落。')
   })
 
-  it('融合模式：正文块走原文透传（保留原文档格式）', async () => {
+  it('融合模式已移除：正文一律按模版样式重建（不再有 preserveSourceFormat 开关）', async () => {
     const source = await sourceDocx()
-    const bytes = await buildThesisDocx(source, CARD, {
+    const spec = {
       title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
-      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 }],
+      chapters: [{ level: 1 as const, headingText: '前言', blockStart: 0, blockEnd: 3 }],
       references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
-      preserveSourceFormat: true,
-    })
+    }
+    expect('preserveSourceFormat' in spec).toBe(false)
+    const bytes = await buildThesisDocx(source, CARD, spec)
     const { document } = await unzipXml(bytes)
     expect(document).toContain('选题背景的正文段落。')
     expect(document).toContain('相关研究现状。')

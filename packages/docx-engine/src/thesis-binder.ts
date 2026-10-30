@@ -163,7 +163,14 @@ export interface ThesisBindingSpecInput {
   keywordsZh: string[]
   abstractEn: string
   keywordsEn: string[]
-  chapters: Array<{ level: 1 | 2 | 3 | 4; headingText: string; blockStart: number; blockEnd: number }>
+  chapters: Array<{
+    level: 1 | 2 | 3 | 4
+    headingText: string
+    blockStart: number
+    blockEnd: number
+    /** 该章节归属的模板槽位（v3 模板骨架装订据此把内容放回模版原位）。 */
+    slotId?: string
+  }>
   references: string[]
   appendixBlocks: { start: number; end: number } | null
   acknowledgementParagraphs: string[]
@@ -173,14 +180,11 @@ export interface ThesisBindingSpecInput {
    * 渲染为正文末尾的独立小节，整段红色高亮 + 说明，供用户人工归位。
    */
   unmatchedBlocks?: Array<{ start: number; end: number; label?: string }>
+  /** AI 补写的空小节（仅当用户开启开关）：title 对应模版小节标题，渲染时带「AI 生成」标记。 */
+  generatedSections?: Array<{ title: string; text: string }>
   /** 模板自有固定表单（教师评价表等，原样 OOXML）：prelim=正文首章前；appendix=全文末尾。
    *  原样透传（kind:'xml'），模板自有内容不因重建而丢失。 */
   fixedBlocks?: Array<{ placement: 'prelim' | 'appendix'; heading?: string; xml: string }>
-  /**
-   * 融合模式：正文块保留源文档自身的格式（原文透传），只让模版决定页面、
-   * 页眉页脚、标题层级与编号。严格模式（缺省）= 全部按模版样式重建。
-   */
-  preserveSourceFormat?: boolean
 }
 
 function mm(mmValue: number): number {
@@ -325,7 +329,8 @@ function adaptBodyBlock(
 export async function describeThesisBlocks(bytes: Uint8Array): Promise<
   Array<{ index: number; kind: 'heading' | 'paragraph' | 'table' | 'image' | 'list'; level?: number; text: string }>
 > {
-  const parsed = await parseDocx(bytes)
+  // 排版链路：允许「手打编号」的文档也识别出章节（模版与源文档都受益）
+  const parsed = await parseDocx(bytes, { patternHeadings: true })
   return parsed.blocks
     .filter((block) => !block.hidden)
     .map((block, index) => ({
@@ -501,11 +506,6 @@ export async function buildThesisDocx(
       const block = visible[i]
       if (!block) continue
       if (block.originalXml?.includes('<w:sectPr')) continue
-      if (spec.preserveSourceFormat && block.docxIndex !== null) {
-        // 融合模式：正文保留原文档格式，只替换结构（标题/编号仍由模版生成）
-        finalBlocks.push({ kind: 'original', docxIndex: block.docxIndex })
-        continue
-      }
       const adapted = adaptBodyBlock(block, card)
       if (adapted) finalBlocks.push(adapted)
     }

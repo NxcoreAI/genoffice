@@ -159,9 +159,10 @@ const api: DesktopApi = {
   thesisReformatJob: (
     cardId?: string,
     options?: {
-      mode?: 'strict' | 'blend'
       keepLogo?: boolean
       keepHeaderFooter?: boolean
+      /** 允许 AI 补写空白小节（默认关）。 */
+      aiFill?: boolean
       headingMapping?: { chapter?: number; section?: number; subsection?: number }
     },
   ) => ipcRenderer.invoke('docs:thesis-reformat-job', cardId ?? null, options),

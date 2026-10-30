@@ -9968,6 +9968,24 @@ tr > .page-gap-cut {
   line-height: 1.5;
 }
 
+.ai-thesis-ai-fill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  font-size: 12px;
+  color: #6b7280;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ai-thesis-ai-fill input {
+  width: 13px;
+  height: 13px;
+  accent-color: #7c5cff;
+  cursor: pointer;
+}
+
 .ai-thesis-cards {
   display: flex;
   width: 100%;
@@ -10303,39 +10321,6 @@ tr > .page-gap-cut {
   color: var(--text-muted);
   font-size: 10.5px;
   font-style: normal;
-}
-
-/* 目录融合模式单选（列表态并排一行） */
-.ai-thesis-mode-row {
-  display: flex;
-  width: 100%;
-  gap: 8px;
-  margin: 2px 0 4px;
-}
-
-.ai-thesis-mode-row .ai-thesis-mode {
-  flex: 1;
-  min-width: 0;
-}
-
-.ai-thesis-mode {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 2px 0;
-  color: var(--text-muted);
-  font-size: 10.5px;
-  cursor: pointer;
-}
-
-.ai-thesis-mode input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.ai-thesis-mode span {
-  flex: 1;
-  min-width: 0;
 }
 
 /* 同名模版确认条：警示色 + 两颗动作按钮（替换 / 取消） */

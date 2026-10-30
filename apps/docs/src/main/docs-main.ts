@@ -2842,9 +2842,9 @@ export type DocsThesisPanelAction =
       kind: 'reformat-job'
       cardId?: string
       options?: {
-        mode?: 'strict' | 'blend'
         keepLogo?: boolean
         keepHeaderFooter?: boolean
+        aiFill?: boolean
         headingMapping?: { chapter?: number; section?: number; subsection?: number }
       }
     }
@@ -3099,9 +3099,9 @@ export function registerDocsIpc(): void {
   ipcMain.handle(
     'docs:thesis-reformat-job',
     (event, cardId: string | null, options?: Parameters<typeof runThesisPanel>[1] extends never ? never : {
-      mode?: 'strict' | 'blend'
       keepLogo?: boolean
       keepHeaderFooter?: boolean
+      aiFill?: boolean
       headingMapping?: { chapter?: number; section?: number; subsection?: number }
     }) =>
       runThesisPanel<{ jobId: string; phase: string }>(event.sender.id, {
