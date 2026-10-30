@@ -46,7 +46,58 @@ export interface ThesisPartCard {
   optional: boolean
 }
 
+/** 编号方案（来自模板剖面的 numbering.xml 解析结果）。 */
+export type ThesisNumberingScheme = 'cn-upper' | 'cn-lower' | 'decimal-tree' | 'decimal-dot' | 'none'
+
+export interface ThesisNumberingInput {
+  scheme: ThesisNumberingScheme
+  /** 每级定义（模板 numbering.xml 的 lvl），仅作参考：lvlText/start 目前不强制套用。 */
+  levels?: Array<{ level: number; numFmt?: string; lvlText?: string; start?: number }>
+}
+
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+
+/** 1–99 → 中文数字（模板正文编号基本用不到三位数）。 */
+function cnNumber(value: number): string {
+  if (value <= 0) return '零'
+  if (value < 10) return CN_DIGITS[value]!
+  if (value < 20) return `十${value % 10 === 0 ? '' : CN_DIGITS[value % 10]}`
+  const tens = Math.floor(value / 10)
+  const ones = value % 10
+  return `${CN_DIGITS[tens] ?? String(tens)}十${ones === 0 ? '' : CN_DIGITS[ones]}`
+}
+
+/**
+ * 按模板编号方案生成标题前缀（方案 §6.6）。
+ *
+ * - cn-upper：「一、」/「（一）」/「1.」/「（1）」（中文论文最常见）
+ * - cn-lower：同 cn-upper（中文无大小写，两者等价）
+ * - decimal-tree：「1」/「1.1」/「1.1.1」
+ * - decimal-dot：「1.」单级，深层同 tree
+ * - none：不生成编号（正文标题里的原编号已由网关剥离）
+ */
+export function headingNumberPrefix(
+  scheme: ThesisNumberingScheme,
+  counters: readonly [number, number, number, number],
+  level: 1 | 2 | 3 | 4,
+): string {
+  if (scheme === 'none') return ''
+  if (scheme === 'decimal-tree' || scheme === 'decimal-dot') {
+    const parts: string[] = []
+    for (let i = 0; i < level; i += 1) parts.push(String(counters[i] ?? 0))
+    return `${parts.join('.')}${scheme === 'decimal-dot' && level === 1 ? '.' : ''} `
+  }
+  // 中文编号：一级「一、」二级「（一）」三级「1.」四级「（1）」
+  const current = counters[level - 1] ?? 0
+  if (level === 1) return `${cnNumber(current)}、`
+  if (level === 2) return `（${cnNumber(current)}）`
+  if (level === 3) return `${current}.`
+  return `（${current}）`
+}
+
 export interface ThesisFormatCardInput {
+  /** 模板编号方案（v2 剖面）。缺省时按 headings[].numbering 的老语义。 */
+  numbering?: ThesisNumberingInput
   page: {
     widthMm: number
     heightMm: number
@@ -112,11 +163,28 @@ export interface ThesisBindingSpecInput {
   keywordsZh: string[]
   abstractEn: string
   keywordsEn: string[]
-  chapters: Array<{ level: 1 | 2 | 3 | 4; headingText: string; blockStart: number; blockEnd: number }>
+  chapters: Array<{
+    level: 1 | 2 | 3 | 4
+    headingText: string
+    blockStart: number
+    blockEnd: number
+    /** 该章节归属的模板槽位（v3 模板骨架装订据此把内容放回模版原位）。 */
+    slotId?: string
+  }>
   references: string[]
   appendixBlocks: { start: number; end: number } | null
   acknowledgementParagraphs: string[]
   achievements: string[]
+  /**
+   * v2 槽位映射的「未归类内容」：模板没有对应槽位、但绝不能丢的源块区间。
+   * 渲染为正文末尾的独立小节，整段红色高亮 + 说明，供用户人工归位。
+   */
+  unmatchedBlocks?: Array<{ start: number; end: number; label?: string }>
+  /** AI 补写的空小节（仅当用户开启开关）：title 对应模版小节标题，渲染时带「AI 生成」标记。 */
+  generatedSections?: Array<{ title: string; text: string }>
+  /** 模板自有固定表单（教师评价表等，原样 OOXML）：prelim=正文首章前；appendix=全文末尾。
+   *  原样透传（kind:'xml'），模板自有内容不因重建而丢失。 */
+  fixedBlocks?: Array<{ placement: 'prelim' | 'appendix'; heading?: string; xml: string }>
 }
 
 function mm(mmValue: number): number {
@@ -139,6 +207,19 @@ function textRun(card: ThesisFontCard, text: string, bold = card.bold): Run {
     sizeHalfPoints: halfPoints(card.size),
     bold,
   }
+}
+
+/** 未匹配内容的标记样式：红字 + 黄色高亮（与方案 §6.8 一致，Word 里一眼可见）。 */
+const MARK_COLOR = 'C00000'
+const MARK_HIGHLIGHT = 'yellow'
+
+function markedRun(card: ThesisFontCard, text: string): Run {
+  return { ...textRun(card, text), color: MARK_COLOR, highlight: MARK_HIGHLIGHT }
+}
+
+/** 标记段落：整段红字高亮（用于「未归类内容」的小节标记与说明）。 */
+function markedParagraph(card: ThesisFontCard, text: string, format: ParaFormat): SaveBlock {
+  return generated([markedRun(card, text)], format)
 }
 
 /** 行距规则：固定磅值（exact）优先于多倍行距（auto）。 */
@@ -209,6 +290,7 @@ function partTitle(runs: Run[]): SaveBlock {
   return generated(runs, { align: 'center', spaceBefore: pt(12), spaceAfter: pt(12) })
 }
 
+
 /** 部件标题块：文案/标题字体/换页取卡内 parts 规则，缺失回退默认标题与摘要标题字体。 */
 function partTitleOf(card: ThesisFormatCardInput, type: string, fallbackTitle: string): SaveBlock {
   const rule = card.parts?.find((part) => part.type === type)
@@ -220,15 +302,6 @@ function partTitleOf(card: ThesisFormatCardInput, type: string, fallbackTitle: s
     spaceAfter: pt(12),
     ...(rule?.breakBefore === 'page' ? { pageBreakBefore: true } : {}),
   })
-}
-
-function chapterNumberText(
-  counters: [number, number, number, number],
-  level: 1 | 2 | 3 | 4,
-): string {
-  const parts: string[] = []
-  for (let i = 0; i < level; i += 1) parts.push(String(counters[i]))
-  return parts.join('.')
 }
 
 /** 源块 → 装订块：文本段重建套样式；表格/图片/公式等 passthrough 保真。 */
@@ -256,7 +329,8 @@ function adaptBodyBlock(
 export async function describeThesisBlocks(bytes: Uint8Array): Promise<
   Array<{ index: number; kind: 'heading' | 'paragraph' | 'table' | 'image' | 'list'; level?: number; text: string }>
 > {
-  const parsed = await parseDocx(bytes)
+  // 排版链路：允许「手打编号」的文档也识别出章节（模版与源文档都受益）
+  const parsed = await parseDocx(bytes, { patternHeadings: true })
   return parsed.blocks
     .filter((block) => !block.hidden)
     .map((block, index) => ({
@@ -292,16 +366,17 @@ export async function buildThesisDocx(
   const tocEntries: Array<{ text: string; level: number }> = []
   const headingStyleIds = ['Heading1', 'Heading2', 'Heading3', 'Heading4']
   const headingByLevel = new Map(card.headings.map((heading) => [heading.level, heading]))
+  // 编号方案：优先用模板剖面（v2），否则回落 headings[].numbering 的老语义。
+  const numberingScheme: ThesisNumberingScheme = card.numbering?.scheme
+    ?? (card.headings.some((heading) => heading.numbering === 'numeric-tree') ? 'decimal-tree' : 'none')
+  let prelimFixedEmitted = false
   for (const chapter of spec.chapters) {
-    const heading = headingByLevel.get(chapter.level) ?? headingByLevel.get(1)!
-    if (heading.numbering === 'numeric-tree') {
+    if (numberingScheme !== 'none') {
       const idx = chapter.level - 1
       counters[idx] += 1
       for (let i = idx + 1; i < 4; i += 1) counters[i] = 0
     }
-    const numberText = heading.numbering === 'numeric-tree'
-      ? `${chapterNumberText(counters, chapter.level)} `
-      : ''
+    const numberText = headingNumberPrefix(numberingScheme, counters, chapter.level)
     tocEntries.push({ text: `${numberText}${chapter.headingText}`, level: Math.min(chapter.level, 3) })
   }
   const tocMaxLevel = Number.parseInt(card.toc.levels.replace(/[^0-9]/g, '').slice(-1), 10)
@@ -412,6 +487,21 @@ export async function buildThesisDocx(
         format: headingFormat,
       },
     })
+    // 模板自有固定表单（prelim：教师评价表等）——在首个正文槽位的内容后原样回插一次
+    if (!prelimFixedEmitted && spec.fixedBlocks?.length) {
+      prelimFixedEmitted = true
+      for (const fixed of spec.fixedBlocks.filter((entry) => entry.placement === 'prelim')) {
+        if (fixed.heading) {
+          finalBlocks.push(
+            generated([textRun(card.headings[1]?.font ?? card.base.font, fixed.heading)], {
+              align: 'left',
+              ...spacingOf(card.headings[1]?.paragraph ?? card.base.paragraph),
+            }),
+          )
+        }
+        finalBlocks.push({ kind: 'xml', xml: fixed.xml })
+      }
+    }
     for (let i = chapter.blockStart + 1; i < chapter.blockEnd; i += 1) {
       const block = visible[i]
       if (!block) continue
@@ -451,6 +541,38 @@ export async function buildThesisDocx(
     finalBlocks.push(partTitleOf(card, 'achievements', '攻读学位期间的研究成果'))
     for (const entry of spec.achievements) {
       finalBlocks.push(generated([textRun(card.references.listFont, entry)], refFormat))
+    }
+  }
+
+  // ---- 未归类内容（v2 映射兜底）----
+  // 模板没有对应槽位的源块必须原样保留：单独成节 + 红色高亮标记 + 逐段说明，
+  // 让用户在 Word 里一眼找到并人工归位（方案不变量 I3：不丢内容）。
+  if (spec.unmatchedBlocks && spec.unmatchedBlocks.length > 0) {
+    finalBlocks.push(generated([markedRun(card.base.font, '未归类内容（模板无对应槽位，请人工归位）')], bodyFormat(card)))
+    for (const range of spec.unmatchedBlocks) {
+      if (range.label) finalBlocks.push(markedParagraph(card.base.font, `〔未匹配：${range.label}〕`, bodyFormat(card)))
+      for (let i = range.start; i < range.end; i += 1) {
+        const block = visible[i]
+        if (!block) continue
+        if (block.originalXml?.includes('<w:sectPr')) continue
+        const adapted = adaptBodyBlock(block, card)
+        if (adapted) finalBlocks.push(adapted)
+      }
+    }
+  }
+
+  // ---- 模板自有固定表单（appendix：附在全文末尾）----
+  if (spec.fixedBlocks?.some((entry) => entry.placement === 'appendix')) {
+    for (const fixed of spec.fixedBlocks.filter((entry) => entry.placement === 'appendix')) {
+      if (fixed.heading) {
+        finalBlocks.push(
+          generated([textRun(card.headings[1]?.font ?? card.base.font, fixed.heading)], {
+            align: 'left',
+            ...spacingOf(card.headings[1]?.paragraph ?? card.base.paragraph),
+          }),
+        )
+      }
+      finalBlocks.push({ kind: 'xml', xml: fixed.xml })
     }
   }
 

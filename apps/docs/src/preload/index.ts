@@ -172,9 +172,23 @@ const api: DesktopApi = {
   reportAgentToolReply: (requestId: string, reply: unknown) =>
     ipcRenderer.send('docs:agent-tool-result', { requestId, reply }),
   thesisListCards: () => ipcRenderer.invoke('docs:thesis-list'),
-  thesisPickTemplate: () => ipcRenderer.invoke('docs:thesis-pick'),
+  thesisPickTemplate: (overwrite?: boolean) => ipcRenderer.invoke('docs:thesis-pick', overwrite === true),
   thesisRemoveCard: (cardId: string) => ipcRenderer.invoke('docs:thesis-remove', cardId),
+  thesisDeleteTemplate: (cardId: string, keepCard?: boolean) =>
+    ipcRenderer.invoke('docs:thesis-delete-template', cardId, keepCard === true),
   thesisReformat: (cardId?: string) => ipcRenderer.invoke('docs:thesis-reformat', cardId ?? null),
+  thesisReformatJob: (
+    cardId?: string,
+    options?: {
+      keepLogo?: boolean
+      keepHeaderFooter?: boolean
+      /** 允许 AI 补写空白小节（默认关）。 */
+      aiFill?: boolean
+      headingMapping?: { chapter?: number; section?: number; subsection?: number }
+    },
+  ) => ipcRenderer.invoke('docs:thesis-reformat-job', cardId ?? null, options),
+  thesisReformatJobStatus: (jobId: string) => ipcRenderer.invoke('docs:thesis-reformat-job-status', jobId),
+  thesisPreviewTemplate: (cardId: string) => ipcRenderer.invoke('docs:thesis-preview', cardId),
   onThesisCardsChanged: (handler: () => void) => {
     const listener = () => handler()
     ipcRenderer.on('docs:thesis-changed', listener)

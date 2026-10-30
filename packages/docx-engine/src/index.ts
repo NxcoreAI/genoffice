@@ -117,3 +117,10 @@ export {
   type ThesisFormatCardInput,
   type ThesisBindingSpecInput,
 } from './thesis-binder'
+export {
+  buildThesisDocxOnTemplate,
+  type ThesisTemplateBinderInput,
+  type ThesisTemplateBinderResult,
+  type ThesisTemplateBinderDiagnostics,
+  type ThesisTemplateProfileInput,
+} from './thesis-template-binder'

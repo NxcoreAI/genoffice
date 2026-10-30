@@ -25,4 +25,8 @@ export type {
   DocsAgentToolResult,
   DocsThesisPanelAction,
 } from './docs-main'
-export { buildThesisDocx, describeThesisBlocks } from '@genoffice/docx-engine'
+export {
+  buildThesisDocx,
+  buildThesisDocxOnTemplate,
+  describeThesisBlocks,
+} from '@genoffice/docx-engine'
