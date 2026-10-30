@@ -1,5 +1,4 @@
 import React, { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { SideDock } from '../../../side-dock-shared/SideDock'
 import type {
   GroupRenderNode,
   RenderFill,
@@ -280,8 +279,6 @@ export function App() {
   // EverRoom embed: no GenOffice AI dock, no AI settings boot load, no stage
   // AI bar. The dock reservation also disappears from the layout math.
   const everroomEmbed = __GENOFFICE_EMBED_ONLY__
-  // EverRoom host opts into the embedded side dock (Agent / Materials / History)
-  const dockParam = new URLSearchParams(window.location.search).get('dock') === '1'
   // Read-only embed (host passes readonly=1): open straight into the reading
   // view and never leave it — the editor stays unmounted and the ribbon hidden,
   // so the deck is view-only like a PDF.
@@ -4001,9 +3998,6 @@ export function App() {
             </div>
           </footer>
         </div>
-        {everroomEmbed && dockParam && (
-          <SideDock kind="slides" fileName={_fileName} />
-        )}
       </div>
 
       {masterItems && (

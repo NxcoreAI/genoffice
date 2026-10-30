@@ -94,6 +94,8 @@ const HTML_RULES = [
   '- Keep the same language as the original document / user instruction, unless translation is requested',
 ].join('\n')
 
+export { HTML_RULES }
+
 /**
  * Agent system prompt: document-first, intent resolution, act via tools,
  * answer in chat.

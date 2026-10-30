@@ -8,7 +8,12 @@ import {
   useRef,
   useState,
 } from 'react'
-import { SideDock } from '../../../side-dock-shared/SideDock'
+import { flushSync } from 'react-dom'
+import { imageSizeOf, insertShapeAt, MAX_IMAGE_WIDTH_PX } from './components/ribbon-tabs'
+import { SHAPE_GALLERY_GROUPS } from '@genoffice/ui'
+import { nextCommentId } from './editor/comments'
+import { TRACK_IGNORE } from './editor/revisions'
+import { updateTocField } from './components/ribbon-references-tab'
 import type { CSSProperties, MouseEvent as ReactMouseEvent, SetStateAction } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/core'
@@ -40,6 +45,20 @@ import {
 import type { AiDocContent, AiSettings, OpenDocxResult } from '../shared/ipc'
 import { AI_PROVIDERS } from '../shared/ipc'
 import type { AiCommentsAccess, AiHeaderFooterAccess } from './ai/tools'
+import {
+  AGENT_TOOLS,
+  executeTool,
+  markDocSeen,
+} from './ai/tools'
+import {
+  COMMANDS_GUIDE,
+  HTML_RULES,
+  blockRangePositions,
+  buildDocContext,
+  findNumId,
+  getSelectionScope,
+  type NumIds,
+} from './ai/protocol'
 import { applyHfText, hfEditText } from './editor/hf-text'
 import { AiAskPopover } from './components/AiAskPopover'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type DocsEditQueueItem } from './ai/edit-queue'
@@ -409,11 +428,326 @@ const AiPanel = !__GENOFFICE_EMBED_ONLY__ ? lazy(async () => {
   return { default: module.AiPanel }
 }) : null
 
+/** Gallery preset ids accepted by insert_shape (from @genoffice/ui SHAPE_GALLERY_GROUPS + engine LINE_KINDS). */
+const HOST_KNOWN_SHAPE_PRSTS: ReadonlySet<string> = new Set<string>(
+  SHAPE_GALLERY_GROUPS.flatMap((g) => g.shapes.map((s) => s.prst)),
+)
+
+/** Host-driven image insert: base64 bytes -> the ribbon's dataUrl path. */
+async function insertAgentImage(
+  editor: Editor,
+  input: {
+    base64: string
+    mime: string
+    afterIndex: number
+    maxWidthPx: number
+    label: string
+  },
+): Promise<
+  | { ok: true; widthPx: number; heightPx: number }
+  | { ok: false; error: string }
+> {
+  const dataUrl = `data:${input.mime};base64,${input.base64}`
+  // decode dimensions first for the result report (insertImageFromDataUrl
+  // measures internally too and caps at MAX_IMAGE_WIDTH_PX)
+  let natural: { width: number; height: number }
+  try {
+    natural = await imageSizeOf(dataUrl)
+  } catch {
+    return { ok: false, error: 'cannot decode the image bytes (corrupt base64 or unsupported layout?)' }
+  }
+  const doc2 = editor.state.doc
+  const idx = input.afterIndex >= 0 && input.afterIndex < doc2.childCount ? input.afterIndex : doc2.childCount - 1
+  const { to } = blockRangePositions(editor, idx, idx)
+  const ok = await insertImageFromDataUrl(editor, dataUrl, input.label)
+  if (!ok) return { ok: false, error: 'image insert failed (unsupported format?)' }
+  const scale = Math.min(1, Math.min(input.maxWidthPx, MAX_IMAGE_WIDTH_PX) / natural.width)
+  return { ok: true, widthPx: Math.round(natural.width * scale), heightPx: Math.round(natural.height * scale) }
+}
+
+/** Host-driven comment: anchor on a block range via the same comment-mark
+ *  pipeline as submitNewComment (ids are allocated from the live mirror). */
+function addAgentComment(
+  editor: Editor,
+  input: {
+    startIndex: number
+    endIndex: number
+    text: string
+    comments: CommentInfo[]
+    setComments: (action: CommentInfo[]) => void
+    setCommentsDirty: (v: boolean) => void
+    dirtyRef: { current: boolean }
+  },
+): { ok: true; id: string } | { ok: false; error: string } {
+  const { from, to } = blockRangePositions(editor, input.startIndex, input.endIndex)
+  if (from >= to) return { ok: false, error: 'cannot anchor an empty range' }
+  const id = nextCommentId(input.comments)
+  // mirror addCommentToSelection but with an explicit range instead of the
+  // live selection: same mark type, same TRACK_IGNORE meta
+  const { state } = editor
+  const markType = state.schema.marks.comment
+  const tr = state.tr
+  tr.setMeta(TRACK_IGNORE, true)
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (!node.isText) return
+    const start = Math.max(pos, from)
+    const end = Math.min(pos + node.nodeSize, to)
+    if (start >= end) return
+    const existing = node.marks.find((m) => m.type === markType)
+    const ids = new Set(
+      String(existing?.attrs.ids ?? '')
+        .split(' ')
+        .filter(Boolean),
+    )
+    ids.add(id)
+    tr.addMark(start, end, markType.create({ ids: [...ids].sort().join(' ') }))
+  })
+  editor.view.dispatch(tr)
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  input.setComments([...input.comments, { id, author: 'User', date: now, text: input.text }])
+  input.setCommentsDirty(true)
+  input.dirtyRef.current = true
+  return { ok: true, id }
+}
+
+/** Inputs the host accepts for set_page_setup — a subset of SectionSettings
+ *  plus page color and theme presets. Units: twips for margins/widths/heights
+ *  (1 cm = 567 twips, 1 inch = 1440); hex colors without '#'. */
+interface HostPageSetupInput {
+  orientation?: 'portrait' | 'landscape'
+  paperSize?: 'A4' | 'letter' | 'legal' | 'B5'
+  margins?: { top?: number; right?: number; bottom?: number; left?: number }
+  columns?: number
+  pageColor?: string | null
+  /** combined theme (fonts+colors) from the ribbon's Themes gallery */
+  theme?: string
+  themeFonts?: string
+  themeColors?: string
+}
+
+const HOST_PAPER_SIZES: Record<string, { widthTw: number; heightTw: number }> = {
+  A4: { widthTw: 11906, heightTw: 16838 },
+  letter: { widthTw: 12240, heightTw: 15840 },
+  legal: { widthTw: 12240, heightTw: 20160 },
+  B5: { widthTw: 10394, heightTw: 14570 },
+}
+
+/** Combined themes (fonts+colors) mirroring the ribbon's Themes gallery. */
+const HOST_THEMES: Record<string, { fonts: ThemeFonts; colors: ThemeColors }> = {
+  office: {
+    fonts: { major: 'Calibri Light', minor: 'Calibri', eastAsia: '等线' },
+    colors: { name: 'Office', dk2: '44546A', lt2: 'E7E6E6', accent1: '4472C4', accent2: 'ED7D31', accent3: 'A5A5A5', accent4: 'FFC000', accent5: '5B9BD5', accent6: '70AD47' },
+  },
+  facet: {
+    fonts: { major: 'Trebuchet MS', minor: 'Trebuchet MS', eastAsia: '微软雅黑' },
+    colors: { name: 'Facet', dk2: '3E3D2D', lt2: 'E1DFDD', accent1: '90C226', accent2: '54A021', accent3: 'E6B91E', accent4: 'E76618', accent5: 'C42F1A', accent6: '918655' },
+  },
+  ion: {
+    fonts: { major: 'Century Gothic', minor: 'Century Gothic', eastAsia: '黑体' },
+    colors: { name: 'Ion', dk2: '1B587C', lt2: 'E8ECEE', accent1: '4E8542', accent2: '604878', accent3: 'C19859', accent4: 'CA7B4F', accent5: '415D6B', accent6: '8EA5AF' },
+  },
+  retrospect: {
+    fonts: { major: 'Calibri Light', minor: 'Calibri', eastAsia: '仿宋' },
+    colors: { name: 'Retrospect', dk2: '637052', lt2: 'CCDDEA', accent1: 'E48312', accent2: 'BD582C', accent3: '865640', accent4: '9B8357', accent5: 'C2BC80', accent6: '94A088' },
+  },
+}
+
+const HOST_THEME_COLOR_PRESETS_HOST: Record<string, ThemeColors> = Object.fromEntries(
+  Object.entries(HOST_THEMES).map(([k, v]) => [k, v.colors]),
+)
+
+const HOST_THEME_FONTS: Record<string, ThemeFonts> = {
+  office: { major: 'Calibri Light', minor: 'Calibri', eastAsia: '等线' },
+  songti: { major: '黑体', minor: '宋体', eastAsia: '宋体' },
+  yahei: { major: '微软雅黑', minor: '微软雅黑', eastAsia: '微软雅黑' },
+  kaiti: { major: '楷体', minor: '楷体', eastAsia: '楷体' },
+  times: { major: 'Times New Roman', minor: 'Times New Roman', eastAsia: '宋体' },
+  arial: { major: 'Arial', minor: 'Arial', eastAsia: '黑体' },
+}
+
+function describePageSetup(refs: {
+  sections: SectionInfo[]
+  section: SectionSettings | null
+  pageColor: string | null
+  themeFonts: ThemeFonts | null
+}): Record<string, unknown> {
+  const cur = refs.section
+  return {
+    ...(cur
+      ? {
+        orientation: cur.orientation,
+        pageWidthTw: cur.pageWidth,
+        pageHeightTw: cur.pageHeight,
+        marginsTw: {
+          top: cur.marginTop,
+          right: cur.marginRight,
+          bottom: cur.marginBottom,
+          left: cur.marginLeft,
+        },
+        columns: cur.columns,
+      }
+      : {}),
+    ...(refs.pageColor ? { pageColor: refs.pageColor } : {}),
+    sectionCount: refs.sections.length,
+  }
+}
+
+function applyPageSetup(
+  refs: {
+    sections: SectionInfo[]
+    section: SectionSettings | null
+    activeSection: number
+    setSection: (s: SectionSettings) => void
+    setSections: (fn: (prev: SectionInfo[]) => SectionInfo[]) => void
+    setSectionDirty: (v: boolean) => void
+    setSectionsDirty: (fn: (prev: number[]) => number[]) => void
+    setPageColor: (v: string | null) => void
+    setPageColorDirty: (v: boolean) => void
+    setThemeFonts: (v: ThemeFonts) => void
+    setThemeFontsDirty: (v: boolean) => void
+    setThemeColors: (v: ThemeColors) => void
+    setThemeColorsDirty: (v: boolean) => void
+  },
+  raw: Record<string, unknown>,
+): { ok: true; output: string; summary: string } | { ok: false; error: string } {
+  const input = raw as HostPageSetupInput
+  const summaryBits: string[] = []
+
+  // ── section-scoped settings (geometry / margins / columns) ──
+  const wantsSection =
+    input.orientation !== undefined
+    || input.paperSize !== undefined
+    || input.margins !== undefined
+    || input.columns !== undefined
+  if (wantsSection) {
+    const cur = refs.section
+    if (!cur) return { ok: false, error: 'no section settings available (empty document?)' }
+    let next: SectionSettings = { ...cur }
+    if (input.orientation && input.orientation !== cur.orientation) {
+      const long = Math.max(cur.pageWidth, cur.pageHeight)
+      const short = Math.min(cur.pageWidth, cur.pageHeight)
+      next = input.orientation === 'landscape'
+        ? { ...next, orientation: 'landscape', pageWidth: long, pageHeight: short }
+        : { ...next, orientation: 'portrait', pageWidth: short, pageHeight: long }
+      summaryBits.push(`${input.orientation} orientation`)
+    }
+    if (input.paperSize) {
+      const size = HOST_PAPER_SIZES[input.paperSize]
+      if (!size) return { ok: false, error: `paperSize must be one of ${Object.keys(HOST_PAPER_SIZES).join('/')}` }
+      const landscape = next.orientation === 'landscape'
+      next = {
+        ...next,
+        pageWidth: landscape ? size.heightTw : size.widthTw,
+        pageHeight: landscape ? size.widthTw : size.heightTw,
+      }
+      summaryBits.push(`${input.paperSize} paper`)
+    }
+    if (input.margins) {
+      const m = input.margins
+      const vals: number[] = []
+      for (const key of ['top', 'right', 'bottom', 'left'] as const) {
+        const v = m[key]
+        if (v !== undefined) {
+          if (typeof v !== 'number' || v < 0 || v > 31680) {
+            return { ok: false, error: `margins.${key} must be twips (0-31680; 1 cm = 567)` }
+          }
+          vals.push(v)
+        }
+      }
+      next = {
+        ...next,
+        ...(m.top !== undefined ? { marginTop: m.top } : {}),
+        ...(m.right !== undefined ? { marginRight: m.right } : {}),
+        ...(m.bottom !== undefined ? { marginBottom: m.bottom } : {}),
+        ...(m.left !== undefined ? { marginLeft: m.left } : {}),
+      }
+      summaryBits.push('margins')
+    }
+    if (input.columns !== undefined) {
+      if (![1, 2, 3].includes(input.columns)) {
+        return { ok: false, error: 'columns must be 1, 2 or 3' }
+      }
+      next = { ...next, columns: input.columns }
+      summaryBits.push(`${input.columns} column(s)`)
+    }
+    // flushSync: the immediate silent save below reads fileCtxRef.current,
+    // which is rebuilt during render (same timing trap as set_watermark).
+    flushSync(() => {
+      refs.setSections((prev) =>
+        prev.map((s, i) => (i === refs.activeSection ? { ...s, settings: next } : s)),
+      )
+      if (refs.sections.length <= 1 || refs.activeSection === refs.sections.length - 1) {
+        refs.setSection(next)
+        refs.setSectionDirty(true)
+      } else {
+        refs.setSectionsDirty((d) => (d.includes(refs.activeSection) ? d : [...d, refs.activeSection]))
+      }
+    })
+  }
+
+  // ── page color ──
+  if (input.pageColor !== undefined) {
+    const c = input.pageColor
+    if (c !== null && !/^[0-9A-Fa-f]{6}$/.test(c)) {
+      return { ok: false, error: 'pageColor must be 6 hex digits (no #) or null to clear' }
+    }
+    flushSync(() => {
+      refs.setPageColor(c)
+      refs.setPageColorDirty(true)
+    })
+    summaryBits.push(c ? `page color ${c}` : 'page color cleared')
+  }
+
+  // ── combined theme ──
+  if (input.theme !== undefined) {
+    const preset = HOST_THEMES[input.theme]
+    if (!preset) return { ok: false, error: `theme must be one of ${Object.keys(HOST_THEMES).join('/')}` }
+    flushSync(() => {
+      refs.setThemeFonts(preset.fonts)
+      refs.setThemeFontsDirty(true)
+      refs.setThemeColors(preset.colors)
+      refs.setThemeColorsDirty(true)
+    })
+    summaryBits.push(`${input.theme} theme`)
+  }
+
+  // ── theme fonts ──
+  if (input.themeFonts !== undefined) {
+    const preset = HOST_THEME_FONTS[input.themeFonts]
+    if (!preset) return { ok: false, error: `themeFonts must be one of ${Object.keys(HOST_THEME_FONTS).join('/')}` }
+    flushSync(() => {
+      refs.setThemeFonts(preset)
+      refs.setThemeFontsDirty(true)
+    })
+    summaryBits.push(`${input.themeFonts} theme fonts`)
+  }
+
+  // ── theme colors ──
+  if (input.themeColors !== undefined) {
+    const preset = HOST_THEME_COLOR_PRESETS_HOST[input.themeColors]
+    if (!preset) {
+      return { ok: false, error: `themeColors must be one of ${Object.keys(HOST_THEME_COLOR_PRESETS_HOST).join('/')}` }
+    }
+    flushSync(() => {
+      refs.setThemeColors(preset)
+      refs.setThemeColorsDirty(true)
+    })
+    summaryBits.push(`${input.themeColors} theme colors`)
+  }
+
+  if (summaryBits.length === 0) {
+    return { ok: false, error: 'nothing to apply: pass at least one of orientation/paperSize/margins/columns/pageColor/theme/themeFonts/themeColors' }
+  }
+  return {
+    ok: true,
+    output: `Applied: ${summaryBits.join(', ')}.`,
+    summary: 'page setup',
+  }
+}
+
 export function App() {
   const everroomEmbed = __GENOFFICE_EMBED_ONLY__
     || new URLSearchParams(window.location.search).get('mode') === 'everroom'
-  // EverRoom host opts into the embedded side dock (Agent / Materials / History)
-  const dockParam = new URLSearchParams(window.location.search).get('dock') === '1'
   // Read-only embed (host passes readonly=1): the body is view-only, like a
   // document opened under a write lock — isProtected carries it everywhere.
   const embedReadonly = everroomEmbed
@@ -3075,6 +3409,570 @@ export function App() {
     }
   }, [doc, save, autoSave])
 
+  // ── Host agent executor (EverRoom embed): the host's agent drives the same
+  // docs AI tool layer AiPanel uses, minus the network-backed async tools
+  // (embed registers no AI provider bridge). describe answers with the block
+  // list + embed-safe vocabulary + guides; apply executes calls through
+  // executeTool with the same comment/header-footer accessors, then silently
+  // saves so the host's fileSaved hook fires its version backfill. The
+  // comment/hf accessors are declared further down this component, so the
+  // request handler reads them through late-bound refs (assigned each render
+  // at their declaration site). ──
+  // ── Host-side page-setup tools (module-scope helpers live below the effect) ──
+
+  const agentCommentsRef = useRef<AiCommentsAccess | null>(null)
+  const agentHfRef = useRef<AiHeaderFooterAccess | null>(null)
+  const agentDocRefs = useRef({
+    editor,
+    doc,
+    save,
+    headingPages,
+    watermark,
+    setWatermark,
+    setWatermarkDirty,
+    sections,
+    section,
+    activeSection,
+    setSection,
+    setSections,
+    setSectionDirty,
+    setSectionsDirty,
+    pageColor,
+    setPageColor,
+    setPageColorDirty,
+    themeFonts,
+    setThemeFonts,
+    setThemeFontsDirty,
+    themeColors,
+    setThemeColors,
+    setThemeColorsDirty,
+  })
+  agentDocRefs.current = {
+    editor,
+    doc,
+    save,
+    headingPages,
+    watermark,
+    setWatermark,
+    setWatermarkDirty,
+    sections,
+    section,
+    activeSection,
+    setSection,
+    setSections,
+    setSectionDirty,
+    setSectionsDirty,
+    pageColor,
+    setPageColor,
+    setPageColorDirty,
+    themeFonts,
+    setThemeFonts,
+    setThemeFontsDirty,
+    themeColors,
+    setThemeColors,
+    setThemeColorsDirty,
+  }
+  useEffect(() => {
+    const ALLOWED_TOOLS = new Set([
+      'get_document_context',
+      'read_blocks',
+      'insert_content',
+      'replace_blocks',
+      'apply_commands',
+      'read_revisions',
+      'read_comments',
+      'reply_comment',
+      'resolve_comment',
+      'insert_chart',
+      'edit_chart',
+      'set_header_footer',
+      'set_watermark',
+      'set_page_setup',
+      'insert_image_base64',
+      'add_comment',
+      'delete_comment',
+      'insert_shape',
+      'update_toc',
+    ])
+    const offRequest = window.desktop.onAgentToolRequest?.((request) => {
+      const reply = (payload: unknown) =>
+        window.desktop.reportAgentToolReply(request.requestId, payload)
+      const { editor: liveEditor, save: liveSave } = agentDocRefs.current
+      if (!liveEditor) {
+        reply({ ok: false, error: 'no document is open' })
+        return
+      }
+      if (request.kind === 'describe') {
+        // The context the host agent receives is the freshness baseline for
+        // index-addressed writes (same contract as the panel's buildContext).
+        markDocSeen(liveEditor)
+        reply({
+          ok: true,
+          describe: {
+            context: buildDocContext(
+              liveEditor,
+              getSelectionScope(liveEditor),
+              agentCommentsRef.current?.list(),
+              agentHfRef.current?.read(),
+            ),
+            tools: [
+              ...AGENT_TOOLS.filter((tool) => ALLOWED_TOOLS.has(tool.name)).map(
+                ({ name, description, inputSchema }) => ({ name, description, inputSchema }),
+              ),
+              {
+                name: 'set_watermark',
+                description:
+                  'Set or remove the document text watermark (the diagonal gray text behind the body, '
+                  + 'e.g. "机密", "草稿"). Pass text: null to remove it.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    text: {
+                      oneOf: [
+                        { type: 'string', minLength: 1, maxLength: 200 },
+                        { type: 'null' },
+                      ],
+                      description: 'watermark text, or null to remove the watermark',
+                    },
+                  },
+                  required: ['text'],
+                },
+              },
+              {
+                name: 'set_page_setup',
+                description:
+                  'Page-level setup: paper orientation/size, margins, text columns, page background color '
+                  + 'and theme presets (fonts/colors). Margins are in twips (1 cm = 567, 1 inch = 1440). '
+                  + 'Applies to the whole document (single-section) or the active section. '
+                  + 'Pass only the fields to change.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    orientation: { type: 'string', enum: ['portrait', 'landscape'] },
+                    paperSize: { type: 'string', enum: ['A4', 'letter', 'legal', 'B5'] },
+                    margins: {
+                      type: 'object',
+                      description: 'twips; 1 cm = 567',
+                      properties: {
+                        top: { type: 'number', minimum: 0, maximum: 31680 },
+                        right: { type: 'number', minimum: 0, maximum: 31680 },
+                        bottom: { type: 'number', minimum: 0, maximum: 31680 },
+                        left: { type: 'number', minimum: 0, maximum: 31680 },
+                      },
+                    },
+                    columns: { type: 'integer', enum: [1, 2, 3] },
+                    pageColor: {
+                      oneOf: [
+                        { type: 'string', pattern: '^[0-9A-Fa-f]{6}$' },
+                        { type: 'null' },
+                      ],
+                      description: 'page background hex (no #), null to clear',
+                    },
+                    theme: {
+                      type: 'string',
+                      enum: ['office', 'facet', 'ion', 'retrospect'],
+                      description: 'combined theme (fonts + colors) from the gallery',
+                    },
+                    themeFonts: {
+                      type: 'string',
+                      enum: ['office', 'songti', 'yahei', 'kaiti', 'times', 'arial'],
+                    },
+                    themeColors: {
+                      type: 'string',
+                      enum: ['office', 'facet', 'ion', 'retrospect'],
+                    },
+                  },
+                },
+              },
+              {
+                name: 'insert_image_base64',
+                description:
+                  'Insert an image from raw base64 bytes (png/jpeg/gif) at the end of the document '
+                  + 'or after a given block index. The host fetches/generates the image and passes '
+                  + 'the bytes; width scales down automatically to a sane max.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    base64: { type: 'string', description: 'raw base64 (no data: prefix), png/jpeg/gif' },
+                    mime: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/gif'] },
+                    afterIndex: { type: 'integer', minimum: -1, description: 'insert after this block index; -1/omitted = end of document' },
+                    maxWidthPx: { type: 'integer', minimum: 16, maximum: 1200, description: 'cap width; default 480' },
+                    label: { type: 'string', maxLength: 80 },
+                  },
+                  required: ['base64', 'mime'],
+                },
+              },
+              {
+                name: 'add_comment',
+                description:
+                  'Add a comment anchored to a block index range (like selecting text then New Comment). '
+                  + 'The anchor covers the whole blocks; use one block for a precise anchor.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    startIndex: { type: 'integer', minimum: 0 },
+                    endIndex: { type: 'integer', minimum: 0 },
+                    text: { type: 'string', minLength: 1, maxLength: 2000 },
+                  },
+                  required: ['startIndex', 'text'],
+                },
+              },
+              {
+                name: 'delete_comment',
+                description:
+                  'Delete a comment thread (cascades to its replies) by top-level comment id.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', minLength: 1 },
+                  },
+                  required: ['id'],
+                },
+              },
+              {
+                name: 'insert_shape',
+                description:
+                  'Insert a preset shape from the gallery (rect, roundRect, ellipse, triangle, diamond, '
+                  + 'hexagon, pentagon, star5, arrow shapes, flowchart shapes, callouts...). '
+                  + 'Line kinds: line, lineArrow, lineArrowDouble, lineBent, lineCurved.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    prst: { type: 'string', minLength: 1 },
+                    widthEmu: { type: 'integer', minimum: 91440, maximum: 7772400, description: 'EMU; default 1800000 (~4.7cm)' },
+                    heightEmu: { type: 'integer', minimum: 91440, maximum: 7772400, description: 'EMU; default 1080000 (~2.8cm)' },
+                    afterIndex: { type: 'integer', minimum: -1, description: 'insert after this block; -1 = end of document' },
+                  },
+                  required: ['prst'],
+                },
+              },
+              {
+                name: 'update_toc',
+                description:
+                  'Rebuild the existing table-of-contents field: refresh entries from current headings '
+                  + 'and backfill real page numbers. No-op error if the document has no TOC field or no headings.',
+                inputSchema: { type: 'object', properties: {} },
+              },
+            ],
+            commandsGuide: COMMANDS_GUIDE,
+            htmlRules: HTML_RULES,
+            watermark: agentDocRefs.current.watermark,
+            pageSetup: describePageSetup(agentDocRefs.current),
+          },
+        })
+        return
+      }
+      const calls = Array.isArray(request.calls) ? request.calls : []
+      void (async () => {
+        const numIds = (): NumIds => {
+          const fallback = agentDocRefs.current.doc?.isBlank
+            ? { bullet: BLANK_BULLET_NUM_ID, ordered: BLANK_ORDERED_NUM_ID }
+            : null
+          return {
+            bullet:
+              findNumId(agentDocRefs.current.doc?.parsed.blocks ?? [], 'bullet')
+              ?? fallback?.bullet
+              ?? null,
+            ordered:
+              findNumId(agentDocRefs.current.doc?.parsed.blocks ?? [], 'ordered')
+              ?? fallback?.ordered
+              ?? null,
+          }
+        }
+        const results = []
+        let mutated = false
+        for (const call of calls.slice(0, 50)) {
+          if (!ALLOWED_TOOLS.has(call.name)) {
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: `Tool ${call.name} is not available in this embed; use one of the allowed tools`,
+              isError: true,
+            })
+            continue
+          }
+          // set_watermark is a host-side tool: the ribbon's watermark state
+          // (watermarkDirty) is app state outside ProseMirror, so it is applied
+          // here directly and picked up by the isDocDirty save below.
+          if (call.name === 'set_watermark') {
+            const text = (call.input as { text?: unknown } | undefined)?.text
+            if (text !== null && (typeof text !== 'string' || !text.trim() || text.length > 200)) {
+              results.push({
+                id: call.id,
+                name: call.name,
+                output: 'text must be a non-empty string of at most 200 characters, or null to remove the watermark',
+                isError: true,
+              })
+              continue
+            }
+            // flushSync: saveImpl reads fileCtxRef.current, which is rebuilt
+            // during render - without a synchronous flush the immediate silent
+            // save below would still see watermarkDirty:false and skip writing
+            // the watermark into the header (same timing trap as section breaks).
+            flushSync(() => {
+              agentDocRefs.current.setWatermark(text)
+              agentDocRefs.current.setWatermarkDirty(true)
+            })
+            mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: text ? `Watermark set to "${text}".` : 'Watermark removed.',
+              mutated: true,
+              summary: text ? 'set watermark' : 'remove watermark',
+            })
+            continue
+          }
+          // set_page_setup is a host-side tool: page geometry / margins /
+          // columns / page color / theme fonts / theme colors are all app
+          // state (various *Dirty flags) serialized by buildDocBytes — same
+          // pattern as set_watermark, applied via the ribbon's own setters.
+          if (call.name === 'set_page_setup') {
+            const outcome = applyPageSetup(agentDocRefs.current, call.input ?? {})
+            if (!outcome.ok) {
+              results.push({
+                id: call.id,
+                name: call.name,
+                output: outcome.error,
+                isError: true,
+              })
+              continue
+            }
+            mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: outcome.output,
+              mutated: true,
+              summary: outcome.summary,
+            })
+            continue
+          }
+          // insert_image_base64: the host (gateway) fetches/generates the
+          // image and passes raw bytes; the renderer reuses the ribbon's
+          // dataUrl insert path (size sniff + proportional scaling + genImage
+          // persistence) — no network in the embed.
+          if (call.name === 'insert_image_base64') {
+            const base64 = String((call.input as { base64?: unknown })?.base64 ?? '')
+            const mime = String((call.input as { mime?: unknown })?.mime ?? '')
+            const afterIndex = Number((call.input as { afterIndex?: unknown })?.afterIndex ?? -1)
+            const maxWidthPx = Number((call.input as { maxWidthPx?: unknown })?.maxWidthPx ?? 480)
+            const label = String((call.input as { label?: unknown })?.label ?? 'Image (agent)')
+            if (!base64 || !/^[-A-Za-z0-9+/=]+$/.test(base64)) {
+              results.push({ id: call.id, name: call.name, output: 'base64 must be non-empty standard base64', isError: true })
+              continue
+            }
+            if (!/^image\/(png|jpeg|gif)$/.test(mime)) {
+              results.push({ id: call.id, name: call.name, output: 'mime must be image/png, image/jpeg or image/gif', isError: true })
+              continue
+            }
+            const inserted = await insertAgentImage(liveEditor, {
+              base64,
+              mime,
+              afterIndex: Number.isFinite(afterIndex) ? Math.trunc(afterIndex) : -1,
+              maxWidthPx: Number.isFinite(maxWidthPx) ? Math.min(Math.max(maxWidthPx, 16), 1200) : 480,
+              label: label.slice(0, 80),
+            })
+            if (!inserted.ok) {
+              results.push({ id: call.id, name: call.name, output: inserted.error, isError: true })
+              continue
+            }
+            mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: `Inserted image (${mime}, ${inserted.widthPx}x${inserted.heightPx}px).`,
+              mutated: true,
+              summary: 'insert image',
+            })
+            continue
+          }
+          // add_comment: anchor a new comment on a block index range via the
+          // same mark pipeline as the ribbon's New Comment (submitNewComment).
+          if (call.name === 'add_comment') {
+            const startIndex = Number((call.input as { startIndex?: unknown })?.startIndex)
+            const endIndexRaw = Number((call.input as { endIndex?: unknown })?.endIndex ?? startIndex)
+            const text = String((call.input as { text?: unknown })?.text ?? '').trim()
+            if (!Number.isInteger(startIndex) || startIndex < 0 || startIndex >= liveEditor.state.doc.childCount) {
+              results.push({ id: call.id, name: call.name, output: `startIndex out of range (document has ${liveEditor.state.doc.childCount} blocks)`, isError: true })
+              continue
+            }
+            const endIndex = Math.min(
+              Number.isInteger(endIndexRaw) ? Math.max(endIndexRaw, startIndex) : startIndex,
+              liveEditor.state.doc.childCount - 1,
+            )
+            if (!text) {
+              results.push({ id: call.id, name: call.name, output: 'text must be a non-empty string', isError: true })
+              continue
+            }
+            const anchored = addAgentComment(liveEditor, {
+              startIndex,
+              endIndex,
+              text,
+              comments: commentsLiveRef.current,
+              setComments,
+              setCommentsDirty,
+              dirtyRef,
+            })
+            if (!anchored.ok) {
+              results.push({ id: call.id, name: call.name, output: anchored.error, isError: true })
+              continue
+            }
+            mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: `Comment ${anchored.id} added on blocks ${startIndex}-${endIndex}.`,
+              mutated: true,
+              summary: 'add comment',
+            })
+            continue
+          }
+          // delete_comment: cascade deletes the thread (replies + anchor marks).
+          if (call.name === 'delete_comment') {
+            const id = String((call.input as { id?: unknown })?.id ?? '')
+            if (!commentsLiveRef.current.some((c) => c.id === id)) {
+              results.push({ id: call.id, name: call.name, output: `comment ${id} does not exist`, isError: true })
+              continue
+            }
+            deleteCommentImpl(reviewCtxRef.current, id)
+            mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: `Comment thread ${id} deleted.`,
+              mutated: true,
+              summary: 'delete comment',
+            })
+            continue
+          }
+          // insert_shape: gallery preset -> the ribbon's own insertShapeAt
+          // (XML builder + textbox display model), positioned by block index.
+          if (call.name === 'insert_shape') {
+            const prst = String((call.input as { prst?: unknown })?.prst ?? '').trim()
+            const widthEmu = Number((call.input as { widthEmu?: unknown })?.widthEmu ?? 1800000)
+            const heightEmu = Number((call.input as { heightEmu?: unknown })?.heightEmu ?? 1080000)
+            const afterIndex = Number((call.input as { afterIndex?: unknown })?.afterIndex ?? -1)
+            if (!/^[a-zA-Z0-9]{2,32}$/.test(prst) || !HOST_KNOWN_SHAPE_PRSTS.has(prst)) {
+              results.push({ id: call.id, name: call.name, output: `unknown shape prst "${prst}"`, isError: true })
+              continue
+            }
+            const idx = Number.isFinite(afterIndex) ? Math.trunc(afterIndex) : -1
+            const atPos = idx >= 0 && idx < liveEditor.state.doc.childCount
+              ? blockRangePositions(liveEditor, idx, idx).to
+              : undefined
+            const pos = insertShapeAt(liveEditor, prst, {
+              widthEmu: Number.isFinite(widthEmu) ? widthEmu : undefined,
+              heightEmu: Number.isFinite(heightEmu) ? heightEmu : undefined,
+              ...(atPos !== undefined ? { atPos } : {}),
+            })
+            if (pos === null) {
+              results.push({ id: call.id, name: call.name, output: 'shape insert failed', isError: true })
+              continue
+            }
+            mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: `Inserted shape "${prst}".`,
+              mutated: true,
+              summary: 'insert shape',
+            })
+            continue
+          }
+          // update_toc: rebuild the TOC field from current headings with real
+          // page numbers (same function the References ribbon calls).
+          if (call.name === 'update_toc') {
+            const blocks = agentDocRefs.current.doc?.parsed.blocks ?? []
+            const hasToc = liveEditor.state.doc.textContent !== ''
+              && (() => {
+                let seen = false
+                liveEditor.state.doc.forEach((node) => {
+                  if (node.attrs && 'genXml' in (node.attrs as Record<string, unknown>)) {
+                    const xml = String((node.attrs as { genXml?: unknown }).genXml ?? '')
+                    if (/<w:instrText[^>]*>\s*TOC[\s\\]/.test(xml)) seen = true
+                  }
+                })
+                return seen
+              })()
+            if (!hasToc) {
+              results.push({ id: call.id, name: call.name, output: 'no TOC field found in the document (insert one first, e.g. apply_commands insertToc)', isError: true })
+              continue
+            }
+            try {
+              updateTocField(liveEditor, blocks, agentDocRefs.current.headingPages)
+              mutated = true
+              results.push({
+                id: call.id,
+                name: call.name,
+                output: 'TOC rebuilt from current headings (page numbers backfilled).',
+                mutated: true,
+                summary: 'update toc',
+              })
+            } catch (error) {
+              results.push({
+                id: call.id,
+                name: call.name,
+                output: error instanceof Error ? error.message : String(error),
+                isError: true,
+              })
+            }
+            continue
+          }
+          try {
+            const execution = await executeTool(
+              liveEditor,
+              { id: call.id, name: call.name, input: call.input ?? {} },
+              numIds(),
+              undefined,
+              undefined,
+              undefined,
+              agentCommentsRef.current ?? undefined,
+              agentHfRef.current ?? undefined,
+            )
+            if (execution.mutated) mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: execution.output,
+              isError: execution.isError === true,
+              mutated: execution.mutated === true,
+              summary: execution.summary,
+            })
+          } catch (error) {
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: error instanceof Error ? error.message : String(error),
+              isError: true,
+            })
+          }
+        }
+        // silent save (never prompts; a pathless doc would land in the default
+        // folder — hosts only drive executor edits on already-open library files).
+        // Save on the composite dirty check, not just per-tool mutated flags:
+        // comments/header-footer/watermark tools mutate app state only and the
+        // host gate guarantees the doc was clean before this batch ran.
+        let saved = true
+        if (mutated || isDocDirty(fileCtxRef.current)) {
+          try {
+            await liveSave(false, true)
+          } catch {
+            saved = false
+          }
+        }
+        reply({
+          ok: true,
+          results,
+          ...(mutated && !saved ? { error: 'applied but the silent save failed' } : {}),
+        })
+      })()
+    })
+    return () => {
+      offRequest?.()
+    }
+  }, [])
+
   // autosave: every 30s and on window blur, silently persist pending changes
   useEffect(() => {
     if (tornDown || !autoSave || !doc || !doc.filePath) return
@@ -3670,6 +4568,8 @@ export function App() {
     }),
     [],
   )
+  // late binding for the host agent executor effect (declared earlier)
+  agentCommentsRef.current = aiCommentsAccess
 
   // AI header/footer tool: reads the live HF state and writes through the same
   // commit path as on-canvas editing (variant routing, per-section edits, dirty flags).
@@ -3737,6 +4637,8 @@ export function App() {
     }),
     [],
   )
+  // late binding for the host agent executor effect (declared earlier)
+  agentHfRef.current = aiHfAccess
 
   const ribbonActions = useStableCallbacks({
     allocateNumId: (kind: 'bullet' | 'ordered') => allocateListNumId(kind),
@@ -4348,9 +5250,6 @@ export function App() {
             </div>
           </footer>
         </div>
-        {everroomEmbed && dockParam && (
-          <SideDock kind="docs" fileName={doc?.fileName ?? undefined} />
-        )}
       </div>
 
       {showShortcuts && <ShortcutsDialog onClose={() => setShowShortcuts(false)} />}
