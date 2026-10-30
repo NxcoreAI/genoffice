@@ -553,6 +553,36 @@ export const cfRuleSchema = z.discriminatedUnion('kind', [
     kind: z.literal('dataBar'),
     color: hexColorSchema.optional(),
   }),
+  z.object({
+    kind: z.literal('iconSet'),
+    /** OOXML icon set: 3Arrows / 3TrafficLights1 / 3Signs / 4Arrows / 4RedToBlack / 5Quarters / 5Rating … */
+    iconSet: z.enum([
+      '3Arrows',
+      '3ArrowsGray',
+      '3Flags',
+      '3TrafficLights1',
+      '3TrafficLights2',
+      '3Signs',
+      '3Symbols',
+      '3Symbols2',
+      '4Arrows',
+      '4ArrowsGray',
+      '4RedToBlack',
+      '4Rating',
+      '4TrafficLights',
+      '5Arrows',
+      '5ArrowsGray',
+      '5Quarters',
+      '5Rating',
+    ]),
+    /** show the cell values next to the icons (default true) */
+    showValue: z.boolean().optional(),
+    /** descending greaterThanOrEqual thresholds; length = icon count - 1; default percentile split */
+    thresholds: z
+      .array(z.object({ type: z.enum(['num', 'percent', 'percentile']), value: z.number().finite() }))
+      .max(4)
+      .optional(),
+  }),
 ])
 
 const addConditionalFormatSchema = z.object({
@@ -623,6 +653,30 @@ const setPageSetupSchema = z.object({
   printHeadings: z.boolean().optional(),
   /** A1 range to print; null clears the print area */
   printArea: cellRangeSchema.nullable().optional(),
+  /** Rows repeated at the top of every printed page, e.g. "1:2"; null clears */
+  printTitles: z.string().regex(/^\d+(:\d+)?$/).nullable().optional(),
+  /** Printed header sections; text carries Excel codes (&P page, &N pages, &D date, &A sheet name); null clears */
+  header: z
+    .object({
+      left: z.string().max(255).optional(),
+      center: z.string().max(255).optional(),
+      right: z.string().max(255).optional(),
+    })
+    .nullable()
+    .optional(),
+  /** Printed footer sections; same codes as header; null clears */
+  footer: z
+    .object({
+      left: z.string().max(255).optional(),
+      center: z.string().max(255).optional(),
+      right: z.string().max(255).optional(),
+    })
+    .nullable()
+    .optional(),
+  /** Manual page breaks: 0-based index of the LAST ROW printed on the page */
+  rowBreaks: z.array(z.number().int().min(0).max(1048574)).max(50).optional(),
+  /** Manual page breaks: 0-based index of the last column printed on the page */
+  colBreaks: z.array(z.number().int().min(0).max(16383)).max(50).optional(),
 })
 
 // Cell note (legacy comment): text null removes the note.
@@ -1838,6 +1892,8 @@ function cfRuleLabel(rule: CfRule): string {
       return rule.formula
     case 'colorScale':
       return `color scale ${rule.minColor} → ${rule.maxColor}`
+    case 'iconSet':
+      return rule.iconSet
     case 'dataBar':
       return `data bar${rule.color ? ` ${rule.color}` : ''}`
   }

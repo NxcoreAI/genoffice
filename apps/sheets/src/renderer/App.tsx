@@ -159,10 +159,14 @@ import type { ApplyOutcome, ChangePlan } from '../domain/workbook.types'
 import { createElectronTransport } from './ai/transport'
 import {
   MAX_READ_RANGE_CELLS,
+  WORKBOOK_TOOLS,
+  buildWorkbookContext,
+  executeWorkbookTool,
   type ActiveSheetInfo,
   type FrozenSelection,
   type SheetsSkillDeps,
 } from './ai/tools'
+import { GUIDE_CATALOG } from './ai/guides'
 import type { AiChatMessage } from './ai/AiChatPanel'
 import { parseSheetNavHref } from './ai/sheet-nav'
 import {
@@ -3192,6 +3196,23 @@ export function App(): React.JSX.Element {
           if (op.printGridlines !== undefined) patch.printGridlines = op.printGridlines
           if (op.printHeadings !== undefined) patch.printHeadings = op.printHeadings
           if (op.printArea !== undefined) patch.printArea = op.printArea
+          if (op.printTitles !== undefined) patch.printTitles = op.printTitles
+          if (op.header !== undefined) {
+            patch.header = op.header === null ? null : {
+              ...(op.header.left !== undefined ? { left: op.header.left } : {}),
+              ...(op.header.center !== undefined ? { center: op.header.center } : {}),
+              ...(op.header.right !== undefined ? { right: op.header.right } : {}),
+            }
+          }
+          if (op.footer !== undefined) {
+            patch.footer = op.footer === null ? null : {
+              ...(op.footer.left !== undefined ? { left: op.footer.left } : {}),
+              ...(op.footer.center !== undefined ? { center: op.footer.center } : {}),
+              ...(op.footer.right !== undefined ? { right: op.footer.right } : {}),
+            }
+          }
+          if (op.rowBreaks !== undefined) patch.rowBreaks = op.rowBreaks
+          if (op.colBreaks !== undefined) patch.colBreaks = op.colBreaks
           // Scale and fit-to-page are exclusive; whichever the op sets wins,
           // and a fit on one axis keeps the other axis' prior value.
           if (op.scale !== undefined) {
@@ -4368,6 +4389,92 @@ export function App(): React.JSX.Element {
       after === null || journalSize(after.editJournal) === 0,
     )
   }
+
+  // ── Host agent executor (EverRoom embed): the host's agent drives the same
+  // workbook AI tool layer AiChatPanel uses. describe answers with the
+  // workbook context + tool vocabulary + full guide bodies (load_guide is
+  // pointless over the bridge — the host agent cannot hold per-run state, so
+  // the guides ride along once). apply executes calls through
+  // executeWorkbookTool with the same deps the local loop gets; after a
+  // mutating propose_operations the pending auto-applies are awaited and the
+  // journal silently drained via handleSave so the host's fileSaved hook fires
+  // its version backfill. ──
+  useEffect(() => {
+    const offRequest = window.desktopApi?.onAgentToolRequest?.((request) => {
+      const reply = (payload: unknown) =>
+        window.desktopApi?.reportAgentToolReply?.(request.requestId, payload)
+      if (request.kind === 'describe') {
+        if (READONLY_EMBED) {
+          reply({ ok: false, error: 'this workbook is open read-only' })
+          return
+        }
+        reply({
+          ok: true,
+          describe: {
+            context: buildWorkbookContext(sheetsSkillDeps()),
+            tools: WORKBOOK_TOOLS.map(({ name, description, inputSchema }) => ({
+              name,
+              description,
+              inputSchema,
+            })),
+            guides: Object.fromEntries(
+              Object.entries(GUIDE_CATALOG).map(([name, entry]) => [name, entry.content]),
+            ),
+          },
+        })
+        return
+      }
+      const calls = Array.isArray(request.calls) ? request.calls : []
+      void (async () => {
+        const results = []
+        let mutated = false
+        for (const call of calls.slice(0, 50)) {
+          try {
+            const execution = await executeWorkbookTool(
+              { id: call.id, name: call.name, input: call.input ?? {} },
+              sheetsSkillDeps(),
+            )
+            if (execution.mutated) mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: execution.output,
+              isError: execution.isError === true,
+              mutated: execution.mutated === true,
+              summary: execution.summary,
+            })
+          } catch (error) {
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: error instanceof Error ? error.message : String(error),
+              isError: true,
+            })
+          }
+        }
+        // Wait for every auto-applied plan, then silently drain the journal.
+        // The host only drives edits on already-open library workbooks; a
+        // failed save is reported instead of claimed as persisted.
+        let saved = true
+        if (mutated) {
+          try {
+            await autoSaveCompletedAiRun()
+          } catch {
+            saved = false
+          }
+        }
+        reply({
+          ok: true,
+          results,
+          ...(mutated && !saved ? { error: 'applied but the silent save failed' } : {}),
+        })
+      })()
+    })
+    return () => {
+      offRequest?.()
+    }
+    // refs only: sheetsSkillDeps/autoSaveCompletedAiRun read live refs
+  }, [])
   function sortColumnOptions(): { label: string; colIndex: number }[] {
     const range = univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveRange()
     if (!range) return []

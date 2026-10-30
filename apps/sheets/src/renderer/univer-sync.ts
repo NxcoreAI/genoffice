@@ -611,6 +611,47 @@ export function applyAiConditionalFormat(
     )
     return
   }
+  if (rule.kind === 'iconSet') {
+    const iconCount = Number(rule.iconSet[0]) // "3Arrows" -> 3
+    // default: equal percentile split (Excel's default for most sets)
+    const defaults = Array.from({ length: iconCount - 1 }, (_, i) => ({
+      type: 'percentile' as const,
+      value: Math.round((100 * (i + 1)) / iconCount),
+    }))
+    const thresholds =
+      rule.thresholds && rule.thresholds.length === iconCount - 1 ? rule.thresholds : defaults
+    // Univer's iconConfigs run best-first; thresholds run ascending (worst first)
+    const configs = []
+    for (let i = iconCount - 1; i >= 0; i -= 1) {
+      configs.push({
+        iconType: rule.iconSet,
+        iconId: String(i),
+        operator: 'greaterThanOrEqual',
+        value:
+          i === 0
+            ? { type: CFValueType.min }
+            : {
+              type:
+                thresholds[i - 1]?.type === 'num'
+                  ? CFValueType.num
+                  : thresholds[i - 1]?.type === 'percent'
+                    ? CFValueType.percent
+                    : CFValueType.percentile,
+              value: thresholds[i - 1]?.value ?? 0,
+            },
+      })
+    }
+    worksheet.addConditionalFormattingRule(
+      builder
+        .setIconSet({
+          iconConfigs: configs as Parameters<typeof builder.setIconSet>[0]['iconConfigs'],
+          isShowValue: rule.showValue ?? true,
+        })
+        .setRanges(ranges)
+        .build(),
+    )
+    return
+  }
   if (rule.kind === 'dataBar') {
     worksheet.addConditionalFormattingRule(
       builder

@@ -1,4 +1,3 @@
-import { SideDock } from '../../../side-dock-shared/SideDock'
 import { useEffect, useRef, useState } from 'react'
 import { platformShortcuts } from '@genoffice/i18n'
 import { Dropdown, SHAPE_GALLERY_GROUPS, ShapePreview, useDismissablePopover } from '@genoffice/ui'
@@ -110,7 +109,6 @@ const CHART_TEXT_LABELS: Record<ChartTextTarget, { heading: StringKey; command: 
 /// mode=tab: embedded in the shell's tab strip, which owns the traffic
 /// lights / caption buttons — the ribbon must not reserve space for them.
 const IN_TAB = new URLSearchParams(window.location.search).get('mode') === 'tab'
-const DOCK_ON = new URLSearchParams(window.location.search).get('dock') === '1'
 const IS_MAC = navigator.platform.toLowerCase().includes('mac')
 
 /// Excel's grow/shrink font walks its size ladder, not ±1.
@@ -693,9 +691,6 @@ export function ExcelShell({
             </div>
           </footer>
         </div>
-        {DOCK_ON && (
-          <SideDock kind="sheets" />
-        )}
       </div>
       {showFormatCells && (
         <FormatCellsDialog
