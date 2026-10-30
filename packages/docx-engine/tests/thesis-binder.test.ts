@@ -181,4 +181,195 @@ describe('thesis-binder', () => {
     expect(document).not.toContain('Keywords: ')
     expect(document).not.toContain('<w:t>附录')
   })
+
+  it('parts 分页规则生效（部件换页+每章换页）且固定行距写入 exact', async () => {
+    const source = await sourceDocx()
+    const spec: ThesisBindingSpecInput = {
+      title: '基于ARM的嵌入式系统设计',
+      coverFields: { title: '基于ARM的嵌入式系统设计' },
+      abstractZh: '摘要正文。',
+      keywordsZh: ['嵌入式'],
+      abstractEn: 'Abstract body.',
+      keywordsEn: ['Embedded'],
+      chapters: [
+        { level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 },
+        { level: 1, headingText: '总结与展望', blockStart: 5, blockEnd: 7 },
+      ],
+      references: ['[1] 作者. 书名[M]. 出版社, 2024.'],
+      appendixBlocks: null,
+      acknowledgementParagraphs: ['感谢导师指导。'],
+      achievements: [],
+    }
+    const card: ThesisFormatCardInput = {
+      ...CARD,
+      base: {
+        font: CARD.base.font,
+        paragraph: { ...CARD.base.paragraph, lineSpacingExactPt: 22 },
+      },
+      parts: [
+        { type: 'abstract_zh', title: '摘  要', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'abstract_en', title: 'Abstract', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'toc', title: '目  录', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'chapter', title: '', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'references', title: '参考文献', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+        { type: 'acknowledgement', title: '谢辞', titleFont: font('黑体', 16, true), breakBefore: 'page', optional: false },
+      ],
+    }
+    const bytes = await buildThesisDocx(source, card, spec)
+    const { document } = await unzipXml(bytes)
+
+    // 自定义部件标题与标题字体生效
+    expect(document).toContain('摘  要')
+    expect(document).toContain('目  录')
+    expect(document).toContain('谢辞')
+
+    // 部件换页：承诺书（无规则不换）→ 摘要/Abstract(题目行)/目录/参考文献/致谢 → 5 处
+    // 章级换页：两个一级章标题 → 2 处（首章在节首，Word 规范下不再额外分页，但属性仍写出）
+    const breaks = document.match(/<w:pageBreakBefore\/>/g) ?? []
+    expect(breaks.length).toBe(7)
+
+    // 固定行距 22 磅 = 440 twips，lineRule=exact
+    expect(document).toContain('w:lineRule="exact"')
+    expect(document).toMatch(/w:line="440"/)
+    expect(document).not.toMatch(/w:lineRule="auto"[^/]*\/><\/w:spacing>/)
+  })
+})
+
+describe('thesis-binder · 未归类内容（v2 映射兜底）', () => {
+  it('未匹配块渲染为正文末尾的独立小节，且红色高亮标记', async () => {
+    const source = await sourceDocx()
+    const spec: ThesisBindingSpecInput = {
+      title: '开题与需求、系统设计报告',
+      coverFields: { title: '开题与需求、系统设计报告' },
+      abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 1 }],
+      references: [],
+      appendixBlocks: null,
+      acknowledgementParagraphs: [],
+      achievements: [],
+      unmatchedBlocks: [{ start: 1, end: 3, label: '位于首个章节之前的说明段' }],
+    }
+    const bytes = await buildThesisDocx(source, CARD, spec)
+    const { document } = await unzipXml(bytes)
+
+    // 小节标题 + 说明都在，且带高亮
+    expect(document).toContain('未归类内容（模板无对应槽位，请人工归位）')
+    expect(document).toContain('〔未匹配：位于首个章节之前的说明段〕')
+    expect(document).toContain('w:highlight w:val="yellow"')
+    expect(document).toContain('w:color w:val="C00000"')
+    // 未匹配块的内容没有丢
+    expect(document).toContain('选题背景的正文段落。')
+    expect(document).toContain('相关研究现状。')
+    // 标记小节排在参考文献/致谢之后（正文末尾）
+    expect(document.indexOf('未归类内容')).toBeGreaterThan(document.indexOf('致谢'))
+  })
+
+  it('没有未匹配块时不生成该小节', async () => {
+    const source = await sourceDocx()
+    const spec: ThesisBindingSpecInput = {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 }],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+    }
+    const bytes = await buildThesisDocx(source, CARD, spec)
+    const { document } = await unzipXml(bytes)
+    expect(document).not.toContain('未归类内容')
+  })
+})
+
+describe('thesis-binder · 模板编号方案（v2 编号重算）', () => {
+  const baseSpec = (): ThesisBindingSpecInput => ({
+    title: '开题与需求、系统设计报告',
+    coverFields: {},
+    abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+    chapters: [
+      { level: 1, headingText: '业务场景分析', blockStart: 0, blockEnd: 1 },
+      { level: 2, headingText: '政策与业务背景', blockStart: 1, blockEnd: 2 },
+      { level: 2, headingText: '业务痛点', blockStart: 2, blockEnd: 3 },
+      { level: 1, headingText: '需求梳理', blockStart: 3, blockEnd: 4 },
+    ],
+    references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+  })
+
+  it('中文编号方案：一、/（一）/二、/（一）', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'cn-upper' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('一、业务场景分析')
+    expect(document).toContain('（一）政策与业务背景')
+    expect(document).toContain('（二）业务痛点')
+    expect(document).toContain('二、需求梳理')
+  })
+
+  it('十进制树编号：1 / 1.1 / 1.2 / 2', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'decimal-tree' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('1 业务场景分析')
+    expect(document).toContain('1.1 政策与业务背景')
+    expect(document).toContain('2 需求梳理')
+  })
+
+  it('none：不生成编号（原编号已由网关剥离）', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'none' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('业务场景分析')
+    expect(document).not.toContain('一、业务场景分析')
+    expect(document).not.toContain('1 业务场景分析')
+  })
+
+  it('两级计数独立递增，回退一级时二级归零', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, { ...CARD, numbering: { scheme: 'decimal-tree' } }, baseSpec())
+    const { document } = await unzipXml(bytes)
+    expect(document.indexOf('1.1 政策')).toBeLessThan(document.indexOf('1.2 业务痛点'))
+    expect(document).toContain('2 需求梳理')
+    // 第二个一级标题之后没有二级标题，不应出现 "2.1"
+    expect(document).not.toContain('2.1 ')
+  })
+})
+
+describe('thesis-binder · 融合模式与标题层级映射', () => {
+  it('严格模式：正文按模版样式重建（不保留原格式）', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, CARD, {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 }],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+    })
+    const { document } = await unzipXml(bytes)
+    // 原文档里的段落文字仍会出现（重建为模版样式）
+    expect(document).toContain('选题背景的正文段落。')
+  })
+
+  it('融合模式已移除：正文一律按模版样式重建（不再有 preserveSourceFormat 开关）', async () => {
+    const source = await sourceDocx()
+    const spec = {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      chapters: [{ level: 1 as const, headingText: '前言', blockStart: 0, blockEnd: 3 }],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+    }
+    expect('preserveSourceFormat' in spec).toBe(false)
+    const bytes = await buildThesisDocx(source, CARD, spec)
+    const { document } = await unzipXml(bytes)
+    expect(document).toContain('选题背景的正文段落。')
+    expect(document).toContain('相关研究现状。')
+  })
+
+  it('标题层级映射：二级标题改为一级时输出 Heading1 样式', async () => {
+    const source = await sourceDocx()
+    const bytes = await buildThesisDocx(source, CARD, {
+      title: '论文', coverFields: {}, abstractZh: '', keywordsZh: [], abstractEn: '', keywordsEn: [],
+      // 源文档第二节本来按 level 2 传入，调用方（网关映射）已把它改写成 1
+      chapters: [
+        { level: 1, headingText: '前言', blockStart: 0, blockEnd: 3 },
+        { level: 1, headingText: '硬件系统框图', blockStart: 3, blockEnd: 4 },
+      ],
+      references: [], appendixBlocks: null, acknowledgementParagraphs: [], achievements: [],
+    })
+    const { document } = await unzipXml(bytes)
+    const headingRuns = document.match(/<w:pStyle w:val="Heading1"\/>/g) ?? []
+    expect(headingRuns.length).toBeGreaterThanOrEqual(2)
+  })
 })

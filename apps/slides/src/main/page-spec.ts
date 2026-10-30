@@ -22,6 +22,7 @@ import {
   promoteSlideBackground,
   savePptx,
   setElementEffects,
+  setSlideNotes,
   setElementFill,
   type Paragraph,
   type TableElement,
@@ -52,6 +53,7 @@ const SHAPE_KINDS = new Set([
   'upArrow',
   'downArrow',
   'chevron',
+  'homePlate',
   'diamond',
   'parallelogram',
   'trapezoid',
@@ -98,6 +100,7 @@ const CHART_KINDS = new Set<string>([
   'bar',
   'barStacked',
   'line',
+  'area',
   'pie',
   'doughnut',
   'scatter',
@@ -128,6 +131,8 @@ interface SpecBase {
 export interface SpecShape extends SpecBase {
   type: 'shape'
   shape: string
+  /** roundRect corner radius as the prst adj (1/1000 %, 50000 = pill); absent = OOXML default 16.67% of short side */
+  adj?: number
   fill?: string
   /** Linear gradient fill; replaces the solid fill when present. */
   gradient?: SpecGradient
@@ -155,12 +160,24 @@ export interface SpecImage extends SpecBase {
    */
   fit?: 'cover' | 'contain'
   shadow?: SpecShadowTier
+  /** Rounded-card corner adjust (1/1000 %, 0–50000); absent = square corners. */
+  radiusAdj?: number
+  /** Circular crop (ellipse geometry); wins over radiusAdj. */
+  circle?: boolean
+  /** Cover-crop focal point (0–100, percentages of the image); absent = centered. */
+  focus?: { x: number; y: number }
+  /** Duotone recolor pair [shadowColor, highlightColor] (srgbClr hex). */
+  duotone?: [string, string]
+  /** Grayscale recolor (<a:grayscl/>). */
+  grayscale?: boolean
 }
 
 export type SpecChartKind =
   | 'bar'
   | 'barStacked'
   | 'line'
+  /** Filled trend area (c:areaChart, standard grouping) */
+  | 'area'
   | 'pie'
   | 'doughnut'
   /** XY scatter: x from numeric categories, y from series values */
@@ -177,9 +194,26 @@ export interface SpecChart extends SpecBase {
   series: Array<{ name: string; values: number[] }>
   /** Series colors (pie/doughnut: per-point); omit for theme defaults. */
   colors?: string[]
+  /** Per-point fills [seriesIdx][pointIdx] (sparse; null = theme default); bar highlight uses this. */
+  pointColors?: Array<Array<string | null>>
   legend?: boolean
   dataLabels?: boolean
   gridlines?: boolean
+  /** Chart theme tokens: axis/legend/data-label colors and sizes (dark/branded decks). */
+  axis?: {
+    labelColor?: string
+    labelSizePt?: number
+    lineColor?: string
+    gridColor?: string
+    legendColor?: string
+    legendSizePt?: number
+    dataLabelColor?: string
+    dataLabelSizePt?: number
+    /** 值轴主刻度步长（c:majorUnit）；给出后刻度密度不再由绘图区尺寸自动推。 */
+    majorUnit?: number
+    /** 隐藏值轴刻度标签（数据标签已直接标注时，值轴只剩噪音）。 */
+    hideValueAxis?: boolean
+  }
 }
 
 /** Baked vector icon (Heroicons solid) rendered as a custom-geometry shape. */
@@ -240,6 +274,8 @@ export type SpecElement = SpecShape | SpecText | SpecImage | SpecChart | SpecIco
 
 export interface PageSpec {
   background?: string
+  /** Speaker notes (notesSlide body); omitted = no notes. */
+  notes?: string
   elements: SpecElement[]
 }
 
@@ -337,6 +373,8 @@ const CLUSTER_CONTAIN_TOL_PX = 3
  * 估算求簇顶/簇底；上下留白差超过阈值时整簇下移差值的一半，使上下留白
  * 均衡。只平移 y、不改簇内相对间距；inkBoxes 同步平移，保证其后的墨迹
  * 重叠校验看到的就是最终几何。图文混排的卡不动（基线模型不同，保守起见）。
+ * 图标与文字同为簇成员：图标常钉在文字行首（利弊清单的钩/叉、画像要点），
+ * 只平移文字会把图标留在原位、与行首错开。
  */
 function centerTextClustersInCards(elements: SpecElement[], inkBoxes: TextInkBox[]): void {
   const cards = elements.filter((el): el is SpecShape =>
@@ -365,7 +403,8 @@ function centerTextClustersInCards(elements: SpecElement[], inkBoxes: TextInkBox
       && el.y >= inner.y - CLUSTER_CONTAIN_TOL_PX
       && el.x + el.w <= inner.x + inner.w + CLUSTER_CONTAIN_TOL_PX
       && el.y + el.h <= inner.y + inner.h + CLUSTER_CONTAIN_TOL_PX)
-    const members = contained.filter((el): el is SpecText => el.type === 'text' && !inInner(el))
+    const members = contained.filter((el): el is SpecText | SpecIcon =>
+      (el.type === 'text' || el.type === 'icon') && !inInner(el))
     if (members.length === 0) continue
     const inks = members
       .map((el) => inkByIdx.get(elements.indexOf(el)))
@@ -555,8 +594,49 @@ export function parsePageSpec(
       if (el.fit !== undefined && el.fit !== 'cover' && el.fit !== 'contain') {
         warnings.push(`element ${i}: image fit must be cover|contain, ignored`)
       }
+      const radiusAdjRaw = num(el.radiusAdj)
+      const radiusAdj =
+        radiusAdjRaw !== undefined ? Math.max(0, Math.min(50000, Math.round(radiusAdjRaw))) : undefined
+      if (el.radiusAdj !== undefined && radiusAdj === undefined) {
+        warnings.push(`element ${i}: image radiusAdj must be a number (0-50000), ignored`)
+      }
+      // circle 赢过 radiusAdj（网关 normalize 层已保证二者不同时出现）。
+      const circle = el.circle === true
+      const grayscale = el.grayscale === true
+      const focusRaw = asRecord(el.focus)
+      const fx = num(focusRaw.x)
+      const fy = num(focusRaw.y)
+      const focus =
+        fx !== undefined || fy !== undefined
+          ? {
+              x: Math.min(Math.max(fx ?? 50, 0), 100),
+              y: Math.min(Math.max(fy ?? 50, 0), 100),
+            }
+          : undefined
+      if (el.focus !== undefined && focus === undefined) {
+        warnings.push(`element ${i}: image focus must be {x,y} numbers (0-100), ignored`)
+      }
+      const duoRaw = Array.isArray(el.duotone) ? el.duotone : []
+      const duotone =
+        duoRaw.length === 2 && normColor(duoRaw[0]) && normColor(duoRaw[1])
+          ? [normColor(duoRaw[0])!, normColor(duoRaw[1])!]
+          : undefined
+      if (el.duotone !== undefined && !duotone) {
+        warnings.push(`element ${i}: image duotone needs two valid colors, ignored`)
+      }
       images += 1
-      elements.push({ type: 'image', url, fit, ...base, ...(shadow ? { shadow } : {}) })
+      elements.push({
+        type: 'image',
+        url,
+        fit,
+        ...base,
+        ...(shadow ? { shadow } : {}),
+        ...(radiusAdj !== undefined && !circle ? { radiusAdj } : {}),
+        ...(circle ? { circle } : {}),
+        ...(focus ? { focus } : {}),
+        ...(duotone ? { duotone } : {}),
+        ...(grayscale ? { grayscale } : {}),
+      })
       continue
     }
 
@@ -617,6 +697,10 @@ export function parsePageSpec(
         ? { color: strokeColor, widthPt: Math.min(Math.max(strokeWidth ?? 1, 0.25), 24) }
         : undefined
       const isLine = shape === 'line' || shape === 'lineArrow'
+      const adjRaw = num(el.adj)
+      const adj = shape === 'roundRect' && adjRaw !== undefined
+        ? Math.max(0, Math.min(50000, Math.round(adjRaw)))
+        : undefined
       if (!fill && !gradient && !stroke && !isLine) {
         warnings.push(`element ${i}: shape without fill or stroke, dropped`)
         continue
@@ -634,6 +718,7 @@ export function parsePageSpec(
         type: 'shape',
         shape,
         ...base,
+        ...(adj !== undefined ? { adj } : {}),
         ...(fill ? { fill } : {}),
         ...(gradient ? { gradient } : {}),
         ...(stroke ? { stroke } : {}),
@@ -694,6 +779,37 @@ export function parsePageSpec(
         .map(normColor)
         .filter((c): c is string => !!c)
         .slice(0, 8)
+      // Per-point fills [seriesIdx][pointIdx]; sparse — null cells fall back to
+      // the series color. Cells that fail normColor are dropped (null).
+      const pointColors = Array.isArray(el.pointColors)
+        ? (el.pointColors as unknown[])
+            .slice(0, MAX_CHART_SERIES)
+            .map((row) =>
+              Array.isArray(row) ? (row as unknown[]).map((c) => normColor(c ?? null) ?? null) : null,
+            )
+            .filter((row): row is Array<string | null> => Array.isArray(row))
+        : undefined
+      const axisRaw = asRecord(el.axis)
+      const axisNumber = (value: unknown): number | undefined => {
+        const n = num(value)
+        return n === undefined ? undefined : Math.min(Math.max(n, 6), 24)
+      }
+      const axis = axisRaw
+        ? {
+            ...(normColor(axisRaw.labelColor) ? { labelColor: normColor(axisRaw.labelColor)! } : {}),
+            ...(axisNumber(axisRaw.labelSizePt) !== undefined ? { labelSizePt: axisNumber(axisRaw.labelSizePt)! } : {}),
+            ...(normColor(axisRaw.lineColor) ? { lineColor: normColor(axisRaw.lineColor)! } : {}),
+            ...(normColor(axisRaw.gridColor) ? { gridColor: normColor(axisRaw.gridColor)! } : {}),
+            ...(normColor(axisRaw.legendColor) ? { legendColor: normColor(axisRaw.legendColor)! } : {}),
+            ...(axisNumber(axisRaw.legendSizePt) !== undefined ? { legendSizePt: axisNumber(axisRaw.legendSizePt)! } : {}),
+            ...(normColor(axisRaw.dataLabelColor) ? { dataLabelColor: normColor(axisRaw.dataLabelColor)! } : {}),
+            ...(axisNumber(axisRaw.dataLabelSizePt) !== undefined ? { dataLabelSizePt: axisNumber(axisRaw.dataLabelSizePt)! } : {}),
+            ...(typeof axisRaw.majorUnit === 'number' && Number.isFinite(axisRaw.majorUnit) && axisRaw.majorUnit > 0
+              ? { majorUnit: axisRaw.majorUnit }
+              : {}),
+            ...(axisRaw.hideValueAxis === true ? { hideValueAxis: true } : {}),
+          }
+        : undefined
       elements.push({
         type: 'chart',
         chart: kind as SpecChartKind,
@@ -702,9 +818,11 @@ export function parsePageSpec(
         categories,
         series,
         ...(colors.length ? { colors } : {}),
+        ...(pointColors ? { pointColors } : {}),
         ...(el.legend === true || el.legend === false ? { legend: el.legend } : {}),
         ...(el.dataLabels === true ? { dataLabels: true } : {}),
         ...(el.gridlines === true ? { gridlines: true } : {}),
+        ...(axis ? { axis } : {}),
       })
       continue
     }
@@ -945,6 +1063,7 @@ export function parsePageSpec(
     ok: true,
     spec: {
       ...(normColor(root.background) ? { background: normColor(root.background) } : {}),
+      ...(typeof root.notes === 'string' && root.notes.trim() ? { notes: root.notes.trim().slice(0, 2000) } : {}),
       elements,
     },
     warnings,
@@ -1088,6 +1207,7 @@ function toEngineParagraphs(paragraphs: SpecParagraph[]): Paragraph[] {
       ...(r.italic ? { italic: true } : {}),
       ...(r.color ? { color: r.color } : {}),
       ...(r.font ? { fontFamily: r.font, latinFont: r.font, eaFont: r.font } : {}),
+      ...(r.letterSpacing ? { letterSpacing: r.letterSpacing } : {}),
     }))
     return {
       runs,
@@ -1186,7 +1306,18 @@ export async function buildPagePptx(
           cy: h,
         }
       }
-      const pic = addPicture(opened, slide, { bytes: img.bytes, ext: img.ext, offset: placeAt })
+      const pic = addPicture(opened, slide, {
+        bytes: img.bytes,
+        ext: img.ext,
+        offset: placeAt,
+        ...(el.circle
+          ? { geometry: { prst: 'ellipse' as const } }
+          : el.radiusAdj !== undefined
+            ? { geometry: { prst: 'roundRect' as const, adj: el.radiusAdj } }
+            : {}),
+        ...(el.duotone ? { duotone: el.duotone } : {}),
+        ...(el.grayscale ? { grayscale: true } : {}),
+      })
       if (!pic) {
         imageFailures.push(el.url)
         continue
@@ -1194,7 +1325,28 @@ export async function buildPagePptx(
       if (el.shadow) applyShadow(pic.id, el.shadow)
       if (el.fit !== 'contain' && dims) {
         const crop = coverCropFractions(dims.width, dims.height, el.w, el.h)
-        if (crop) editPictureSrcRect(slide, pic.id, crop)
+        // focus biases the crop window toward the focal point (0-100 of the
+        // image); with the default center (50/50) it reduces to the symmetric crop.
+        if (crop && el.focus) {
+          const centered = { ...crop }
+          if (crop.l + crop.r > 0) {
+            const total = crop.l + crop.r
+            const fx = Math.min(Math.max(el.focus.x, 0), 100) / 100
+            const l = Math.min(Math.max(fx - (1 - total) / 2 - 0, 0), total)
+            centered.l = l
+            centered.r = total - l
+          }
+          if (crop.t + crop.b > 0) {
+            const total = crop.t + crop.b
+            const fy = Math.min(Math.max(el.focus.y, 0), 100) / 100
+            const t = Math.min(Math.max(fy - (1 - total) / 2, 0), total)
+            centered.t = t
+            centered.b = total - t
+          }
+          editPictureSrcRect(slide, pic.id, centered)
+        } else if (crop) {
+          editPictureSrcRect(slide, pic.id, crop)
+        }
       }
       continue
     }
@@ -1224,9 +1376,20 @@ export async function buildPagePptx(
               ...(isPieLike ? { pointColors: [el.colors] } : {}),
             }
           : {}),
+        ...(el.pointColors ? { pointColors: el.pointColors } : {}),
         legendPos: wantLegend ? 'b' : 'none',
         ...(el.dataLabels ? { dataLabels: true } : {}),
         ...(el.gridlines ? { gridlines: true } : {}),
+        ...(el.axis?.labelColor ? { axisLabelColor: el.axis.labelColor } : {}),
+        ...(el.axis?.labelSizePt ? { axisLabelSizePt: el.axis.labelSizePt } : {}),
+        ...(el.axis?.lineColor ? { axisLineColor: el.axis.lineColor } : {}),
+        ...(el.axis?.gridColor ? { gridColor: el.axis.gridColor } : {}),
+        ...(el.axis?.legendColor ? { legendColor: el.axis.legendColor } : {}),
+        ...(el.axis?.legendSizePt ? { legendSizePt: el.axis.legendSizePt } : {}),
+        ...(el.axis?.dataLabelColor ? { dataLabelColor: el.axis.dataLabelColor } : {}),
+        ...(el.axis?.dataLabelSizePt ? { dataLabelSizePt: el.axis.dataLabelSizePt } : {}),
+        ...(el.axis?.majorUnit !== undefined ? { valAxisMajorUnit: el.axis.majorUnit } : {}),
+        ...(el.axis?.hideValueAxis === true ? { hideValAxisLabels: true } : {}),
       })
       if (r) slide = r.slide
       continue
@@ -1333,6 +1496,7 @@ export async function buildPagePptx(
     const added = addElement(slide, {
       kind: el.shape,
       offset,
+      ...(el.adj !== undefined ? { adj: el.adj } : {}),
       ...(el.fill && !el.gradient ? { fillColor: el.fill } : {}),
       ...(el.stroke
         ? {
@@ -1352,6 +1516,7 @@ export async function buildPagePptx(
   }
 
   promoteSlideBackground(slide, opened.deck.size)
+  if (spec.notes) setSlideNotes(opened, 0, spec.notes)
   let bytes = await savePptx(opened)
   if (deps.fontMetrics) bytes = (await growTextBoxesAndValidate(bytes, deps.fontMetrics)) ?? bytes
   return { bytes, imageFailures }

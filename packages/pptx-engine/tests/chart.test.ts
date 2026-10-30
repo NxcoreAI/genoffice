@@ -844,3 +844,40 @@ describe('category tick skips', () => {
     expect(m.catAxis?.tickMarkSkip).toBe(192)
   })
 })
+
+describe('value-axis tick control (majorUnit / hidden labels)', () => {
+  const BASE = {
+    kind: 'bar' as const,
+    categories: ['A', 'B'],
+    series: [{ name: 'v', values: [2.7, 3.87] }],
+    offset: { x: 0, y: 0, cx: 100, cy: 100 },
+  }
+
+  it('writes c:majorUnit into every value axis and survives a parse round-trip', () => {
+    const xml = buildChartSpaceXml({ ...BASE, valAxisMajorUnit: 0.5 })
+    expect(xml).toContain('<c:majorUnit val="0.5"/>')
+    // 必须落在 valAx 内、且在 crossAx 之后（CT_ValAx 的元素顺序）
+    expect(xml).toMatch(/<c:valAx>[\s\S]*<c:crossAx[^>]*\/>[\s\S]*<c:majorUnit val="0.5"\/><\/c:valAx>/)
+    expect(parseChartXml(xml)!.valAxis?.majorUnit).toBe(0.5)
+  })
+
+  it('omits c:majorUnit by default (auto ticks unchanged)', () => {
+    expect(buildChartSpaceXml(BASE)).not.toContain('<c:majorUnit')
+  })
+
+  it('hideValAxisLabels writes tickLblPos=none before spPr', () => {
+    const xml = buildChartSpaceXml({ ...BASE, hideValAxisLabels: true })
+    const valAx = xml.match(/<c:valAx>[\s\S]*?<\/c:valAx>/)![0]
+    expect(valAx).toContain('<c:tickLblPos val="none"/>')
+    // tickLblPos 在 CT_ValAx 里排在 spPr 之前
+    expect(valAx.indexOf('<c:tickLblPos')).toBeLessThan(valAx.indexOf('<c:spPr>'))
+    // 类目轴不受影响
+    expect(xml).not.toMatch(/<c:catAx>[\s\S]*?<c:tickLblPos val="none"\/>[\s\S]*?<\/c:catAx>/)
+  })
+
+  it('ignores non-positive or non-finite units instead of writing garbage', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(buildChartSpaceXml({ ...BASE, valAxisMajorUnit: bad })).not.toContain('<c:majorUnit')
+    }
+  })
+})

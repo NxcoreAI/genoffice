@@ -68,6 +68,8 @@ import type {
   DocsTabInfo,
   MenuCommand,
   OpenDocxResult,
+  ThesisPanelCard,
+  ThesisPanelOutcome,
 } from '../shared/ipc'
 import { ATTACHMENT_IMAGE_EXTS } from '../shared/ipc'
 import { findDocxPath } from '../shared/open-file'
@@ -2825,6 +2827,58 @@ function notifyFileSaved(wc: WebContents, filePath: string): void {
 }
 
 /**
+ * EverRoom embed host hook: thesis format panel calls from the renderer's AI
+ * tab. The host resolves room and file from the calling view's webContents id,
+ * so the payload carries no ids. Absent hook (standalone) → 'no_room'.
+ */
+export type DocsThesisPanelAction =
+  | { kind: 'list' }
+  | { kind: 'pick'; overwrite?: boolean }
+  | { kind: 'remove'; cardId: string }
+  /** 删除模版：文件 + 格式卡；keepCard=true 只删文件、保留格式卡。 */
+  | { kind: 'delete-template'; cardId: string; keepCard?: boolean }
+  | { kind: 'reformat'; cardId?: string }
+  | {
+      kind: 'reformat-job'
+      cardId?: string
+      options?: {
+        keepLogo?: boolean
+        keepHeaderFooter?: boolean
+        aiFill?: boolean
+        headingMapping?: { chapter?: number; section?: number; subsection?: number }
+      }
+    }
+  | { kind: 'reformat-job-status'; jobId: string }
+  | { kind: 'preview-template'; cardId: string }
+
+let thesisPanelHook:
+  | ((wcId: number, action: DocsThesisPanelAction) => Promise<ThesisPanelOutcome<unknown>>)
+  | null = null
+
+export function setDocsThesisPanelHook(
+  hook:
+    | ((wcId: number, action: DocsThesisPanelAction) => Promise<ThesisPanelOutcome<unknown>>)
+    | null,
+): void {
+  thesisPanelHook = hook
+}
+
+async function runThesisPanel<T>(
+  wcId: number,
+  action: DocsThesisPanelAction,
+): Promise<ThesisPanelOutcome<T>> {
+  if (!thesisPanelHook) {
+    return { ok: false, reason: 'no_room', message: 'thesis panel is not available in this build' }
+  }
+  const outcome = await thesisPanelHook(wcId, action).catch((error: unknown) => ({
+    ok: false as const,
+    reason: 'error' as const,
+    message: error instanceof Error ? error.message : String(error),
+  }))
+  return outcome as ThesisPanelOutcome<T>
+}
+
+/**
  * Fired when a docx is opened INSIDE an existing tab (File > Open dialog or an
  * explicit path open). Sheets and slides have had this hook from the start;
  * docs only synced the tab on save-as/first-save, so a file opened into an
@@ -3020,6 +3074,53 @@ export function registerDocsIpc(): void {
   ipcMain.handle('docs:font-metrics', (_event, family: string) =>
     typeof family === 'string' ? familyVerticalMetrics(family) : null,
   )
+
+  // EverRoom embed: AI tab thesis panel (no-op outcome when no host hook).
+  ipcMain.handle('docs:thesis-list', (event) =>
+    runThesisPanel<ThesisPanelCard[]>(event.sender.id, { kind: 'list' }))
+  ipcMain.handle('docs:thesis-pick', (event, overwrite?: boolean) =>
+    runThesisPanel<{
+      canceled: boolean
+      cardId: string
+      sourceName: string
+      factGaps?: string[]
+      /** true = 同名模版已存在（宿主未解析），UI 需弹「替换 / 取消」 */
+      duplicate?: boolean
+    }>(event.sender.id, { kind: 'pick', ...(overwrite ? { overwrite: true } : {}) }))
+  ipcMain.handle('docs:thesis-remove', (event, cardId: string) =>
+    runThesisPanel<null>(event.sender.id, { kind: 'remove', cardId }))
+  ipcMain.handle('docs:thesis-delete-template', (event, cardId: string, keepCard?: boolean) =>
+    runThesisPanel<{ fileDeleted: boolean; hadFile: boolean; cardKept: boolean }>(
+      event.sender.id,
+      { kind: 'delete-template', cardId, ...(keepCard ? { keepCard: true } : {}) },
+    ))
+  ipcMain.handle('docs:thesis-reformat', (event, cardId: string | null) =>
+    runThesisPanel<{ originalName: string }>(event.sender.id, { kind: 'reformat', cardId: cardId ?? undefined }))
+  ipcMain.handle(
+    'docs:thesis-reformat-job',
+    (event, cardId: string | null, options?: Parameters<typeof runThesisPanel>[1] extends never ? never : {
+      keepLogo?: boolean
+      keepHeaderFooter?: boolean
+      aiFill?: boolean
+      headingMapping?: { chapter?: number; section?: number; subsection?: number }
+    }) =>
+      runThesisPanel<{ jobId: string; phase: string }>(event.sender.id, {
+        kind: 'reformat-job',
+        cardId: cardId ?? undefined,
+        options,
+      }),
+  )
+  ipcMain.handle('docs:thesis-preview', (event, cardId: string) =>
+    runThesisPanel<{ opened: boolean; reason?: string }>(event.sender.id, { kind: 'preview-template', cardId }))
+  ipcMain.handle('docs:thesis-reformat-job-status', (event, jobId: string) =>
+    runThesisPanel<{
+      id: string
+      status: 'running' | 'completed' | 'failed'
+      phase: string
+      progress: number
+      result?: unknown
+      error?: string
+    }>(event.sender.id, { kind: 'reformat-job-status', jobId }))
 
   ipcMain.handle('docs:open', async (event) => {
     const result = await openDialog(event, {

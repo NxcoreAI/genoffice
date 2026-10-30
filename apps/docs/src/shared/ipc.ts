@@ -350,4 +350,73 @@ export interface DesktopApi {
   reportCloseSaveResult(ok: boolean): void
   /** keep the native View menu's checkbox items in sync with renderer state */
   reportViewMenuState(state: { aiSidebar: boolean; darkCanvas: boolean }): void
+  /**
+   * EverRoom embed only: thesis format panel. The host resolves room and file
+   * from this view's webContents id, so the renderer passes no ids.
+   */
+  thesisListCards(): Promise<ThesisPanelOutcome<ThesisPanelCard[]>>
+  thesisPickTemplate(overwrite?: boolean): Promise<
+    ThesisPanelOutcome<{
+      canceled: boolean
+      cardId: string
+      sourceName: string
+      factGaps?: string[]
+      /** 同名模版已存在：宿主尚未解析，UI 弹「替换原文件 / 取消上传」 */
+      duplicate?: boolean
+    }>
+  >
+  thesisRemoveCard(cardId: string): Promise<ThesisPanelOutcome<null>>
+  /** 删除模版：keepCard=true 只删模版文件、保留格式卡。 */
+  thesisDeleteTemplate(
+    cardId: string,
+    keepCard?: boolean,
+  ): Promise<ThesisPanelOutcome<{ fileDeleted: boolean; hadFile: boolean; cardKept: boolean }>>
+  thesisReformatJob(
+    cardId?: string,
+    options?: {
+      keepLogo?: boolean
+      keepHeaderFooter?: boolean
+      /** 允许 AI 补写空白小节（默认关）。 */
+      aiFill?: boolean
+      headingMapping?: { chapter?: number; section?: number; subsection?: number }
+    },
+  ): Promise<
+    ThesisPanelOutcome<{ jobId: string; phase: string }>
+  >
+  /** 真预览：宿主用自带 Office 渲染器打开模板原文件（多页、表格、图片完整）。 */
+  thesisPreviewTemplate(cardId: string): Promise<
+    ThesisPanelOutcome<{ opened: boolean; reason?: string }>
+  >
+  thesisReformatJobStatus(jobId: string): Promise<
+    ThesisPanelOutcome<{
+      id: string
+      status: 'running' | 'completed' | 'failed'
+      phase: string
+      progress: number
+      result?: unknown
+      error?: string
+    }>
+  >
+  thesisReformat(
+    cardId?: string,
+  ): Promise<ThesisPanelOutcome<{ originalName: string; report?: Record<string, unknown> }>>
+  onThesisCardsChanged(handler: () => void): () => void
 }
+
+/** One thesis format card as shown in the AI tab panel. */
+export interface ThesisPanelCard {
+  id: string
+  sourceName: string
+  updatedAt: string
+  card: Record<string, unknown>
+  /** 模版来源文件 id（资料区文件）；直传解析的模版为 null/缺省。 */
+  sourceFileEntryId?: string | null
+}
+
+/**
+ * Thesis panel call result: 'no_room' = the open document is not bound to an
+ * EverRoom room (panel shows a hint instead of the card list).
+ */
+export type ThesisPanelOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: 'no_room' | 'error'; message?: string }
