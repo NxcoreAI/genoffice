@@ -655,6 +655,37 @@ function runSetHeadingLevel(
     }
     if (cmd.level > 0) attrs.level = cmd.level
     tr.setNodeMarkup(b.pos, type, attrs)
+    // Promoting to a heading must let the heading style own the look: shed
+    // the runs' direct font/size (same Word-like semantics as the ribbon's
+    // applyParagraphStyle — inline font-size would otherwise mask the h1/h2
+    // sizes entirely, which is exactly what happens on documents whose body
+    // runs carry explicit rPr, common in CJK templates and AI-generated docs).
+    // Demoting (level 0) keeps run properties untouched.
+    if (cmd.level > 0) {
+      const markType = schema.marks.docTextStyle
+      const from = b.pos + 1
+      const to = b.pos + b.node.nodeSize - 1
+      const jobs: Array<{ from: number; to: number; attrs: Record<string, unknown> | null }> = []
+      b.node.nodesBetween(0, b.node.content.size, (node, offset) => {
+        if (!node.isText) return
+        const m = node.marks.find((mm) => mm.type === markType)
+        if (!m) return
+        if (
+          m.attrs.color == null &&
+          m.attrs.sizeHalfPoints == null &&
+          m.attrs.font == null &&
+          m.attrs.fontAscii == null
+        )
+          return
+        const next = { ...m.attrs, color: null, sizeHalfPoints: null, font: null, fontAscii: null }
+        const keep = Object.values(next).some((v) => v !== null)
+        jobs.push({ from: from + offset, to: from + offset + node.nodeSize, attrs: keep ? next : null })
+      })
+      for (const job of jobs) {
+        tr.removeMark(job.from, job.to, markType)
+        if (job.attrs) tr.addMark(job.from, job.to, markType.create(job.attrs))
+      }
+    }
     changed++
   }
   return { command: 'setHeadingLevel', matched: matched.length, changed, skippedProtected }

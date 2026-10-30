@@ -43,6 +43,10 @@ export const IPC_CHANNELS = {
   pendingEditsChanged: 'workbook:pending-edits',
   closeSaveRequest: 'workbook:close-save-request',
   closeSaveResult: 'workbook:close-save-result',
+  /** Host agent executor (EverRoom): main → renderer describe/apply requests */
+  agentToolRequest: 'workbook:agent-tool-request',
+  /** Host agent executor: renderer → main replies */
+  agentToolResult: 'workbook:agent-tool-result',
   exportPdf: 'workbook:export-pdf',
   exportCsv: 'workbook:export-csv',
   csvSaveConfirm: 'workbook:csv-save-confirm',

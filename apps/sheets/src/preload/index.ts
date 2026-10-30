@@ -355,6 +355,34 @@ const desktopApi: DesktopApi = {
   reportCloseSaveResult(ok) {
     ipcRenderer.send(IPC_CHANNELS.closeSaveResult, ok === true)
   },
+  /** Host agent executor: main forwards describe/apply; reply via reportAgentToolReply */
+  onAgentToolRequest(callback) {
+    const listener = (_event: unknown, request: unknown): void => {
+      if (isRecord(request) && typeof request.requestId === 'string') {
+        callback({
+          requestId: request.requestId,
+          kind: request.kind === 'describe' ? 'describe' : 'apply',
+          calls: Array.isArray(request.calls)
+            ? (request.calls as unknown[])
+                .filter((call) => isRecord(call) && typeof call.id === 'string' && typeof call.name === 'string')
+                .map((call) => ({
+                  id: String((call as Record<string, unknown>).id),
+                  name: String((call as Record<string, unknown>).name),
+                  input:
+                    isRecord((call as Record<string, unknown>).input)
+                      ? ((call as Record<string, unknown>).input as Record<string, unknown>)
+                      : {},
+                }))
+            : undefined,
+        })
+      }
+    }
+    ipcRenderer.on(IPC_CHANNELS.agentToolRequest, listener)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.agentToolRequest, listener)
+  },
+  reportAgentToolReply(requestId, reply) {
+    ipcRenderer.send(IPC_CHANNELS.agentToolResult, { requestId, reply })
+  },
   onRecoveryPrompt(callback) {
     const listener = (_event: unknown, payload: unknown): void => {
       if (

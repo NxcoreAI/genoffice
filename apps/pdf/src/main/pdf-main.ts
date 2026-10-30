@@ -1474,7 +1474,9 @@ export function createPdfView(
     void view.webContents.loadURL(url.toString())
   } else if (runtime.rendererFile) {
     void view.webContents.loadFile(runtime.rendererFile, {
-      query: options?.readonly ? { readonly: '1' } : {},
+      query: {
+        ...(options?.readonly ? { readonly: '1' } : {}),
+      },
     })
   }
   return view

@@ -1,7 +1,9 @@
 /** Stable Electron host entry for embedding GenOffice Sheets in a WebContentsView. */
 export {
+  applyAgentWorkbookTools,
   configureSheetsRuntime,
   createSheetsView,
+  describeAgentWorkbook,
   hasActiveQueuedWorkbook,
   queueWorkbookForView,
   registerSheetsIpc,
@@ -11,4 +13,9 @@ export {
   setSheetsShellWindow,
   sheetsPendingEditCount,
   stopSheetsSidecar,
+} from './sheets-main'
+export type {
+  SheetsAgentDescribeResult,
+  SheetsAgentToolCall,
+  SheetsAgentToolResult,
 } from './sheets-main'

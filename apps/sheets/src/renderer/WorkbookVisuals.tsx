@@ -18,7 +18,13 @@ import {
 import { parseAddress } from '../domain/cell-address'
 import { ColorDropdown } from './ColorDropdown'
 import { t } from './i18n/locale'
-import type { WorkbookChartEdit, WorkbookFile, WorkbookVisualObject } from '../shared/desktop-api'
+import { cachedVisualMediaUrl, loadVisualMediaUrl } from './visual-media-cache'
+import type {
+  WorkbookChartEdit,
+  WorkbookFile,
+  WorkbookMediaRequest,
+  WorkbookVisualObject,
+} from '../shared/desktop-api'
 
 type UniverRuntime = ReturnType<typeof createUniver>
 type ActiveWorkbook = NonNullable<ReturnType<UniverRuntime['univerAPI']['getActiveWorkbook']>>
@@ -1451,24 +1457,42 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes
 }
 
+/// Reads one visual's bytes and returns a data URL (metafiles rasterize to
+/// PNG first). Cached per (session, visual) by visual-media-cache.
+async function readVisualMediaUrl({
+  sessionId,
+  visualId,
+}: WorkbookMediaRequest): Promise<string | null> {
+  const media = await window.desktopApi.readWorkbookMedia({ sessionId, visualId })
+  return isMetafileMime(media.mediaType)
+    ? metafileToDataUrl(base64ToBytes(media.base64), media.mediaType)
+    : `data:${media.mediaType};base64,${media.base64}`
+}
+
 /// Lazily fetches a visual's media bytes as a data URL (metafiles rasterize
-/// to PNG first). Pass an undefined sessionId to skip fetching.
+/// to PNG first). Pass an undefined sessionId to skip fetching. Re-mounts
+/// (scroll re-installs the float layer) paint the cached URL immediately
+/// instead of flashing the loading placeholder.
 function useWorkbookMediaUrl(
   sessionId: string | undefined,
   visualId: string,
 ): { url: string | null; unavailable: boolean } {
-  const [url, setUrl] = useState<string | null>(null)
+  const [url, setUrl] = useState<string | null>(() => cachedVisualMediaUrl(sessionId, visualId))
   const [unavailable, setUnavailable] = useState(false)
 
   useEffect(() => {
     if (sessionId === undefined) return
+    const cached = cachedVisualMediaUrl(sessionId, visualId)
+    if (cached) {
+      setUrl(cached)
+      setUnavailable(false)
+      return
+    }
     let isCurrent = true
-    void window.desktopApi
-      .readWorkbookMedia({ sessionId, visualId })
-      .then(async (media) => {
-        const next = isMetafileMime(media.mediaType)
-          ? await metafileToDataUrl(base64ToBytes(media.base64), media.mediaType)
-          : `data:${media.mediaType};base64,${media.base64}`
+    setUrl(null)
+    setUnavailable(false)
+    void loadVisualMediaUrl(sessionId, visualId, readVisualMediaUrl)
+      .then((next) => {
         if (!isCurrent) return
         if (next) setUrl(next)
         else setUnavailable(true)

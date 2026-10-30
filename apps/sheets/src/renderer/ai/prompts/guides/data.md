@@ -29,6 +29,7 @@ All operations below are **layout-class**: they can share a batch with content/f
 - `{kind:"formula", formula:"=B2>100", format}` — formula starts with =, written with relative references anchored at the range's top-left cell
 - `{kind:"colorScale", minColor:"#63BE7B", midColor?, maxColor:"#F8696B"}` — color scale (no format field)
 - `{kind:"dataBar", color?}` — data bar (no format field)
+- `{kind:"iconSet", iconSet:"3TrafficLights1", showValue?, thresholds?}` — icon set (no format field); iconSet one of 3Arrows/3ArrowsGray/3Flags/3TrafficLights1/3TrafficLights2/3Signs/3Symbols/3Symbols2/4Arrows/4ArrowsGray/4RedToBlack/4Rating/4TrafficLights/5Arrows/5ArrowsGray/5Quarters/5Rating; thresholds default to an equal percentile split, pass `{type:"num"|"percent"|"percentile", value}[]` (length = icon count - 1, ascending) to customize
 
 format: `{fillColor?, fontColor?, bold?, italic?}` with at least one property. Highlight colors follow the low-saturation principle (light background, dark text), e.g. red #FFC7CE/#9C0006, green #C6EFCE/#006100, yellow #FFEB9C/#9C6500.
 

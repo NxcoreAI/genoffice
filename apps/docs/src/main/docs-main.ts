@@ -4108,6 +4108,8 @@ export function createDocsWindow(openPath?: string): BrowserWindow {
     closeCheckWaiters.delete(webContentsId)
     closeSaveWaiters.get(webContentsId)?.(false)
     closeSaveWaiters.delete(webContentsId)
+    agentToolWaiters.get(webContentsId)?.forEach((w) => w({ ok: false, error: 'view closed' }))
+    agentToolWaiters.delete(webContentsId)
     if (mainWindow === win) {
       mainWindow = BrowserWindow.getAllWindows().find((w) => w !== win) ?? null
       if (!mainWindow) rendererReady = false
@@ -4170,6 +4172,123 @@ ipcMain.on('docs:close-save-result', (event, ok: unknown) => {
   closeSaveWaiters.delete(event.sender.id)
   waiter(ok === true)
 })
+
+// ── Host agent executor (EverRoom): the host's agent (gateway) drives the
+// docs AI tool layer living in the renderer. Same request/reply shape as the
+// close guard above, but bidirectional and per-request keyed: several tool
+// calls may be in flight per webContents, so waiters key on a requestId.
+// Slides' agent-edit.ts is the architectural template (describe → apply →
+// silent save → fileSaved hook fires the host's version backfill). ──
+
+export interface DocsAgentToolCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+export interface DocsAgentToolResult {
+  id: string
+  name: string
+  output: string
+  isError?: boolean
+  mutated?: boolean
+  summary?: string
+}
+
+export interface DocsAgentDescribeResult {
+  /** latest block list + stats + selection (buildDocContext output) */
+  context: string
+  /** tool vocabulary + input schemas (AGENT_TOOLS, embed-safe subset) */
+  tools?: { name: string; description: string; inputSchema: Record<string, unknown> }[]
+  /** apply_commands guide + HTML fragment rules for content tools */
+  commandsGuide?: string
+  htmlRules?: string
+  /** current text watermark, null when the document has none */
+  watermark?: string | null
+  /** current page setup (orientation/paper/margins/columns/pageColor) */
+  pageSetup?: Record<string, unknown>
+}
+
+interface DocsAgentReply {
+  ok: boolean
+  describe?: DocsAgentDescribeResult
+  results?: DocsAgentToolResult[]
+  error?: string
+}
+
+const agentToolWaiters = new Map<number, Map<string, (reply: DocsAgentReply) => void>>()
+const AGENT_TOOL_TIMEOUT_MS = 120_000
+let agentRequestSeq = 0
+
+ipcMain.on('docs:agent-tool-result', (event, payload: unknown) => {
+  const p = payload as { requestId?: unknown; reply?: unknown } | null
+  if (typeof p?.requestId !== 'string') return
+  const waiter = agentToolWaiters.get(event.sender.id)?.get(p.requestId)
+  if (!waiter) return
+  agentToolWaiters.get(event.sender.id)?.delete(p.requestId)
+  waiter((p.reply ?? { ok: false, error: 'malformed reply' }) as DocsAgentReply)
+})
+
+function requestRendererAgentAction<T>(
+  contents: WebContents,
+  kind: 'describe' | 'apply',
+  body: { calls?: DocsAgentToolCall[] },
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const requestId = `agent-${++agentRequestSeq}-${Date.now()}`
+    let byRequest = agentToolWaiters.get(contents.id)
+    if (!byRequest) {
+      byRequest = new Map()
+      agentToolWaiters.set(contents.id, byRequest)
+      // release waiters when the view goes away (mirrors the close-guard cleanup)
+      contents.once('destroyed', () => {
+        const pending = agentToolWaiters.get(contents.id)
+        agentToolWaiters.delete(contents.id)
+        pending?.forEach((w) => w({ ok: false, error: 'view closed' }))
+      })
+    }
+    const timer = setTimeout(() => {
+      agentToolWaiters.get(contents.id)?.delete(requestId)
+      resolve({ ok: false, error: 'renderer did not reply in time' } as T)
+    }, AGENT_TOOL_TIMEOUT_MS)
+    byRequest.set(requestId, (reply) => {
+      clearTimeout(timer)
+      resolve(reply as T)
+    })
+    contents.send('docs:agent-tool-request', { requestId, kind, ...body })
+  })
+}
+
+/** Fresh document description for the host agent: block list context plus the
+ * embed-safe tool vocabulary and guides (no LLM round-trip involved). */
+export async function describeAgentDoc(
+  contents: WebContents,
+): Promise<DocsAgentDescribeResult | { error: string }> {
+  const reply = await requestRendererAgentAction<DocsAgentReply>(contents, 'describe', {})
+  if (!reply.ok || !reply.describe) return { error: reply.error ?? 'describe failed' }
+  return reply.describe
+}
+
+/** Execute a batch of docs AI tool calls on the live renderer document; the
+ * renderer auto-saves on mutation so the host's fileSaved hook fires the
+ * version backfill. Async network-backed tools (web_search / image_search /
+ * generate_image / insert_image / create_document) are rejected renderer-side:
+ * embed mode registers no AI provider bridge for them. */
+export async function applyAgentDocTools(
+  contents: WebContents,
+  calls: DocsAgentToolCall[],
+): Promise<{ results: DocsAgentToolResult[] } | { error: string }> {
+  const safeCalls = calls
+    .filter((c) => typeof c?.name === 'string' && c.name && typeof c?.id === 'string' && c.id)
+    .slice(0, 50)
+    .map((c) => ({ id: c.id, name: c.name, input: c.input ?? {} }))
+  if (safeCalls.length === 0) return { error: 'no valid tool calls' }
+  const reply = await requestRendererAgentAction<DocsAgentReply>(contents, 'apply', {
+    calls: safeCalls,
+  })
+  if (!reply.ok || !reply.results) return { error: reply.error ?? 'apply failed' }
+  return { results: reply.results }
+}
 
 /** Ask the renderer for pre-close state (dirty flag + autosave switch); no reply within 2s
  * fails CLOSED — a busy or wedged renderer may well hold unsaved changes, so the caller
@@ -4319,7 +4438,10 @@ export function createDocsView(
     void view.webContents.loadURL(devUrl.toString())
   } else {
     void view.webContents.loadFile(runtime.rendererFile, {
-      query: options?.readonly ? { mode: hostMode, readonly: '1' } : { mode: hostMode },
+      query: {
+        mode: hostMode,
+        ...(options?.readonly ? { readonly: '1' } : {}),
+      },
     })
   }
   // view.webContents becomes undefined after destroy, so grab the id beforehand
@@ -4331,6 +4453,8 @@ export function createDocsView(
     closeCheckWaiters.delete(wcId)
     closeSaveWaiters.get(wcId)?.(false)
     closeSaveWaiters.delete(wcId)
+    agentToolWaiters.get(wcId)?.forEach((w) => w({ ok: false, error: 'view closed' }))
+    agentToolWaiters.delete(wcId)
   })
   return view
 }

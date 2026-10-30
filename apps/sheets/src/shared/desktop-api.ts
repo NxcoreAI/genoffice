@@ -2512,6 +2512,15 @@ export interface DesktopApi {
   /// Main asks the renderer to save before closing; reply via reportCloseSaveResult.
   onCloseSaveRequest(callback: () => void): () => void
   reportCloseSaveResult(ok: boolean): void
+  /**
+   * Host agent executor (EverRoom embed): main forwards describe/apply requests
+   * from the host's agent bridge. describe -> reportAgentToolReply with
+   * { ok, describe }; apply -> { ok, results }. The renderer executes the
+   * workbook AI tool layer locally (executeWorkbookTool) and silently saves
+   * after mutating operations.
+   */
+  onAgentToolRequest(callback: (request: SheetsAgentToolRequest) => void): () => void
+  reportAgentToolReply(requestId: string, reply: unknown): void
   /// Main found a newer autosaved recovery copy while opening a workbook; the
   /// renderer shows the styled restore prompt and replies via replyRecoveryPrompt.
   /// Strings arrive pre-localized from the main process.
@@ -2586,4 +2595,18 @@ export interface ImageSearchResponse {
 export interface GenerateImageResult {
   url?: string
   error?: string
+}
+
+/** One workbook tool call forwarded by the host agent through the main process. */
+export interface SheetsAgentToolRequestCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+/** describe (context + vocabulary + guides) or apply (execute tool calls) request. */
+export interface SheetsAgentToolRequest {
+  requestId: string
+  kind: 'describe' | 'apply'
+  calls?: SheetsAgentToolRequestCall[] | undefined
 }

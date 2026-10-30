@@ -1818,7 +1818,10 @@ export function createSheetsView(
     void view.webContents.loadURL(devUrl.toString())
   } else {
     void view.webContents.loadFile(runtime.rendererFile, {
-      query: options.readonly ? { mode: 'tab', readonly: '1' } : { mode: 'tab' },
+      query: {
+        mode: 'tab',
+        ...(options.readonly ? { readonly: '1' } : {}),
+      },
     })
   }
   return view
@@ -1969,6 +1972,117 @@ export function sheetsPendingEditCount(webContentsId: number): number {
   return pendingEditCounts.get(webContentsId) ?? 0
 }
 
+// ── Host agent executor (EverRoom): the host's agent (gateway) drives the
+// workbook AI tool layer living in the renderer — the same describe → apply →
+// silent save shape as slides' agent-edit.ts and docs' executor. describe
+// returns the workbook context + tool vocabulary + guides; apply executes
+// workbook tool calls (reads and propose_operations) locally, and the renderer
+// drains the edit journal into a silent save so the host's fileSaved hook
+// fires its version backfill. ──
+
+export interface SheetsAgentToolCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+export interface SheetsAgentToolResult {
+  id: string
+  name: string
+  output: string
+  isError?: boolean
+  mutated?: boolean
+  summary?: string
+}
+
+export interface SheetsAgentDescribeResult {
+  /** workbook overview: sheets, extents, selection, known cells */
+  context: string
+  /** tool vocabulary + input schemas (WORKBOOK_TOOLS) */
+  tools?: { name: string; description: string; inputSchema: Record<string, unknown> }[]
+  /** load_guide catalog + per-guide bodies so the host agent never guesses op fields */
+  guides?: Record<string, string>
+}
+
+interface SheetsAgentReply {
+  ok: boolean
+  describe?: SheetsAgentDescribeResult
+  results?: SheetsAgentToolResult[]
+  error?: string
+}
+
+const agentToolWaiters = new Map<number, Map<string, (reply: SheetsAgentReply) => void>>()
+const SHEETS_AGENT_TOOL_TIMEOUT_MS = 120_000
+let agentRequestSeq = 0
+
+function requestRendererAgentAction<T extends SheetsAgentReply>(
+  contents: WebContents,
+  kind: 'describe' | 'apply',
+  body: { calls?: SheetsAgentToolCall[] },
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const requestId = `sheets-agent-${++agentRequestSeq}-${Date.now()}`
+    let byRequest = agentToolWaiters.get(contents.id)
+    if (!byRequest) {
+      byRequest = new Map()
+      agentToolWaiters.set(contents.id, byRequest)
+      contents.once('destroyed', () => {
+        const pending = agentToolWaiters.get(contents.id)
+        agentToolWaiters.delete(contents.id)
+        pending?.forEach((w) => w({ ok: false, error: 'view closed' }))
+      })
+    }
+    const timer = setTimeout(() => {
+      agentToolWaiters.get(contents.id)?.delete(requestId)
+      resolve({ ok: false, error: 'renderer did not reply in time' } as T)
+    }, SHEETS_AGENT_TOOL_TIMEOUT_MS)
+    byRequest.set(requestId, (reply) => {
+      clearTimeout(timer)
+      resolve(reply as T)
+    })
+    contents.send(IPC_CHANNELS.agentToolRequest, { requestId, kind, ...body })
+  })
+}
+
+/** Fresh workbook description for the host agent: context, vocabulary, guides. */
+export async function describeAgentWorkbook(
+  contents: WebContents,
+): Promise<SheetsAgentDescribeResult | { error: string }> {
+  const reply = await requestRendererAgentAction<SheetsAgentReply>(contents, 'describe', {})
+  if (!reply.ok || !reply.describe) return { error: reply.error ?? 'describe failed' }
+  return reply.describe
+}
+
+/** Execute a batch of workbook AI tool calls on the live renderer workbook.
+ * propose_operations auto-applies and the renderer silently saves on success
+ * (journal drained), so the host's fileSaved hook fires the version backfill. */
+export async function applyAgentWorkbookTools(
+  contents: WebContents,
+  calls: SheetsAgentToolCall[],
+): Promise<{ results: SheetsAgentToolResult[] } | { error: string }> {
+  const safeCalls = calls
+    .filter((c) => typeof c?.name === 'string' && c.name && typeof c?.id === 'string' && c.id)
+    .slice(0, 50)
+    .map((c) => ({ id: c.id, name: c.name, input: c.input ?? {} }))
+  if (safeCalls.length === 0) return { error: 'no valid tool calls' }
+  const reply = await requestRendererAgentAction<SheetsAgentReply>(contents, 'apply', {
+    calls: safeCalls,
+  })
+  if (!reply.ok || !reply.results) return { error: reply.error ?? 'apply failed' }
+  return { results: reply.results }
+}
+
+function registerSheetsAgentIpc(): void {
+  ipcMain.on(IPC_CHANNELS.agentToolResult, (event, payload: unknown) => {
+    const p = payload as { requestId?: unknown; reply?: unknown } | null
+    if (typeof p?.requestId !== 'string') return
+    const waiter = agentToolWaiters.get(event.sender.id)?.get(p.requestId)
+    if (!waiter) return
+    agentToolWaiters.get(event.sender.id)?.delete(p.requestId)
+    waiter((p.reply ?? { ok: false, error: 'malformed reply' }) as SheetsAgentReply)
+  })
+}
+
 /**
  * Close guard for a sheets renderer: true means proceed with the close.
  * Clean → true; dirty → Save/Don't Save/Cancel dialog. Save asks the renderer to run
@@ -2043,6 +2157,9 @@ let coreIpcRegistered = false
 export function registerSheetsIpc(): void {
   if (coreIpcRegistered) return
   coreIpcRegistered = true
+
+  // Host agent executor replies (EverRoom embed; harmless in standalone)
+  registerSheetsAgentIpc()
 
   // Registered here (not in registerSheetsAiIpc, skipped in shell mode):
   // slides' ai:generate-image only exists once a slides view opens, so sheets

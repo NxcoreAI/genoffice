@@ -533,7 +533,6 @@ export const appStrings = defineStrings({
     appIndexing: '正在索引 {name}：{rows} 行就绪。',
     appStreamingRows: '正在流式加载 {name}：{rows} 行可用。',
     appLoadRangeFailed: '无法加载可见区域。',
-    appFullyLoaded: '工作簿已完整加载——公式实时重算，行列可编辑。',
     appRangeMustBeVector: '{range} 必须是单行或单列的单元格。',
     appRangeTooManyCells: '{range} 超过 {max} 个单元格。',
     appSheetStillIndexing: '工作表还在索引中——稍后再试。',
@@ -1838,7 +1837,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Indexing {name}: {rows} rows ready.',
     appStreamingRows: 'Streaming {name}: {rows} rows available.',
     appLoadRangeFailed: 'Unable to load the visible range.',
-    appFullyLoaded: 'Workbook fully loaded — formulas recalculate live, rows/columns editable.',
     appRangeMustBeVector: '{range} must be a single row or a single column of cells.',
     appRangeTooManyCells: '{range} covers more than {max} cells.',
     appSheetStillIndexing: 'The sheet is still indexing — try again in a moment.',
@@ -3182,7 +3180,6 @@ export const appStrings = defineStrings({
     appIndexing: '{name} のインデックスを作成中：{rows} 行が準備できました。',
     appStreamingRows: '{name} をストリーミング読み込み中：{rows} 行が利用可能です。',
     appLoadRangeFailed: '表示範囲を読み込めません。',
-    appFullyLoaded: 'ブックを完全に読み込みました — 数式はライブで再計算され、行列を編集できます。',
     appRangeMustBeVector: '{range} は 1 行または 1 列のセルである必要があります。',
     appRangeTooManyCells: '{range} が {max} 個のセルを超えています。',
     appSheetStillIndexing: 'シートのインデックスを作成中です — しばらくしてからお試しください。',
@@ -4511,8 +4508,6 @@ export const appStrings = defineStrings({
     appIndexing: '{name}의 인덱스를 만드는 중: {rows}행 준비됨.',
     appStreamingRows: '{name}을(를) 스트리밍하는 중: {rows}행 사용 가능.',
     appLoadRangeFailed: '표시 범위를 로드할 수 없습니다.',
-    appFullyLoaded:
-      '통합 문서를 모두 로드했습니다 — 수식이 실시간으로 다시 계산되고 행/열을 편집할 수 있습니다.',
     appRangeMustBeVector: '{range}은(는) 단일 행 또는 단일 열의 셀이어야 합니다.',
     appRangeTooManyCells: '{range}이(가) 셀 {max}개를 초과합니다.',
     appSheetStillIndexing: '시트의 인덱스를 만드는 중입니다 — 잠시 후 다시 시도하십시오.',
@@ -5889,8 +5884,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Indexation de {name} : {rows} lignes prêtes.',
     appStreamingRows: 'Chargement en flux de {name} : {rows} lignes disponibles.',
     appLoadRangeFailed: 'Impossible de charger la zone visible.',
-    appFullyLoaded:
-      'Classeur entièrement chargé — les formules se recalculent en direct, lignes/colonnes modifiables.',
     appRangeMustBeVector: '{range} doit être une seule ligne ou une seule colonne de cellules.',
     appRangeTooManyCells: '{range} couvre plus de {max} cellules.',
     appSheetStillIndexing:
@@ -7247,8 +7240,6 @@ export const appStrings = defineStrings({
     appIndexing: '{name} wird indiziert: {rows} Zeilen bereit.',
     appStreamingRows: '{name} wird gestreamt: {rows} Zeilen verfügbar.',
     appLoadRangeFailed: 'Der sichtbare Bereich kann nicht geladen werden.',
-    appFullyLoaded:
-      'Arbeitsmappe vollständig geladen — Formeln werden live neu berechnet, Zeilen/Spalten bearbeitbar.',
     appRangeMustBeVector:
       '{range} muss eine einzelne Zeile oder eine einzelne Spalte von Zellen sein.',
     appRangeTooManyCells: '{range} umfasst mehr als {max} Zellen.',
@@ -8593,8 +8584,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Indexando {name}: {rows} filas listas.',
     appStreamingRows: 'Cargando {name} por streaming: {rows} filas disponibles.',
     appLoadRangeFailed: 'No se puede cargar el rango visible.',
-    appFullyLoaded:
-      'Libro completamente cargado — las fórmulas se recalculan en vivo y las filas/columnas son editables.',
     appRangeMustBeVector: '{range} debe ser una sola fila o una sola columna de celdas.',
     appRangeTooManyCells: '{range} abarca más de {max} celdas.',
     appSheetStillIndexing: 'La hoja todavía se está indexando — inténtelo de nuevo en un momento.',
@@ -9880,7 +9869,6 @@ export const appStrings = defineStrings({
     appIndexing: 'กำลังทำดัชนี {name}: พร้อมแล้ว {rows} แถว',
     appStreamingRows: 'กำลังโหลด {name} แบบสตรีม: ใช้ได้ {rows} แถว',
     appLoadRangeFailed: 'โหลดช่วงที่มองเห็นไม่ได้',
-    appFullyLoaded: 'เวิร์กบุ๊กโหลดเต็มแล้ว — สูตรคำนวณใหม่แบบสด แก้ไขแถว/คอลัมน์ได้',
     appRangeMustBeVector: '{range} ต้องเป็นเซลล์แถวเดียวหรือคอลัมน์เดียว',
     appRangeTooManyCells: '{range} ครอบคลุมเกิน {max} เซลล์',
     appSheetStillIndexing: 'แผ่นงานยังทำดัชนีอยู่ — ลองใหม่อีกสักครู่',
@@ -11179,8 +11167,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Mengindeks {name}: {rows} baris siap.',
     appStreamingRows: 'Memuat {name} secara streaming: {rows} baris tersedia.',
     appLoadRangeFailed: 'Tidak dapat memuat rentang yang terlihat.',
-    appFullyLoaded:
-      'Buku kerja termuat penuh — rumus dihitung ulang secara langsung, baris/kolom dapat diedit.',
     appRangeMustBeVector: '{range} harus berupa satu baris atau satu kolom sel.',
     appRangeTooManyCells: '{range} mencakup lebih dari {max} sel.',
     appSheetStillIndexing: 'Lembar masih diindeks — coba lagi sebentar lagi.',
@@ -12506,8 +12492,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Индексирование {name}: готово строк — {rows}.',
     appStreamingRows: 'Потоковая загрузка {name}: доступно строк — {rows}.',
     appLoadRangeFailed: 'Не удаётся загрузить видимый диапазон.',
-    appFullyLoaded:
-      'Книга полностью загружена — формулы пересчитываются вживую, строки и столбцы доступны для редактирования.',
     appRangeMustBeVector: '{range} должен быть одной строкой или одним столбцом ячеек.',
     appRangeTooManyCells: '{range} охватывает более {max} ячеек.',
     appSheetStillIndexing: 'Лист ещё индексируется — повторите попытку чуть позже.',
@@ -13790,8 +13774,6 @@ export const appStrings = defineStrings({
     appIndexing: 'جارٍ فهرسة {name}: {rows} صفًا جاهزًا.',
     appStreamingRows: 'جارٍ تحميل {name} بالبث: {rows} صفًا متاحًا.',
     appLoadRangeFailed: 'يتعذر تحميل النطاق المرئي.',
-    appFullyLoaded:
-      'حُمّل المصنف بالكامل — تُعاد الصيغ للحساب مباشرة والصفوف والأعمدة قابلة للتحرير.',
     appRangeMustBeVector: 'يجب أن يكون {range} صفًا واحدًا أو عمودًا واحدًا من الخلايا.',
     appRangeTooManyCells: 'يغطي {range} أكثر من {max} خلية.',
     appSheetStillIndexing: 'الورقة لا تزال قيد الفهرسة — أعد المحاولة لاحقًا.',
@@ -15125,8 +15107,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Indexando {name}: {rows} linhas prontas.',
     appStreamingRows: 'Carregando {name} por streaming: {rows} linhas disponíveis.',
     appLoadRangeFailed: 'Não foi possível carregar o intervalo visível.',
-    appFullyLoaded:
-      'Pasta de trabalho totalmente carregada — fórmulas recalculam ao vivo, linhas/colunas editáveis.',
     appRangeMustBeVector: '{range} deve ser uma única linha ou uma única coluna de células.',
     appRangeTooManyCells: '{range} cobre mais de {max} células.',
     appSheetStillIndexing: 'A planilha ainda está sendo indexada — tente novamente em instantes.',
@@ -16466,8 +16446,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Indicizzazione di {name}: {rows} righe pronte.',
     appStreamingRows: 'Caricamento in streaming di {name}: {rows} righe disponibili.',
     appLoadRangeFailed: "Impossibile caricare l'intervallo visibile.",
-    appFullyLoaded:
-      'Cartella di lavoro completamente caricata — le formule si ricalcolano in tempo reale, righe/colonne modificabili.',
     appRangeMustBeVector: '{range} deve essere una singola riga o una singola colonna di celle.',
     appRangeTooManyCells: '{range} copre più di {max} celle.',
     appSheetStillIndexing: 'Il foglio è ancora in fase di indicizzazione — riprova tra poco.',
@@ -17803,8 +17781,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Indeksowanie {name}: {rows} wierszy gotowych.',
     appStreamingRows: 'Ładowanie strumieniowe {name}: dostępnych {rows} wierszy.',
     appLoadRangeFailed: 'Nie można załadować widocznego zakresu.',
-    appFullyLoaded:
-      'Skoroszyt w pełni załadowany — formuły przeliczają się na żywo, wiersze/kolumny można edytować.',
     appRangeMustBeVector: '{range} musi być pojedynczym wierszem lub pojedynczą kolumną komórek.',
     appRangeTooManyCells: '{range} obejmuje ponad {max} komórek.',
     appSheetStillIndexing: 'Arkusz jest wciąż indeksowany — spróbuj ponownie za chwilę.',
@@ -19149,8 +19125,6 @@ export const appStrings = defineStrings({
     appIndexing: '{name} wordt geïndexeerd: {rows} rijen gereed.',
     appStreamingRows: '{name} wordt streamend geladen: {rows} rijen beschikbaar.',
     appLoadRangeFailed: 'Kan het zichtbare bereik niet laden.',
-    appFullyLoaded:
-      'Werkmap volledig geladen — formules worden live opnieuw berekend, rijen/kolommen bewerkbaar.',
     appRangeMustBeVector: '{range} moet één rij of één kolom cellen zijn.',
     appRangeTooManyCells: '{range} beslaat meer dan {max} cellen.',
     appSheetStillIndexing: 'Het werkblad wordt nog geïndexeerd — probeer het zo opnieuw.',
@@ -20458,8 +20432,6 @@ export const appStrings = defineStrings({
     appIndexing: 'Mengindeks {name}: {rows} baris sedia.',
     appStreamingRows: 'Menstrim {name}: {rows} baris tersedia.',
     appLoadRangeFailed: 'Tidak dapat memuatkan julat yang kelihatan.',
-    appFullyLoaded:
-      'Buku kerja dimuatkan sepenuhnya — formula dikira semula secara langsung, baris/lajur boleh diedit.',
     appRangeMustBeVector: '{range} mesti satu baris atau satu lajur sel.',
     appRangeTooManyCells: '{range} merangkumi lebih daripada {max} sel.',
     appSheetStillIndexing: 'Helaian masih diindeks — cuba lagi sebentar.',
@@ -21724,8 +21696,6 @@ export const appStrings = defineStrings({
     appIndexing: 'יוצר אינדקס עבור {name}: {rows} שורות מוכנות.',
     appStreamingRows: 'מזרים את {name}: {rows} שורות זמינות.',
     appLoadRangeFailed: 'לא ניתן לטעון את הטווח הגלוי.',
-    appFullyLoaded:
-      'חוברת העבודה נטענה במלואה — נוסחאות מחושבות מחדש באופן חי, שורות/עמודות ניתנות לעריכה.',
     appRangeMustBeVector: '{range} חייב להיות שורה בודדת או עמודה בודדת של תאים.',
     appRangeTooManyCells: '{range} מכסה יותר מ-{max} תאים.',
     appSheetStillIndexing: 'הגיליון עדיין באינדוקס — נסה שוב בעוד רגע.',
@@ -23025,8 +22995,6 @@ export const appStrings = defineStrings({
     appIndexing: '{name} अनुक्रमित हो रहा है: {rows} पंक्तियाँ तैयार।',
     appStreamingRows: '{name} स्ट्रीम हो रहा है: {rows} पंक्तियाँ उपलब्ध।',
     appLoadRangeFailed: 'दृश्यमान श्रेणी लोड नहीं की जा सकी।',
-    appFullyLoaded:
-      'कार्यपुस्तिका पूरी तरह लोड हुई — सूत्र लाइव पुनर्गणित होते हैं, पंक्तियाँ/स्तंभ संपादन-योग्य।',
     appRangeMustBeVector: '{range} सेलों की एक ही पंक्ति या एक ही स्तंभ होना चाहिए।',
     appRangeTooManyCells: '{range} {max} से अधिक सेल कवर करता है।',
     appSheetStillIndexing: 'शीट अभी अनुक्रमित हो रही है — थोड़ी देर बाद फिर प्रयास करें।',
@@ -24257,7 +24225,6 @@ export const appStrings = defineStrings({
     appIndexing: '正在索引 {name}：{rows} 列就緒。',
     appStreamingRows: '正在串流載入 {name}：{rows} 列可用。',
     appLoadRangeFailed: '無法載入可見範圍。',
-    appFullyLoaded: '活頁簿已完整載入——公式即時重新計算，列欄可編輯。',
     appRangeMustBeVector: '{range} 必須是單列或單欄的儲存格。',
     appRangeTooManyCells: '{range} 超過 {max} 個儲存格。',
     appSheetStillIndexing: '工作表還在建立索引——請稍後再試。',

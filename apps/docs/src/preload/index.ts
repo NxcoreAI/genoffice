@@ -150,6 +150,27 @@ const api: DesktopApi = {
     return () => ipcRenderer.removeListener('docs:close-save-request', listener)
   },
   reportCloseSaveResult: (ok: boolean) => ipcRenderer.send('docs:close-save-result', ok === true),
+  /** Host agent executor: main forwards describe/apply requests; replies via reportAgentToolReply */
+  onAgentToolRequest: (
+    handler: (request: {
+      requestId: string
+      kind: 'describe' | 'apply'
+      calls?: { id: string; name: string; input: Record<string, unknown> }[]
+    }) => void,
+  ) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      request: {
+        requestId: string
+        kind: 'describe' | 'apply'
+        calls?: { id: string; name: string; input: Record<string, unknown> }[]
+      },
+    ) => handler(request)
+    ipcRenderer.on('docs:agent-tool-request', listener)
+    return () => ipcRenderer.removeListener('docs:agent-tool-request', listener)
+  },
+  reportAgentToolReply: (requestId: string, reply: unknown) =>
+    ipcRenderer.send('docs:agent-tool-result', { requestId, reply }),
   thesisListCards: () => ipcRenderer.invoke('docs:thesis-list'),
   thesisPickTemplate: (overwrite?: boolean) => ipcRenderer.invoke('docs:thesis-pick', overwrite === true),
   thesisRemoveCard: (cardId: string) => ipcRenderer.invoke('docs:thesis-remove', cardId),

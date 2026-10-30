@@ -212,7 +212,7 @@ export interface TabProps {
 
 /* ================= Insert ================= */
 
-const MAX_IMAGE_WIDTH_PX = 620 // ~content width of a US Letter page at 96dpi
+export const MAX_IMAGE_WIDTH_PX = 620 // ~content width of a US Letter page at 96dpi
 
 export async function imageSizeOf(dataUrl: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {

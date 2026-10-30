@@ -348,6 +348,14 @@ export interface DesktopApi {
   /** Close guard chose "Save": main process asks the renderer to run the full save flow */
   onCloseSaveRequest(handler: () => void): () => void
   reportCloseSaveResult(ok: boolean): void
+  /**
+   * Host agent executor (EverRoom embed): main forwards describe/apply requests
+   * from the host's agent bridge. describe → reportAgentToolReply with
+   * { ok, describe }; apply → { ok, results }. The renderer executes the docs
+   * AI tool layer locally (executeTool) and silently saves on mutation.
+   */
+  onAgentToolRequest(handler: (request: DocsAgentToolRequest) => void): () => void
+  reportAgentToolReply(requestId: string, reply: unknown): void
   /** keep the native View menu's checkbox items in sync with renderer state */
   reportViewMenuState(state: { aiSidebar: boolean; darkCanvas: boolean }): void
   /**
@@ -420,3 +428,17 @@ export interface ThesisPanelCard {
 export type ThesisPanelOutcome<T> =
   | { ok: true; value: T }
   | { ok: false; reason: 'no_room' | 'error'; message?: string }
+
+/** One tool call forwarded by the host agent (gateway) through the main process. */
+export interface DocsAgentToolRequestCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+/** describe (context + vocabulary) or apply (execute tool calls) request. */
+export interface DocsAgentToolRequest {
+  requestId: string
+  kind: 'describe' | 'apply'
+  calls?: DocsAgentToolRequestCall[]
+}

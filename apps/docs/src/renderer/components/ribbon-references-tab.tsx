@@ -80,7 +80,7 @@ function xmlOfNode(node: { attrs: Record<string, unknown> }, blocks: Block[]): s
  * depth across top-level blocks) and replace it with a regenerated dirty TOC
  * field built from the current headings.
  */
-function updateTocField(
+export function updateTocField(
   editor: Editor,
   blocks: Block[],
   headingPages?: () => number[] | null,

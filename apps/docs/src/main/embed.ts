@@ -4,8 +4,10 @@
  * single-instance, updater, or BrowserWindow side effects.
  */
 export {
+  applyAgentDocTools,
   configureDocsRuntime,
   createDocsView,
+  describeAgentDoc,
   docsQueryDirty,
   markDocsNewBlank,
   queueDocsAiContent,
@@ -17,5 +19,14 @@ export {
   setDocsThesisPanelHook,
   teardownDocsRenderer,
 } from './docs-main'
-export type { DocsThesisPanelAction } from './docs-main'
-export { buildThesisDocx, buildThesisDocxOnTemplate, describeThesisBlocks } from '@genoffice/docx-engine'
+export type {
+  DocsAgentDescribeResult,
+  DocsAgentToolCall,
+  DocsAgentToolResult,
+  DocsThesisPanelAction,
+} from './docs-main'
+export {
+  buildThesisDocx,
+  buildThesisDocxOnTemplate,
+  describeThesisBlocks,
+} from '@genoffice/docx-engine'

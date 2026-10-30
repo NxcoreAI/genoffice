@@ -4515,7 +4515,10 @@ export function createSlidesView(
     void view.webContents.loadURL(devUrl.toString())
   } else if (runtime.rendererFilePath)
     void view.webContents.loadFile(runtime.rendererFilePath, {
-      query: options?.readonly ? { mode: 'tab', readonly: '1' } : { mode: 'tab' },
+      query: {
+        mode: 'tab',
+        ...(options?.readonly ? { readonly: '1' } : {}),
+      },
     })
   return view
 }
