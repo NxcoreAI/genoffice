@@ -366,6 +366,29 @@ describe('setHeadingLevel', () => {
     expect(editor.state.doc.child(0).attrs.level).toBe(1)
   })
 
+  it('promoting a paragraph sheds the runs direct font/size so the heading style owns the look', () => {
+    const editor = createEditor(fixtureDoc())
+    // block 3 = 'Body paragraph'; give its run an explicit size like CJK templates / AI-generated docs
+    const before = editor.state.doc.child(3)
+    expect(before.type.name).toBe('docParagraph')
+    const { tr } = editor.state
+    const markType = editor.schema.marks.docTextStyle
+    tr.addMark(before.pos + 1, before.pos + before.nodeSize - 1, markType.create({ sizeHalfPoints: 22, color: 'FF0000' }))
+    editor.view.dispatch(tr)
+
+    const outcome = executeCommands(editor, {
+      commands: [{ setHeadingLevel: { target: { blockIndexes: [3] }, level: 1 } }],
+    })
+    expect(outcome.ok).toBe(true)
+    const node = editor.state.doc.child(3)
+    expect(node.type.name).toBe('docHeading')
+    expect(node.attrs.level).toBe(1)
+    // the direct font-size/color overrides are gone; the heading CSS (h1 = 16pt) now owns the look
+    const style = textStyleOf(editor, 3)
+    expect(style?.sizeHalfPoints ?? null).toBeNull()
+    expect(style?.color ?? null).toBeNull()
+  })
+
   it('level 0 converts a heading to a plain paragraph', () => {
     const editor = createEditor(fixtureDoc())
     executeCommands(editor, {
