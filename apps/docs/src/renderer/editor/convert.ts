@@ -1692,7 +1692,9 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
           // rebuilt anchor; otherwise the rebuild resets relativeHeight to base
           const genZOrder =
             node.attrs?.imageZOrder != null ? Number(node.attrs.imageZOrder) : undefined
-          xml = applyImageWrap(xml, genWrap, posOffset, undefined, genZOrder)
+          // 9-cell Position presets apply to regenerated textboxes/shapes too
+          const genAlign = posOffset ? undefined : posAlignOf(node)
+          xml = applyImageWrap(xml, genWrap, posOffset, genAlign, genZOrder)
         }
         pushBlock({ kind: 'xml', xml })
       } else if (node.attrs?.genImage) {
@@ -1704,6 +1706,10 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
         if (align) image.align = align
         const wrap = node.attrs.imageWrap as ImageWrap | null
         if (wrap) image.wrap = wrap
+        // newly inserted pictures get the same 9-cell Position presets as
+        // document images (anchor <wp:align>), not just wrap
+        const posAlign = posAlignOf(node)
+        if (wrap && posAlign) image.posAlign = posAlign
         if (node.attrs.imageZOrder != null) image.zOrder = Number(node.attrs.imageZOrder)
         if (node.attrs.imageRotDeg) image.rotDeg = Number(node.attrs.imageRotDeg)
         if (node.attrs.imageFlipH) image.flipH = true
@@ -1873,6 +1879,13 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
 }
 
 /** rebuild a pasted image copy from its preview bytes; null when not materializable */
+/** Position preset picked in Layout ▸ Position (imagePosH/V) → anchor <wp:align> */
+function posAlignOf(node: PmNode): NewImage['posAlign'] | undefined {
+  const h = node.attrs?.imagePosH as 'left' | 'center' | 'right' | null
+  const v = node.attrs?.imagePosV as 'top' | 'center' | 'bottom' | null
+  return h && v ? { h, v } : undefined
+}
+
 function imageFromProtectedAttrs(node: PmNode): NewImage | null {
   if (node.attrs?.blockType !== 'image') return null
   const m = /^data:(image\/(?:png|jpeg|gif));base64,(.+)$/.exec(
@@ -1886,6 +1899,8 @@ function imageFromProtectedAttrs(node: PmNode): NewImage | null {
   if (align) image.align = align
   const wrap = node.attrs?.imageWrap as ImageWrap | null
   if (wrap) image.wrap = wrap
+  const posAlign = posAlignOf(node)
+  if (wrap && posAlign) image.posAlign = posAlign
   if (node.attrs?.imageZOrder != null) image.zOrder = Number(node.attrs.imageZOrder)
   if (node.attrs?.imageRotDeg) image.rotDeg = Number(node.attrs.imageRotDeg)
   if (node.attrs?.imageFlipH) image.flipH = true

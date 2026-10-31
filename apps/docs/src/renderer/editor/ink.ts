@@ -150,6 +150,100 @@ function segmentDistance(p: InkPoint, a: InkPoint, b: InkPoint): number {
   return Math.hypot(p.x - cx, p.y - cy)
 }
 
+function lerpPoint(a: InkPoint, b: InkPoint, t: number): InkPoint {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+}
+
+/**
+ * Split one segment into the parts that survive the eraser circle.
+ * Returns the kept sub-segments (0, 1 or 2 pieces); the piece endpoints are
+ * generated at the circle boundary so the erased gap is exactly where the
+ * pointer went, not the whole segment.
+ */
+function trimSegment(
+  a: InkPoint,
+  b: InkPoint,
+  center: InkPoint,
+  reach: number,
+): Array<[InkPoint, InkPoint]> {
+  const inside = (p: InkPoint) =>
+    (p.x - center.x) * (p.x - center.x) + (p.y - center.y) * (p.y - center.y) <= reach * reach
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const fx = a.x - center.x
+  const fy = a.y - center.y
+  const quadratic = dx * dx + dy * dy
+  if (quadratic === 0) return inside(a) ? [] : [[a, b]]
+  const linear = 2 * (fx * dx + fy * dy)
+  const constant = fx * fx + fy * fy - reach * reach
+  const discriminant = linear * linear - 4 * quadratic * constant
+  if (discriminant <= 0) {
+    // no crossing: either fully covered (both ends inside) or fully outside
+    return inside(a) && inside(b) ? [] : [[a, b]]
+  }
+  const root = Math.sqrt(discriminant)
+  const enter = Math.max(0, (-linear - root) / (2 * quadratic))
+  const exit = Math.min(1, (-linear + root) / (2 * quadratic))
+  if (enter >= exit) return inside(a) && inside(b) ? [] : [[a, b]]
+  const kept: Array<[InkPoint, InkPoint]> = []
+  if (enter > 0) kept.push([a, lerpPoint(a, b, enter)])
+  if (exit < 1) kept.push([lerpPoint(a, b, exit), b])
+  return kept
+}
+
+/**
+ * Erase only the part of the stroke under the eraser: trim the segments the
+ * eraser circle crosses and drop the covered points, returning the surviving
+ * fragments (a stroke passed through the middle becomes two strokes).
+ *
+ * Returns `null` when the eraser does not touch the stroke at all, so the
+ * caller can leave it untouched instead of re-rendering a copy.
+ */
+export function eraseStrokeAt(stroke: InkStroke, point: InkPoint, radius: number): InkStroke[] | null {
+  const reach = radius + stroke.width / 2
+  const pts = stroke.points
+  if (pts.length === 0) return null
+  if (pts.length === 1) {
+    const covered = Math.hypot(point.x - pts[0]!.x, point.y - pts[0]!.y) <= reach
+    return covered ? [] : null
+  }
+
+  let touched = false
+  const fragments: InkPoint[][] = []
+  let current: InkPoint[] = []
+  const flush = () => {
+    if (current.length > 0) {
+      fragments.push(current)
+      current = []
+    }
+  }
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!
+    const b = pts[i]!
+    const kept = trimSegment(a, b, point, reach)
+    if (kept.length !== 1 || kept[0]![0] !== a || kept[0]![1] !== b) touched = true
+    if (kept.length === 0) {
+      flush()
+      continue
+    }
+    for (const [start, end] of kept) {
+      const tail = current[current.length - 1]
+      // A fully kept segment hands back the original vertex object: joining on
+      // identity keeps the polyline continuous. Trimmed pieces start/end on the
+      // eraser boundary, so the next piece begins a new fragment (real gap).
+      if (tail && tail === start) current.push(end)
+      else {
+        flush()
+        current = [start, end]
+      }
+    }
+  }
+  flush()
+  if (!touched) return null
+  return fragments.map((fragment) => ({ ...stroke, points: fragment }))
+}
+
 /** true when the point is within `threshold` of any segment of the stroke */
 export function strokeHitTest(stroke: InkStroke, point: InkPoint, threshold: number): boolean {
   const reach = threshold + stroke.width / 2

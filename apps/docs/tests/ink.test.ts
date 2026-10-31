@@ -6,6 +6,7 @@ import {
   buildInkImages,
   decodeInkPayload,
   encodeInkPayload,
+  eraseStrokeAt,
   strokeBounds,
   strokeHitTest,
   type InkAnnotation,
@@ -81,6 +82,64 @@ describe('stroke geometry', () => {
   it('hit test matches near the segment and misses far away', () => {
     expect(strokeHitTest(STROKE, { x: 35, y: 15 }, 3)).toBe(true)
     expect(strokeHitTest(STROKE, { x: 35, y: 40 }, 3)).toBe(false)
+  })
+})
+
+describe('partial erasing (eraseStrokeAt)', () => {
+  const LINE: InkStroke = {
+    tool: 'pen',
+    color: '000000',
+    width: 2,
+    points: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 20, y: 0 },
+      { x: 30, y: 0 },
+    ],
+  }
+
+  it('erasing mid-stroke splits it into two strokes instead of dropping everything', () => {
+    const fragments = eraseStrokeAt(LINE, { x: 20, y: 0 }, 1)
+    expect(fragments).not.toBeNull()
+    expect(fragments).toHaveLength(2)
+    expect(fragments![0]).toEqual({
+      ...LINE,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 18, y: 0 }],
+    })
+    expect(fragments![1]).toEqual({
+      ...LINE,
+      points: [{ x: 22, y: 0 }, { x: 30, y: 0 }],
+    })
+    // style is preserved on both fragments
+    expect(fragments![0]!.tool).toBe('pen')
+    expect(fragments![1]!.color).toBe('000000')
+  })
+
+  it('erasing near the end trims only the covered part', () => {
+    const fragments = eraseStrokeAt(LINE, { x: 0, y: 0 }, 1)
+    expect(fragments).toHaveLength(1)
+    expect(fragments![0]!.points).toEqual([
+      { x: 2, y: 0 },
+      { x: 10, y: 0 },
+      { x: 20, y: 0 },
+      { x: 30, y: 0 },
+    ])
+  })
+
+  it('a click away from the stroke leaves it untouched (null)', () => {
+    expect(eraseStrokeAt(LINE, { x: 20, y: 40 }, 1)).toBeNull()
+  })
+
+  it('covering the whole stroke returns no fragments', () => {
+    const short: InkStroke = { ...LINE, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }] }
+    expect(eraseStrokeAt(short, { x: 0, y: 0 }, 4)).toEqual([])
+  })
+
+  it('wider strokes (highlighter) erase with the stroke width taken into account', () => {
+    const highlighter: InkStroke = { ...LINE, tool: 'highlighter', width: 10 }
+    const fragments = eraseStrokeAt(highlighter, { x: 20, y: 0 }, 1)
+    expect(fragments![0]!.points.at(-1)).toEqual({ x: 14, y: 0 })
+    expect(fragments![1]!.points[0]).toEqual({ x: 26, y: 0 })
   })
 })
 

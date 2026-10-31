@@ -213,7 +213,8 @@ import { InkOverlay } from './components/InkOverlay'
 import { collectRevisions, gotoRevision, type TrackChangesStorage } from './editor/revisions'
 import { NavPane } from './components/NavPane'
 import { Ruler } from './components/Ruler'
-import { docBodyFont, docLineFactor, docThemeCss } from './doc-style-css'
+import { docBodyFont, docLineFactor, docStyleCss, docThemeCss } from './doc-style-css'
+import { applyPaletteToHeadingStyles, swapThemeInParsed } from './theme-swap'
 import { isDocDirty } from './doc-dirty'
 import {
   EMPTY_HF_VARIANTS,
@@ -250,7 +251,7 @@ import {
   deleteComment as deleteCommentImpl,
   deleteNote as deleteNoteImpl,
   handleRevision as handleRevisionImpl,
-  removeInks as removeInksImpl,
+  replaceInks as replaceInksImpl,
   replyToComment as replyToCommentImpl,
   resolveComment as resolveCommentImpl,
   startNewComment as startNewCommentImpl,
@@ -2396,7 +2397,10 @@ export function App() {
     (annotation: InkAnnotation) => addInkImpl(reviewCtxRef.current, annotation),
     [],
   )
-  const removeInks = useCallback((ids: string[]) => removeInksImpl(reviewCtxRef.current, ids), [])
+  const replaceInks = useCallback(
+    (next: InkAnnotation[]) => replaceInksImpl(reviewCtxRef.current, next),
+    [],
+  )
   const clearInks = useCallback(() => clearInksImpl(reviewCtxRef.current), [])
   const compareWithFile = useCallback(() => compareWithFileImpl(reviewCtxRef.current), [])
 
@@ -5398,11 +5402,40 @@ export function App() {
       setStatus(next ? t('appWatermarkSet', { text: next }) : t('appWatermarkRemoved'))
     },
     onThemeFonts: (fonts: ThemeFonts) => {
+      // Word applies a theme font change to every style that references the
+      // theme (Normal body face, Heading major face). The canvas reads those
+      // faces from the parsed style hints + the CSS generated at parse time, so
+      // swap the hints and regenerate that CSS here — without this the page
+      // does not move until the file is saved and reopened.
+      const current = doc
+      if (current) {
+        const parsed = swapThemeInParsed(current.parsed, themeFonts, fonts, null, null)
+        if (parsed !== current.parsed) {
+          setDoc({ ...current, parsed })
+          setDocCss(docStyleCss(parsed))
+        }
+      }
       setThemeFonts(fonts)
       setThemeFontsDirty(true)
       setStatus(t('appThemeFontsChanged'))
     },
     onThemeColors: (colors: ThemeColors) => {
+      // Theme palette: styles that reference accent/dk/lt slots follow the new
+      // palette (explicit run colors are direct formatting and stay put).
+      const current = doc
+      if (current) {
+        // 1) styles that reference the old palette follow the new slots;
+        // 2) heading-level styles are pinned to the new accent1 so a palette
+        //    pick is visible even when the template hard-coded black headings.
+        const parsed = applyPaletteToHeadingStyles(
+          swapThemeInParsed(current.parsed, null, null, themeColors, colors),
+          colors,
+        )
+        if (parsed !== current.parsed) {
+          setDoc({ ...current, parsed })
+          setDocCss(docStyleCss(parsed))
+        }
+      }
       setThemeColors(colors)
       setThemeColorsDirty(true)
       setStatus(t('appThemeColorsApplied', { name: colors.name ?? '' }))
@@ -5902,7 +5935,7 @@ export function App() {
                           zoom={zoom}
                           annotations={inkAnnotations}
                           onAdd={addInk}
-                          onRemove={removeInks}
+                          onReplace={replaceInks}
                         />
                       )}
                     </div>

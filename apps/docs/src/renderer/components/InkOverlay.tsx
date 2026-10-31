@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import {
   HIGHLIGHTER_ALPHA,
+  eraseStrokeAt,
   nextInkId,
-  strokeHitTest,
   strokePathD,
   type InkAnnotation,
   type InkPoint,
@@ -30,7 +30,8 @@ interface InkOverlayProps {
   zoom: number
   annotations: InkAnnotation[]
   onAdd: (annotation: InkAnnotation) => void
-  onRemove: (ids: string[]) => void
+  /** Replace the whole annotation list: the eraser splits strokes into fragments. */
+  onReplace: (annotations: InkAnnotation[]) => void
 }
 
 /** overlay-relative top-left of every anchored paragraph, at 100% zoom */
@@ -76,12 +77,13 @@ function pickAnchor(positions: AnchorPositions, start: InkPoint): number | null 
   return best
 }
 
-export function InkOverlay({ tool, color, width, zoom, annotations, onAdd, onRemove }: InkOverlayProps) {
+export function InkOverlay({ tool, color, width, zoom, annotations, onAdd, onReplace }: InkOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
   const [anchors, setAnchors] = useState<AnchorPositions>(new Map())
   const [livePoints, setLivePoints] = useState<InkPoint[] | null>(null)
   const drawingRef = useRef<InkPoint[] | null>(null)
-  const erasedRef = useRef<Set<string>>(new Set())
+  /** eraser drag working copy: mutated locally so one gesture stays consistent */
+  const erasingRef = useRef<InkAnnotation[] | null>(null)
 
   const zoomFactor = zoom / 100
   const drawing = tool === 'pen' || tool === 'highlighter'
@@ -114,25 +116,46 @@ export function InkOverlay({ tool, color, width, zoom, annotations, onAdd, onRem
 
   const eraseAt = useCallback(
     (point: InkPoint) => {
-      const hits: string[] = []
-      for (const ann of annotations) {
-        if (erasedRef.current.has(ann.id)) continue
+      const working = erasingRef.current
+      if (!working) return
+      let changed = false
+      const next: InkAnnotation[] = []
+      for (const ann of working) {
         const pos = anchors.get(ann.anchorIndex)
-        if (!pos) continue
+        if (!pos) {
+          next.push(ann)
+          continue
+        }
         const rel = { x: point.x - pos.x, y: point.y - pos.y }
         if (ann.stroke) {
-          if (strokeHitTest(ann.stroke, rel, ERASER_RADIUS)) hits.push(ann.id)
-        } else if (ann.image) {
-          const { offsetXPx: x, offsetYPx: y, widthPx: w, heightPx: h } = ann.image
-          if (rel.x >= x && rel.x <= x + w && rel.y >= y && rel.y <= y + h) hits.push(ann.id)
+          // 局部擦除：只擦掉笔尖覆盖的那一段，穿过笔迹时把它拆成两段，
+          // 而不是整条笔迹一起消失。
+          const fragments = eraseStrokeAt(ann.stroke, rel, ERASER_RADIUS)
+          if (!fragments) {
+            next.push(ann)
+            continue
+          }
+          changed = true
+          fragments.forEach((stroke, index) => {
+            next.push({ ...ann, id: index === 0 ? ann.id : nextInkId(), stroke })
+          })
+          continue
         }
+        if (ann.image) {
+          const { offsetXPx: x, offsetYPx: y, widthPx: w, heightPx: h } = ann.image
+          if (rel.x >= x && rel.x <= x + w && rel.y >= y && rel.y <= y + h) {
+            // 位图形态的旧标注没有矢量点可拆：整体删除（保持原行为）。
+            changed = true
+            continue
+          }
+        }
+        next.push(ann)
       }
-      if (hits.length > 0) {
-        for (const id of hits) erasedRef.current.add(id)
-        onRemove(hits)
-      }
+      if (!changed) return
+      erasingRef.current = next
+      onReplace(next)
     },
-    [annotations, anchors, onRemove],
+    [anchors, onReplace],
   )
 
   const onPointerDown = (e: ReactPointerEvent) => {
@@ -141,7 +164,7 @@ export function InkOverlay({ tool, color, width, zoom, annotations, onAdd, onRem
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
     const point = localPoint(e)
     if (tool === 'eraser') {
-      erasedRef.current = new Set()
+      erasingRef.current = annotations
       drawingRef.current = [] // non-null marks "eraser drag active"
       eraseAt(point)
       return
@@ -167,6 +190,7 @@ export function InkOverlay({ tool, color, width, zoom, annotations, onAdd, onRem
   const onPointerUp = () => {
     const points = drawingRef.current
     drawingRef.current = null
+    erasingRef.current = null
     if (tool !== 'pen' && tool !== 'highlighter') return
     setLivePoints(null)
     if (!points || points.length === 0) return
