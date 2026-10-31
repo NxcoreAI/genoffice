@@ -47,6 +47,8 @@ export const IPC_CHANNELS = {
   agentToolRequest: 'workbook:agent-tool-request',
   /** Host agent executor: renderer → main replies */
   agentToolResult: 'workbook:agent-tool-result',
+  /** Host agent readiness (EverRoom): renderer → main, after a workbook is installed */
+  agentReady: 'workbook:agent-ready',
   exportPdf: 'workbook:export-pdf',
   exportCsv: 'workbook:export-csv',
   csvSaveConfirm: 'workbook:csv-save-confirm',

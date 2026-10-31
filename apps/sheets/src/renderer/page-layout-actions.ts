@@ -18,6 +18,7 @@ import type { HeaderFooterResult } from './HeaderFooterDialog'
 import { t } from './i18n/locale'
 import { effectivePageBreaks } from './page-break-preview'
 import { COLOR_SCHEMES, FONT_SCHEMES, rethemeStyles, THEME_PRESETS } from './themes'
+import type { ThemeColorScheme, ThemeFontScheme } from './themes'
 import { loadVisibleRange } from './univer-sync'
 import { buildSheetPrintPayload, type PrintWorksheet } from './print-html'
 import { resolveEffectivePageSetup } from './print-settings'
@@ -43,6 +44,106 @@ export interface PageLayoutContext {
   setPendingEdits: (count: number) => void
   /// Re-renders the Page Break Preview overlay when page geometry changed.
   refreshPageBreakPreview?: () => void
+}
+
+/// A Page Layout theme request: a whole preset (`theme`) or one half each
+/// (`colors` / `fonts`). Explicit halves win over the preset's halves.
+export interface ThemeRequest {
+  /** full theme preset id (THEME_PRESETS), sets colors + fonts together */
+  readonly theme?: string
+  /** color-scheme preset id (COLOR_SCHEMES) */
+  readonly colors?: string
+  /** font-scheme preset id (FONT_SCHEMES) */
+  readonly fonts?: string
+}
+
+/// Resolves a theme request against the preset catalogs and journals it.
+/// Shared by the Page Layout menu and the AI `set_theme` op: returns an error
+/// message (valid catalog ids included, so an agent can self-correct) or null
+/// on success. Callers own setPendingEdits and their own confirmation text.
+/// `lazyWorkbookRef` enables the silent grid repaint; omit it when no grid is
+/// mounted (tests).
+export function applyThemePresets(
+  state: LazyWorkbookState,
+  runtime: UniverRuntime,
+  request: ThemeRequest,
+  lazyWorkbookRef?: { readonly current: LazyWorkbookState | null },
+): string | null {
+  if (!state.file.themeColors) return t('appThemeNeedsThemePart')
+  const { theme, colors: colorsId, fonts: fontsId } = request
+  if (theme === undefined && colorsId === undefined && fontsId === undefined) {
+    return (
+      'set_theme needs at least one of "theme", "colors", or "fonts" — ' +
+      `valid themes: ${THEME_PRESETS.map((entry) => entry.id).join(', ')}.`
+    )
+  }
+  let colors: ThemeColorScheme | undefined
+  let fonts: ThemeFontScheme | undefined
+  if (theme !== undefined) {
+    const preset = THEME_PRESETS.find((entry) => entry.id === theme)
+    if (!preset) {
+      return (
+        `Unknown theme "${theme}" — valid themes: ` +
+        `${THEME_PRESETS.map((entry) => entry.id).join(', ')}.`
+      )
+    }
+    colors = preset.colors
+    // A theme without a rewritable fontScheme keeps its fonts: journaling one
+    // would poison every subsequent save.
+    fonts = state.file.themeFonts ? preset.fonts : undefined
+  }
+  if (colorsId !== undefined) {
+    colors = COLOR_SCHEMES.find((entry) => entry.id === colorsId)
+    if (!colors) {
+      return (
+        `Unknown color scheme "${colorsId}" — valid color schemes: ` +
+        `${COLOR_SCHEMES.map((entry) => entry.id).join(', ')}.`
+      )
+    }
+  }
+  if (fontsId !== undefined) {
+    const scheme = FONT_SCHEMES.find((entry) => entry.id === fontsId)
+    if (!scheme) {
+      return (
+        `Unknown font scheme "${fontsId}" — valid font schemes: ` +
+        `${FONT_SCHEMES.map((entry) => entry.id).join(', ')}.`
+      )
+    }
+    if (!state.file.themeFonts) return t('appThemeNeedsThemePart')
+    fonts = scheme
+  }
+  // A request this file cannot carry (e.g. fonts-only without a fontScheme).
+  if (colors === undefined && fonts === undefined) return t('appThemeNeedsThemePart')
+  if (colors !== undefined) {
+    recordThemeColors(state.editJournal, colors.name, colors.values)
+    state.file.themeColors = [...colors.values]
+  }
+  if (fonts !== undefined) {
+    recordThemeFonts(state.editJournal, fonts.name, fonts.major, fonts.minor)
+    state.file.themeFonts = { major: fonts.major, minor: fonts.minor }
+  }
+  // Live re-resolution: styles carrying theme provenance recolor now;
+  // charts/CF colors follow on the save's reopen (which reparses the
+  // rewritten theme part).
+  state.file.styles = rethemeStyles(
+    state.file.styles,
+    state.file.themeColors,
+    state.file.themeFonts ?? null,
+  )
+  for (const loadedSheetId of [...state.loadedRanges.keys()]) {
+    state.loadedRanges.delete(loadedSheetId)
+    state.appliedRowKeys.delete(loadedSheetId)
+  }
+  if (lazyWorkbookRef) {
+    const active = runtime.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    if (active) {
+      // Silent repaint: this reload only re-applies the re-themed styles; its
+      // async streaming progress would otherwise land after (and wipe) the
+      // confirmation message the caller sets next.
+      void loadVisibleRange(runtime, lazyWorkbookRef, active, () => undefined)
+    }
+  }
+  return null
 }
 
 export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): void {
@@ -149,50 +250,28 @@ export function handlePageLayoutCommand(ctx: PageLayoutContext, rest: string): v
     case 'theme':
     case 'theme-colors':
     case 'theme-fonts': {
-      if (!state.file.themeColors || (key === 'theme-fonts' && !state.file.themeFonts)) {
-        ctx.setMessage(t('appThemeNeedsThemePart'))
+      const error = applyThemePresets(
+        state,
+        runtime,
+        key === 'theme'
+          ? { theme: value }
+          : key === 'theme-colors'
+            ? { colors: value }
+            : { fonts: value },
+        ctx.lazyWorkbookRef,
+      )
+      if (error !== null) {
+        ctx.setMessage(error)
         return
       }
-      const colors =
-        key === 'theme-fonts' ? undefined : COLOR_SCHEMES.find((entry) => entry.id === value)
-      // A theme without a rewritable fontScheme keeps its fonts: journaling
-      // one would poison every subsequent save.
-      const fonts =
-        key === 'theme-colors' || !state.file.themeFonts
-          ? undefined
-          : key === 'theme'
-            ? THEME_PRESETS.find((entry) => entry.id === value)?.fonts
-            : FONT_SCHEMES.find((entry) => entry.id === value)
-      if (colors === undefined && fonts === undefined) return
-      if (colors !== undefined) {
-        recordThemeColors(state.editJournal, colors.name, colors.values)
-        state.file.themeColors = [...colors.values]
-      }
-      if (fonts !== undefined) {
-        recordThemeFonts(state.editJournal, fonts.name, fonts.major, fonts.minor)
-        state.file.themeFonts = { major: fonts.major, minor: fonts.minor }
-      }
-      // Live re-resolution: styles carrying theme provenance recolor now;
-      // charts/CF colors follow on the save's reopen (which reparses the
-      // rewritten theme part).
-      state.file.styles = rethemeStyles(
-        state.file.styles,
-        state.file.themeColors,
-        state.file.themeFonts ?? null,
-      )
-      for (const loadedSheetId of [...state.loadedRanges.keys()]) {
-        state.loadedRanges.delete(loadedSheetId)
-        state.appliedRowKeys.delete(loadedSheetId)
-      }
       ctx.setPendingEdits(journalSize(state.editJournal))
-      const active = runtime.univerAPI.getActiveWorkbook()?.getActiveSheet()
-      if (active) {
-        // Silent repaint: this reload only re-applies the re-themed styles;
-        // its async streaming progress would otherwise land after (and wipe)
-        // the theme confirmation below.
-        void loadVisibleRange(runtime, ctx.lazyWorkbookRef, active, () => undefined)
-      }
-      ctx.setMessage(t('appThemeApplied', { name: (colors ?? fonts)?.name ?? value }))
+      const name =
+        (
+          COLOR_SCHEMES.find((entry) => entry.id === value) ??
+          FONT_SCHEMES.find((entry) => entry.id === value) ??
+          THEME_PRESETS.find((entry) => entry.id === value)
+        )?.name ?? value
+      ctx.setMessage(t('appThemeApplied', { name }))
       return
     }
     case 'breaks': {

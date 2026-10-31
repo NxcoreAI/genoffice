@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 
 import {
   app,
@@ -1417,8 +1417,19 @@ async function saveFileDialog(event: IpcMainInvokeEvent, options: SaveDialogOpti
   )
 }
 
-/** register a tab's webContents/client pair and wire up cleanup on teardown */
-function registerSheetsSession(webContents: WebContents, client: XlsxSidecarClient): void {
+/** Drop crash-recovery copies for every workbook session still open in this tab. */
+function clearRendererRecoveryCopies(entry: SheetsTabSession): void {
+  for (const session of entry.sessions.values()) clearWorkbookRecovery(session.path)
+}
+
+/** register a tab's webContents/client pair and wire up cleanup on teardown.
+ * `claimActive: false` (host-created hidden views) must not steal the global
+ * active pointer that menu actions and shell routing key off. */
+function registerSheetsSession(
+  webContents: WebContents,
+  client: XlsxSidecarClient,
+  options: { claimActive?: boolean | undefined } = {},
+): void {
   startPastedTempCleanup()
   sheetsTabs.set(webContents.id, {
     webContents,
@@ -1427,11 +1438,24 @@ function registerSheetsSession(webContents: WebContents, client: XlsxSidecarClie
     aiStreams: new Map(),
     saveTransfers: new SaveEditsTransferStore(),
   })
-  activeSheetsWebContents = webContents
+  if (options.claimActive !== false) activeSheetsWebContents = webContents
   webContents.once('destroyed', () => {
     const entry = sheetsTabs.get(webContents.id)
     sheetsTabs.delete(webContents.id)
+    // Readiness tracking and its waiters belong to this renderer alone; a
+    // destroyed view must fail pending waits instead of stranding them until
+    // timeout (the host may call this after teardownSheetsRenderer, so make
+    // both paths idempotent).
+    dropAgentReadyState(webContents.id)
     if (entry) {
+      // A host-hidden view is closed without an interactive save/discard
+      // prompt, so its sessions' recovery copies must not re-offer already
+      // closed work on the next open. Sweep before closeAllSessions empties
+      // the map. App shutdown is the exception: the close guard does not save
+      // then, so the 30s recovery copy is the only unsaved-work safety net and
+      // must survive for the next launch. Host-hidden views still sweep
+      // explicitly through teardownSheetsRenderer before their close.
+      if (!appShuttingDown) clearRendererRecoveryCopies(entry)
       // Free pending chunked-save uploads with the tab (the sweep timer's
       // closure would otherwise keep them reachable until the idle expiry).
       entry.saveTransfers.dispose()
@@ -1453,6 +1477,21 @@ export function getActiveSheetsWebContents(): WebContents | null {
 /** shell tab switching keeps menu actions routed at the visible sheets tab */
 export function setActiveSheetsWebContents(wc: WebContents | null): void {
   activeSheetsWebContents = wc
+}
+
+/**
+ * Host-facing teardown for a sheets renderer that is about to be closed without
+ * user interaction (EverRoom's hidden agent view): forget the agent-readiness
+ * state so pending waits fail fast instead of timing out, and drop this
+ * renderer's crash-recovery copies so the next open cannot offer to restore
+ * work the host deliberately closed. Synchronous, idempotent, never opens a
+ * dialog — safe to call before `contents.close({ waitForBeforeUnload: false })`.
+ */
+export function teardownSheetsRenderer(contents: WebContents): void {
+  dropAgentReadyState(contents.id)
+  const entry = sheetsTabs.get(contents.id)
+  if (!entry) return
+  clearRendererRecoveryCopies(entry)
 }
 
 /** Shell notification: an open view's file was renamed on disk (renamed in the
@@ -1505,9 +1544,7 @@ export function setSheetsWorkbookOpenedHook(
 
 /** Host hook: a save landed on disk (the xlsx target, not the CSV source) — embed hosts use it to sync versions. */
 let fileSavedHook: ((wc: WebContents, path: string) => void) | null = null
-export function setSheetsFileSavedHook(
-  fn: ((wc: WebContents, path: string) => void) | null,
-): void {
+export function setSheetsFileSavedHook(fn: ((wc: WebContents, path: string) => void) | null): void {
   fileSavedHook = fn
 }
 
@@ -1782,9 +1819,15 @@ export async function createSheetsWindow(
   return window
 }
 
-/** tab-mode equivalent of createSheetsWindow: same runtime/IPC wiring, no BrowserWindow of its own. */
+/** tab-mode equivalent of createSheetsWindow: same runtime/IPC wiring, no BrowserWindow of its own.
+ * `claimActive: false` is for hidden/agent-hosted views that must not steal the
+ * menu/active pointer from the visible tab. */
 export function createSheetsView(
-  options: { includeAiHandlers?: boolean; readonly?: boolean } = {},
+  options: {
+    includeAiHandlers?: boolean
+    readonly?: boolean
+    claimActive?: boolean
+  } = {},
 ): WebContentsView {
   const client = sidecar ?? new XlsxSidecarClient(resolveSidecarPath())
   sidecar = client
@@ -1800,7 +1843,7 @@ export function createSheetsView(
   })
   registerSheetsIpc()
   if (options.includeAiHandlers ?? true) registerSheetsAiIpc()
-  registerSheetsSession(view.webContents, client)
+  registerSheetsSession(view.webContents, client, { claimActive: options.claimActive })
   view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   view.webContents.on('will-navigate', (event) => event.preventDefault())
   if (!app.isPackaged) {
@@ -2072,6 +2115,85 @@ export async function applyAgentWorkbookTools(
   return { results: reply.results }
 }
 
+// ── Agent readiness (EverRoom hidden sheets view): "workbook loaded and ready" ──
+// EverRoom creates a sheets WebContentsView on demand (possibly hidden) and then
+// drives describeAgentWorkbook/applyAgentWorkbookTools. Opening a workbook is
+// asynchronous (main-side sidecar read + renderer skeleton install), so the host
+// needs a positive signal that the requested working copy — not the boot blank
+// workbook — is installed in the grid. The renderer reports the path once Univer
+// has an active workbook; a blank/unsaved workbook reports null (tracked, but
+// never satisfied for a non-null expected path). Tracking is per webContents so
+// a destroyed view cannot leak waiters.
+
+/** Latest reported path per webContents; null = renderer ready on a blank/unsaved workbook. */
+const agentReadyPathByWebContents = new Map<number, string | null>()
+const agentReadyWaiters = new Map<number, Set<(filePath: string | null) => void>>()
+
+function sameWorkbookPath(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  if (a === b) return true
+  try {
+    return resolve(a) === resolve(b)
+  } catch {
+    return false
+  }
+}
+
+/** Destroy/teardown cleanup: drop the tracked path and fail every pending wait. */
+function dropAgentReadyState(wcId: number): void {
+  agentReadyPathByWebContents.delete(wcId)
+  const waiters = agentReadyWaiters.get(wcId)
+  agentReadyWaiters.delete(wcId)
+  waiters?.forEach((finish) => finish(null))
+}
+
+/**
+ * Wait until this webContents has loaded exactly `expectedPath` and reported
+ * readiness. Resolves true only on a matching report (a report that arrived
+ * before the call counts), false on timeout or when the view is destroyed.
+ * `timeoutMs` defaults to 15s (a cold hidden view must boot + open the xlsx).
+ */
+export function waitForAgentReady(
+  contents: WebContents,
+  expectedPath: string,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  if (!expectedPath || typeof expectedPath !== 'string') return Promise.resolve(false)
+  if (contents.isDestroyed()) return Promise.resolve(false)
+  const reported = agentReadyPathByWebContents.get(contents.id)
+  if (sameWorkbookPath(reported, expectedPath)) return Promise.resolve(true)
+  return new Promise<boolean>((finishWait) => {
+    let settled = false
+    const finish = (filePath: string | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const waiters = agentReadyWaiters.get(contents.id)
+      waiters?.delete(listener)
+      if (waiters && waiters.size === 0) agentReadyWaiters.delete(contents.id)
+      finishWait(filePath !== null && sameWorkbookPath(filePath, expectedPath))
+    }
+    const listener = (filePath: string | null) => {
+      // null = view destroyed / teardown; a different path's report is ignored
+      // so concurrent waits for different paths keep waiting
+      if (filePath === null) {
+        finish(null)
+        return
+      }
+      if (sameWorkbookPath(filePath, expectedPath)) finish(filePath)
+    }
+    const timer = setTimeout(() => finish(null), Math.max(0, timeoutMs))
+    let waiters = agentReadyWaiters.get(contents.id)
+    if (!waiters) {
+      waiters = new Set()
+      agentReadyWaiters.set(contents.id, waiters)
+    }
+    waiters.add(listener)
+    // destroyed between the isDestroyed check and registration: settle now
+    if (contents.isDestroyed()) finish(null)
+  })
+}
+
 function registerSheetsAgentIpc(): void {
   ipcMain.on(IPC_CHANNELS.agentToolResult, (event, payload: unknown) => {
     const p = payload as { requestId?: unknown; reply?: unknown } | null
@@ -2080,6 +2202,20 @@ function registerSheetsAgentIpc(): void {
     if (!waiter) return
     agentToolWaiters.get(event.sender.id)?.delete(p.requestId)
     waiter((p.reply ?? { ok: false, error: 'malformed reply' }) as SheetsAgentReply)
+  })
+
+  // Agent readiness: the renderer reports the workbook it installed. A blank
+  // workbook reports null — tracked for state, but not a usable readiness
+  // signal for a non-null expected path, so waiters keep waiting.
+  ipcMain.on(IPC_CHANNELS.agentReady, (event, payload: unknown) => {
+    const p = payload as { filePath?: unknown } | null
+    const filePath = typeof p?.filePath === 'string' && p.filePath.length > 0 ? p.filePath : null
+    const wcId = event.sender.id
+    agentReadyPathByWebContents.set(wcId, filePath)
+    if (filePath === null) return
+    const waiters = agentReadyWaiters.get(wcId)
+    if (!waiters) return
+    for (const waiter of [...waiters]) waiter(filePath)
   })
 }
 

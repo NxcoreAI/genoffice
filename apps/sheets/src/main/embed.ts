@@ -13,6 +13,8 @@ export {
   setSheetsShellWindow,
   sheetsPendingEditCount,
   stopSheetsSidecar,
+  teardownSheetsRenderer,
+  waitForAgentReady,
 } from './sheets-main'
 export type {
   SheetsAgentDescribeResult,

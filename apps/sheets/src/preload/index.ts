@@ -364,14 +364,16 @@ const desktopApi: DesktopApi = {
           kind: request.kind === 'describe' ? 'describe' : 'apply',
           calls: Array.isArray(request.calls)
             ? (request.calls as unknown[])
-                .filter((call) => isRecord(call) && typeof call.id === 'string' && typeof call.name === 'string')
+                .filter(
+                  (call) =>
+                    isRecord(call) && typeof call.id === 'string' && typeof call.name === 'string',
+                )
                 .map((call) => ({
                   id: String((call as Record<string, unknown>).id),
                   name: String((call as Record<string, unknown>).name),
-                  input:
-                    isRecord((call as Record<string, unknown>).input)
-                      ? ((call as Record<string, unknown>).input as Record<string, unknown>)
-                      : {},
+                  input: isRecord((call as Record<string, unknown>).input)
+                    ? ((call as Record<string, unknown>).input as Record<string, unknown>)
+                    : {},
                 }))
             : undefined,
         })
@@ -382,6 +384,12 @@ const desktopApi: DesktopApi = {
   },
   reportAgentToolReply(requestId, reply) {
     ipcRenderer.send(IPC_CHANNELS.agentToolResult, { requestId, reply })
+  },
+  /** Host agent readiness (EverRoom embed): the renderer installed a workbook (null = blank) */
+  reportAgentReady(filePath) {
+    ipcRenderer.send(IPC_CHANNELS.agentReady, {
+      filePath: typeof filePath === 'string' && filePath.length > 0 ? filePath : null,
+    })
   },
   onRecoveryPrompt(callback) {
     const listener = (_event: unknown, payload: unknown): void => {

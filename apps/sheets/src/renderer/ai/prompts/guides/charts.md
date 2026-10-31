@@ -16,19 +16,35 @@
 
 ## Editing an existing chart
 
-`{op:"edit_chart", chartPath:"xl/charts/chart1.xml", title?, chartType?, seriesColors?, legend?, dataLabels?, grouping?, axisTitles?, seriesData?}` — at least one property:
+`{op:"edit_chart", chartPath:"xl/charts/chart1.xml", title?, chartType?, seriesColors?, pointColors?, legend?, dataLabels?, dataLabelPosition?, dataLabelFormat?, grouping?, axisTitles?, gridlines?, valueAxis?, seriesData?}` — at least one property:
 
 - To see which charts the workbook has, check the "Charts in the workbook" list from get_workbook_context: each entry gives the chartPath, current title, type, and owning sheetId. **chartPath must come from that list** — never invent one.
 - Charts that came with the file have chartPaths like `xl/charts/chart1.xml`; charts added this session and demo-workbook charts use the visual id from the list (like `added-chart-…` / `demo-chart-…`) as the chartPath and are equally editable.
 - `title`: chart title (≤255 characters)
 - `chartType`: "column" | "bar" | "line" | "area" | "pie" | "doughnut" — only charts with a **single plot area** can be converted between these; combo, scatter, and 3D charts do not support conversion (a type-conversion proposal is rejected at the preview stage) — in that case change only the title/colors or explain to the user
 - `seriesColors`: {"0":"#4472C4", "1":"#ED7D31"} — keys are series indices (strings), values are 6-digit hex
+- `pointColors`: {"0":{"0":"#4472C4","1":"#ED7D31"}} — per-**point** colors (series index → point index → #hex), the way to color **pie/doughnut slices** individually (seriesColors colors a whole series). Pie/doughnut use series "0" with one entry per category, in category order.
 - `legend`: "none" (hide) | "right" | "bottom" | "top" | "left"
 - `dataLabels`: "none" | "value" (numeric) | "percent" (percentage, pie) | "category-percent" (name + percentage, pie)
+- `dataLabelPosition`: "center" | "inside-end" | "outside-end" — where each label sits relative to its point; applies to bar/line/area/pie/doughnut plots (scatter/radar have no plot-level labels). Setting position or format turns value labels on if they were off; `dataLabels:"none"` in the same batch wins and drops them.
+- `dataLabelFormat`: number format for the label text (1–64 chars), e.g. "0.0%", "#,##0", "[$$-409]#,##0" — display only, the stored values are untouched
 - `grouping`: "clustered" | "stacked" | "percentStacked" — applies only to column/bar/line/area charts
 - `axisTitles`: {category?, value?} — axis titles, null clears; pie/doughnut charts have no axes, not applicable
+- `gridlines`: true | false — value-axis major gridlines on/off; axis-based charts only (a pie/doughnut edit fails: no value axis)
+- `valueAxis`: {min?, max?} — explicit value-axis bounds, e.g. {"min":0} or {"min":0,"max":100}; `null` resets that bound to automatic (min/max given as numbers); at least one of the two
 - `seriesData`: [{index, name?, valuesRange?:"B2:B13", categoriesRange?:"A2:A13", sheetId?}] — rename a series or **repoint its data ranges** (single row or single column; sheetId defaults to the chart's sheet). On apply, the current worksheet values are synced into the chart cache, and reference formulas are written into the file as well.
 - Change series colors as a whole set (keep one palette) — recoloring a single series breaks visual consistency; follow a high-contrast, low-saturation palette.
+
+```json
+{
+  "op": "edit_chart",
+  "chartPath": "xl/charts/chart1.xml",
+  "dataLabelPosition": "outside-end",
+  "dataLabelFormat": "#,##0",
+  "gridlines": false,
+  "valueAxis": { "min": 0 }
+}
+```
 
 ## Inserting a shape/text box
 

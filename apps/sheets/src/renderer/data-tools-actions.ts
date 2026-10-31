@@ -18,7 +18,7 @@ import {
   type ConsolidateConfig,
   type OutputCell,
 } from './consolidate'
-import { isSheetRemoved, journalSize, recordStructuralOp } from './edit-journal'
+import { isSheetRemoved, journalSize } from './edit-journal'
 import { resolveGoToRef, type GoToNameEntry } from './goto'
 import { getLang, t } from './i18n/locale'
 import { appendSymbol } from './SymbolDialog'
@@ -29,10 +29,11 @@ import {
   applyFilterCriteria,
   columnLetter,
   loadVisibleRange,
-  sheetOutline,
   univerDefinedNames,
   revealCellBelowFreeze,
 } from './univer-sync'
+import { applyOutlineToRange, outlineRangeForSelection } from './outline-ops'
+import { applySubtotalToRange, type SubtotalOutcome } from './subtotal-ops'
 import type { LazyWorkbookState, UniverRuntime, UniverWorksheet } from './univer-state'
 import { applyAiTableAdd } from './workbook-ops'
 
@@ -358,6 +359,9 @@ export function handleApplyAdvancedFilter(
   return null
 }
 
+/// Data → Subtotal dialog: runs the shared subtotal engine (subtotal-ops.ts,
+/// which the AI `subtotal` op also uses) over the current selection. The
+/// dialog's "Count" has always meant COUNTA (SUBTOTAL 3), so it stays that.
 export function handleCreateSubtotal(
   ctx: DataToolsContext,
   config: {
@@ -376,52 +380,33 @@ export function handleCreateSubtotal(
   if (values.length < 2) return t('appSelectRangeWithHeader')
   const startRow = range.getRow()
   const startColumn = range.getColumn()
-  const groupOffset = config.groupCol - startColumn
-  const valueOffset = config.valueCol - startColumn
-  if (groupOffset === valueOffset) return t('appSubtotalSameColumns')
-  const body = values.slice(1)
-  if (body.length === 0) return t('appRangeNoDataRows')
-  // SUBTOTAL function numbers: 9 = SUM, 3 = COUNTA, 1 = AVERAGE.
-  const fn = config.agg === 'sum' ? 9 : config.agg === 'count' ? 3 : 1
-  const valueColumn = columnLetter(config.valueCol)
-  const groups: { label: string; startAbs: number; endAbs: number }[] = []
-  let currentLabel = String(body[0]?.[groupOffset] ?? '')
-  let groupStart = startRow + 1
-  for (let index = 1; index <= body.length; index++) {
-    const label = index < body.length ? String(body[index]?.[groupOffset] ?? '') : null
-    if (label !== currentLabel) {
-      groups.push({ label: currentLabel, startAbs: groupStart, endAbs: startRow + index })
-      if (label !== null) {
-        currentLabel = label
-        groupStart = startRow + 1 + index
-      }
-    }
-  }
-  if (groups.length > 200) return t('appSubtotalTooManyGroups')
-  const writeTotalRow = (row: number, label: string, from: number, to: number): void => {
-    const labelCell = worksheet.getRange(row, config.groupCol, 1, 1)
-    labelCell.setValue({ v: label })
-    labelCell.setFontWeight('bold')
-    const valueCell = worksheet.getRange(row, config.valueCol, 1, 1)
-    valueCell.setValue({
-      f: `=SUBTOTAL(${fn},$${valueColumn}$${from + 1}:$${valueColumn}$${to + 1})`,
-    })
-    valueCell.setFontWeight('bold')
-  }
+  if (config.groupCol === config.valueCol) return t('appSubtotalSameColumns')
+  const state = ctx.lazyWorkbookRef.current
+  const selection =
+    `${columnLabel(startColumn)}${startRow + 1}:` +
+    `${columnLabel(startColumn + range.getWidth() - 1)}${startRow + range.getHeight()}`
+  let outcome: SubtotalOutcome
   try {
-    // Bottom-up so earlier group indices stay valid across the inserts.
-    for (const group of [...groups].reverse()) {
-      worksheet.insertRowsBefore(group.endAbs + 1, 1)
-      writeTotalRow(group.endAbs + 1, `${group.label} Total`, group.startAbs, group.endAbs)
-    }
-    const lastRowAbs = startRow + body.length + groups.length
-    worksheet.insertRowsBefore(lastRowAbs + 1, 1)
-    // SUBTOTAL skips the nested per-group subtotal rows inside the span.
-    writeTotalRow(lastRowAbs + 1, 'Grand Total', startRow + 1, lastRowAbs)
+    outcome = applySubtotalToRange(runtime, state, {
+      sheetId: worksheet.getSheetId(),
+      range: selection,
+      groupColumn: columnLabel(config.groupCol),
+      valueColumn: columnLabel(config.valueCol),
+      function: config.agg === 'sum' ? 'sum' : config.agg === 'average' ? 'average' : 'counta',
+    })
   } catch (error: unknown) {
     return error instanceof Error ? error.message : t('appSubtotalInsertFailed')
   }
-  ctx.setMessage(t('appSubtotalsInserted', { count: groups.length }))
+  if (!outcome.applied) {
+    if (outcome.reason === 'too-many-groups') return t('appSubtotalTooManyGroups')
+    if (outcome.reason === 'same-column') return t('appSubtotalSameColumns')
+    if (outcome.reason === 'no-data-rows' || outcome.reason === 'range-too-small') {
+      return t('appRangeNoDataRows')
+    }
+    return t('appSubtotalInsertFailed')
+  }
+  if (state) ctx.setPendingEdits(journalSize(state.editJournal))
+  ctx.setMessage(t('appSubtotalsInserted', { count: outcome.groups ?? 0 }))
   return null
 }
 
@@ -514,6 +499,7 @@ export function handleCreateConsolidate(
 /// Outline groups: level edits journal directly (Univer has no outline
 /// model, so there is no command to undo); Hide/Show Detail rides the
 /// normal hidden-rows pipeline plus a collapsed flag on the summary line.
+/// The shared helper (outline-ops.ts) also backs the AI `outline.*` ops.
 export function handleOutline(
   ctx: DataToolsContext,
   action: 'group' | 'ungroup' | 'hide-detail' | 'show-detail',
@@ -537,84 +523,30 @@ export function handleOutline(
   if (isSheetRemoved(state.editJournal, sheetId)) return
   const start = axis === 'rows' ? range.getRow() : range.getColumn()
   const end = axis === 'rows' ? start + range.getHeight() - 1 : start + range.getWidth() - 1
-  const outline = sheetOutline(state, sheetId)
-  const entries = axis === 'rows' ? outline.rows : outline.cols
-  const kind = axis === 'rows' ? ('set-rows-outline' as const) : ('set-cols-outline' as const)
-
-  if (action === 'hide-detail' || action === 'show-detail') {
-    // The selection is the group's detail span; the summary row/column is
-    // the next one after it (Excel's summaryBelow/summaryRight default).
-    const count = end - start + 1
-    if (action === 'hide-detail') {
-      if (axis === 'rows') worksheet.hideRows(start, count)
-      else worksheet.hideColumns(start, count)
-    } else if (axis === 'rows') {
-      worksheet.showRows(start, count)
-    } else {
-      worksheet.showColumns(start, count)
-    }
-    const summary = end + 1
-    const collapsed = action === 'hide-detail'
-    const summaryLevel = entries.get(summary)?.level ?? 0
-    entries.set(summary, { level: summaryLevel, collapsed })
-    recordStructuralOp(state.editJournal, sheetId, {
-      kind,
-      start: summary,
-      end: summary,
-      level: summaryLevel,
-      collapsed,
-    })
-    ctx.setPendingEdits(journalSize(state.editJournal))
-    ctx.setMessage(collapsed ? t('appDetailHidden') : t('appDetailShown'))
+  const outcome = applyOutlineToRange(runtime, state, {
+    sheetId,
+    axis,
+    range: outlineRangeForSelection(axis, start, end),
+    action,
+  })
+  if (!outcome.applied) {
+    if (outcome.reason === 'max-level') ctx.setMessage(t('appOutlineMaxLevel'))
+    else if (outcome.reason === 'nothing-to-ungroup') ctx.setMessage(t('appNothingToUngroup'))
     return
-  }
-
-  // Group/Ungroup shifts each contiguous run of equal levels by ±1
-  // (levels clamp to 0-7). Runs already at the boundary are skipped.
-  const delta = action === 'group' ? 1 : -1
-  const ops: { start: number; end: number; level: number }[] = []
-  let runStart = start
-  let runLevel = entries.get(start)?.level ?? 0
-  const closeRun = (runEnd: number): void => {
-    const level = Math.min(7, Math.max(0, runLevel + delta))
-    if (level !== runLevel) ops.push({ start: runStart, end: runEnd, level })
-  }
-  for (let index = start + 1; index <= end; index += 1) {
-    const level = entries.get(index)?.level ?? 0
-    if (level !== runLevel) {
-      closeRun(index - 1)
-      runStart = index
-      runLevel = level
-    }
-  }
-  closeRun(end)
-  if (ops.length === 0) {
-    ctx.setMessage(action === 'group' ? t('appOutlineMaxLevel') : t('appNothingToUngroup'))
-    return
-  }
-  for (const op of ops) {
-    for (let index = op.start; index <= op.end; index += 1) {
-      entries.set(index, {
-        level: op.level,
-        collapsed: entries.get(index)?.collapsed ?? false,
-      })
-    }
-    recordStructuralOp(state.editJournal, sheetId, {
-      kind,
-      start: op.start,
-      end: op.end,
-      level: op.level,
-    })
   }
   ctx.setPendingEdits(journalSize(state.editJournal))
   ctx.setMessage(
-    action === 'group'
-      ? axis === 'rows'
-        ? t('appRowsGrouped')
-        : t('appColsGrouped')
-      : axis === 'rows'
-        ? t('appRowsUngrouped')
-        : t('appColsUngrouped'),
+    action === 'hide-detail'
+      ? t('appDetailHidden')
+      : action === 'show-detail'
+        ? t('appDetailShown')
+        : action === 'group'
+          ? axis === 'rows'
+            ? t('appRowsGrouped')
+            : t('appColsGrouped')
+          : axis === 'rows'
+            ? t('appRowsUngrouped')
+            : t('appColsUngrouped'),
   )
 }
 

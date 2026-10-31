@@ -51,3 +51,9 @@ Limit: at most 2000 expanded cell changes per batch — the range-level ops fill
 - Replaces **text values only**: formula cells and numbers are untouched.
 - Case-insensitive by default (matchCase:true enables case sensitivity); with wholeCell:true a cell is replaced only when its whole content matches exactly.
 - range is required, up to **200,000 cells** (a whole used column is fine). Ranges ≤2000 cells expand into per-cell edits (preview/undo match manual input) and must be loaded first; larger ranges apply as one range-level scan that loads each region itself.
+
+## Cross-references (use the dedicated ops, not hand-built writes)
+
+- Splitting one delimited text column into several columns → `text_to_columns` (data guide): one op that clears/spills correctly, instead of thousands of set_cell ops parsing text yourself.
+- Dropping duplicate rows → `remove_duplicates` (data guide): it deletes whole rows as a structural op (own batch); do not hand-build delete_rows calls for dedupe.
+- Aggregating several ranges into a summary block → `consolidate` (data guide): writes live formulas, never hard-coded totals.

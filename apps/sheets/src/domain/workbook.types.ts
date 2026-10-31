@@ -8,6 +8,7 @@ import type {
   FindReplaceOperation,
   LayoutOperation,
   StructuralOperation,
+  SubtotalOperation,
 } from './workbook-dsl'
 import type { SheetVisual } from './chart-visual'
 
@@ -35,6 +36,9 @@ export interface CellFormatState {
   readonly textRotation?: number | 'vertical' | undefined
   readonly indent?: number | undefined
   readonly border?: BorderPatch | undefined
+  /** cell-protection flags stored as xf <protection> (meaningful once the sheet is protected) */
+  readonly locked?: boolean | undefined
+  readonly hidden?: boolean | undefined
 }
 
 export interface WorksheetState {
@@ -77,6 +81,7 @@ export interface StructuralChange {
    * like layout ops (no per-cell before-state) */
   readonly op:
     | StructuralOperation
+    | SubtotalOperation
     | LayoutOperation
     | FillRangeOperation
     | CopyRangeOperation

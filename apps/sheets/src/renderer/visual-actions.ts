@@ -478,9 +478,17 @@ export async function buildAiChartEdit(
     ...(op.title !== undefined ? { title: op.title } : {}),
     ...(op.chartType !== undefined ? { chartType: op.chartType } : {}),
     ...(op.seriesColors ? { seriesColors: op.seriesColors } : {}),
+    // Per-point fills (pie/doughnut slices), label placement/format, value-axis
+    // gridlines and value-axis bounds: forwarded verbatim; the chart painter
+    // already knows how to render each.
+    ...(op.pointColors ? { pointColors: op.pointColors } : {}),
     ...(op.legend !== undefined ? { legend: op.legend } : {}),
     ...(op.dataLabels !== undefined ? { dataLabels: op.dataLabels } : {}),
+    ...(op.dataLabelPosition !== undefined ? { dataLabelPosition: op.dataLabelPosition } : {}),
+    ...(op.dataLabelFormat !== undefined ? { dataLabelFormat: op.dataLabelFormat } : {}),
     ...(op.grouping !== undefined ? { grouping: op.grouping } : {}),
+    ...(op.gridlines !== undefined ? { gridlines: op.gridlines } : {}),
+    ...(op.valueAxis !== undefined ? { valueAxis: op.valueAxis } : {}),
     ...(op.axisTitles !== undefined ? { axisTitles: op.axisTitles } : {}),
   }
   if (!op.seriesData || op.seriesData.length === 0) return edit

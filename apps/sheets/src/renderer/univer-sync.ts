@@ -333,7 +333,11 @@ export function applyFormatPatchToRange(
   }
   if (patch.border !== undefined && patch.border !== null) {
     const type = BORDER_COMMAND_TYPES[patch.border.type]
-    if (type) range.setBorder(type, BorderStyleTypes.THIN, patch.border.color ?? '#000000')
+    // 'none' erases the edge, where the line style is irrelevant; otherwise
+    // honor the requested OOXML ST_BorderStyle, defaulting to thin (every
+    // ribbon border button is thin).
+    const style = patch.border.style ? mapBorderStyle(patch.border.style) : BorderStyleTypes.THIN
+    if (type) range.setBorder(type, style, patch.border.color ?? '#000000')
   }
 }
 

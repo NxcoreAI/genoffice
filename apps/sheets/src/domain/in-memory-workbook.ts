@@ -107,8 +107,11 @@ export class InMemoryWorkbookAdapter implements WorkbookAdapter {
       if (!sheet) throw new WorkbookConflictError(`Unknown sheet: ${sheetId}`)
       return sheet.cells[address] ?? { value: null }
     }
+    // Data-tool ops (consolidate / create_names_from_selection) qualify
+    // references with sheet names; the pre-batch snapshot owns that mapping.
+    const sheetNameById = (sheetId: string): string => findSheet(this.snapshot, sheetId).name
 
-    for (const operation of expandToPrimitiveOps(batch.operations, readCell)) {
+    for (const operation of expandToPrimitiveOps(batch.operations, readCell, sheetNameById)) {
       if (operation.op === 'fill_range') {
         // Demo workbooks clone every cell per revision, so fills stay at the
         // per-cell preview scale; imported files get the range-level executor
@@ -226,6 +229,14 @@ export class InMemoryWorkbookAdapter implements WorkbookAdapter {
         continue
       }
       if (isStructuralOp(operation)) {
+        if (operation.op === 'subtotal') {
+          // Subtotal inserts summary rows through the live grid's own row
+          // commands and needs the real worksheet; the demo snapshot has no
+          // such machinery.
+          throw new WorkbookConflictError(
+            'subtotal requires an imported xlsx file — the demo workbook cannot insert summary rows.',
+          )
+        }
         const refErrors = applyStructuralOp(working, operation)
         structuralChanges.push({ op: operation, label: structuralOpLabel(operation) })
         if (refErrors.length > 0) {
@@ -299,7 +310,14 @@ export class InMemoryWorkbookAdapter implements WorkbookAdapter {
     }
     for (const change of plan.structuralChanges) {
       if (isLayoutOp(change.op)) applyLayoutOp(next, change.op)
-      else if (isStructuralOp(change.op)) applyStructuralOp(next, change.op)
+      else if (isStructuralOp(change.op)) {
+        if (change.op.op === 'subtotal') {
+          throw new WorkbookConflictError(
+            'subtotal requires an imported xlsx file — the demo workbook cannot insert summary rows.',
+          )
+        }
+        applyStructuralOp(next, change.op)
+      }
       // fill_range / clear_range never reach the demo adapter as range-level
       // entries — plan() expands them into ordinary cellChanges above.
     }
@@ -598,6 +616,14 @@ function applyLayoutOp(snapshot: WorkbookSnapshot, op: LayoutOperation): void {
         'Pie/doughnut charts have no axes — axisTitles does not apply.',
       )
     }
+    if (
+      (op.gridlines !== undefined || op.valueAxis !== undefined) &&
+      chartVisual.chart.chartTypes.some((type) => /pie|doughnut/i.test(type))
+    ) {
+      throw new WorkbookConflictError(
+        'Pie/doughnut charts have no value axis — gridlines/valueAxis do not apply.',
+      )
+    }
     if (op.grouping !== undefined) {
       const targetTypes =
         op.chartType !== undefined
@@ -641,6 +667,13 @@ function applyLayoutOp(snapshot: WorkbookSnapshot, op: LayoutOperation): void {
       ...(op.seriesColors === undefined ? {} : { seriesColors: op.seriesColors }),
       ...(op.legend === undefined ? {} : { legend: op.legend }),
       ...(op.dataLabels === undefined ? {} : { dataLabels: op.dataLabels }),
+      ...(op.dataLabelPosition === undefined
+        ? {}
+        : { dataLabelPosition: op.dataLabelPosition }),
+      ...(op.dataLabelFormat === undefined ? {} : { dataLabelFormat: op.dataLabelFormat }),
+      ...(op.pointColors === undefined ? {} : { pointColors: op.pointColors }),
+      ...(op.gridlines === undefined ? {} : { gridlines: op.gridlines }),
+      ...(op.valueAxis === undefined ? {} : { valueAxis: op.valueAxis }),
       ...(op.grouping === undefined ? {} : { grouping: op.grouping }),
       ...(op.axisTitles === undefined ? {} : { axisTitles: op.axisTitles }),
       ...(series.length > 0 ? { series } : {}),
@@ -690,6 +723,18 @@ function applyLayoutOp(snapshot: WorkbookSnapshot, op: LayoutOperation): void {
       visuals: (sheet.visuals ?? []).filter((visual) => visual.id !== op.visualId),
     })
     return
+  }
+  if (
+    op.op === 'outline.group' ||
+    op.op === 'outline.ungroup' ||
+    op.op === 'outline.hideDetail' ||
+    op.op === 'outline.showDetail'
+  ) {
+    // Outlines are written into the saved workbook; the demo snapshot has no
+    // outline model to keep them in.
+    throw new WorkbookConflictError(
+      `${op.op} requires an imported xlsx file — the demo workbook does not support outline groups.`,
+    )
   }
   if (
     op.op !== 'merge_cells' &&

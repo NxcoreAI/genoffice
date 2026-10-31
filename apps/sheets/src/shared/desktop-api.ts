@@ -2521,6 +2521,11 @@ export interface DesktopApi {
    */
   onAgentToolRequest(callback: (request: SheetsAgentToolRequest) => void): () => void
   reportAgentToolReply(requestId: string, reply: unknown): void
+  /// Host agent readiness (EverRoom embed): the renderer installed a workbook
+  /// and is ready for describe/apply. Called once the workbook exists in Univer;
+  /// an in-memory/blank workbook reports null. Main pairs this with
+  /// waitForAgentReady(contents, expectedPath) before driving a hidden view.
+  reportAgentReady(filePath: string | null): void
   /// Main found a newer autosaved recovery copy while opening a workbook; the
   /// renderer shows the styled restore prompt and replies via replyRecoveryPrompt.
   /// Strings arrive pre-localized from the main process.

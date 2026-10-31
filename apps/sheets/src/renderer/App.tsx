@@ -125,6 +125,7 @@ import {
 import type { AiSettings } from '@genoffice/ai-provider'
 import {
   copyTargetBounds,
+  MAX_DATA_TOOL_CELLS,
   replaceOccurrences,
   type WorkbookOperation,
 } from '../domain/workbook-dsl'
@@ -190,6 +191,7 @@ import type {
   MenuAction,
   RecoveryPromptPayload,
   WorkbookFile,
+  WorkbookStyleEdit,
   WorkbookVisualObject,
 } from '../shared/desktop-api'
 import type { PageSetupJournalState, StructuralJournalOp } from './edit-journal'
@@ -285,6 +287,8 @@ import {
   listDefinedNames as listDefinedNamesImpl,
   type DataToolsContext,
 } from './data-tools-actions'
+import { applyOutlineToRange, outlineActionFromOp } from './outline-ops'
+import { applySubtotalToRange, subtotalFailureMessage } from './subtotal-ops'
 import { installTsvClipboardFix } from './clipboard-tsv'
 import { installFilteredCopyHook } from './filtered-copy'
 import {
@@ -317,6 +321,7 @@ import {
   type RibbonCommandContext,
 } from './ribbon-actions'
 import {
+  applyThemePresets,
   handleApplyHeaderFooter as handleApplyHeaderFooterImpl,
   handleExportPdf as handleExportPdfImpl,
   handlePageLayoutCommand as handlePageLayoutCommandImpl,
@@ -343,6 +348,7 @@ import {
   recordPageSetup,
   recordDefinedNamesChange,
   recordDvChange,
+  recordNeutralStyleEdit,
   recordNoteChange,
   recordProtectedRangesChange,
   recordSheetProtection,
@@ -360,6 +366,7 @@ import {
   recordSheetRemove,
   recordSheetRename,
   recordStructuralOp,
+  recordWorkbookProtection,
   shiftVisualForStructuralOp,
   removeTableAdd,
   recordSparklineAdd,
@@ -2589,6 +2596,9 @@ export function App(): React.JSX.Element {
       visualViewportKeyRef.current = ''
       const lazyState = lazyWorkbookRef.current
       lazyWorkbookRef.current = null
+      // Agent readiness (EverRoom): the renderer no longer holds a workbook, so
+      // stop reporting the previous path as current (blank/unloaded = null).
+      window.desktopApi?.reportAgentReady?.(null)
       clearLazyState(lazyState)
       if (lazyState) {
         forgetVisualMedia(lazyState.file.sessionId)
@@ -3060,6 +3070,39 @@ export function App(): React.JSX.Element {
         } else if (op.op === 'set_cols_hidden') {
           if (op.hidden) sheetById(op.sheetId).hideColumns(columnIndex(op.column), op.count)
           else sheetById(op.sheetId).showColumns(columnIndex(op.column), op.count)
+        } else if (
+          op.op === 'outline.group' ||
+          op.op === 'outline.ungroup' ||
+          op.op === 'outline.hideDetail' ||
+          op.op === 'outline.showDetail'
+        ) {
+          // Layout-class outline edit: the same helper as the ribbon's
+          // Group/Subtotal buttons, over the op's explicit sheet and span.
+          // Level/collapsed changes journal directly (no Univer command).
+          sheetById(op.sheetId)
+          applyOutlineToRange(runtime, state, {
+            sheetId: op.sheetId,
+            axis: op.axis,
+            range: op.range,
+            action: outlineActionFromOp(op.op),
+          })
+        } else if (op.op === 'subtotal') {
+          // Data → Subtotal: one SUBTOTAL row per group run plus a grand
+          // total. The inserts are ordinary Univer mutations, so the edit
+          // journal and undo behave exactly like the ribbon dialog's.
+          sheetById(op.sheetId)
+          const outcome = applySubtotalToRange(runtime, state, {
+            sheetId: op.sheetId,
+            range: op.range,
+            groupColumn: op.groupColumn,
+            valueColumn: op.valueColumn,
+            function: op.function,
+          })
+          if (!outcome.applied) {
+            throw new Error(
+              subtotalFailureMessage(outcome.reason ?? 'sheet-missing', outcome.groups),
+            )
+          }
         } else if (op.op === 'duplicate_sheet') {
           if (!workbook) throw new Error(t('appNoWorkbookOpen'))
           const copy = workbook.duplicateSheet(sheetById(op.sheetId))
@@ -3143,6 +3186,60 @@ export function App(): React.JSX.Element {
           if (guard) throw new Error(guard)
           const original = state.sheetProtections.get(op.sheetId)?.protected ?? false
           recordSheetProtection(state.editJournal, op.sheetId, op.protected, original)
+        } else if (op.op === 'protect_workbook') {
+          // Workbook structure protection is a file-level flag (no Univer
+          // model): the journal records the desired state and the save
+          // rewrites workbook.xml <workbookProtection>.
+          if (state.file.workbookProtection?.hasPassword) {
+            throw new Error(t('appWorkbookProtectedWithPassword'))
+          }
+          const original = state.file.workbookProtection?.lockStructure ?? false
+          const current = state.editJournal.workbookProtection.desired ?? original
+          if (current !== op.protected) {
+            recordWorkbookProtection(state.editJournal, op.protected, original)
+            setPendingEdits(journalSize(state.editJournal))
+          }
+        } else if (op.op === 'allow_edit_ranges') {
+          // Allow-edit ranges are kept in this session's screen coordinates
+          // and saved declaratively (bookProtectedRangesDirty snapshot).
+          sheetById(op.sheetId)
+          if (isSheetRemoved(state.editJournal, op.sheetId)) {
+            throw new Error(`Unknown sheet: ${op.sheetId}`)
+          }
+          const existing = state.sheetProtectedRanges.get(op.sheetId)
+          const isAddedSheet = state.editJournal.sheets.added.has(op.sheetId)
+          if (!existing && !isAddedSheet) throw new Error(t('appProtectionNeedsIndexed'))
+          // A rewrite cannot preserve per-range password hashes; fail closed.
+          if ((existing ?? []).some((range) => range.hasPassword)) {
+            throw new Error(t('appRangesPasswordBlocked'))
+          }
+          state.sheetProtectedRanges.set(
+            op.sheetId,
+            op.ranges.map((range, index) => ({
+              name: range.name ?? `Range${index + 1}`,
+              sqref: range.sqref,
+              hasPassword: false,
+            })),
+          )
+          recordProtectedRangesChange(state.editJournal, op.sheetId)
+          setPendingEdits(journalSize(state.editJournal))
+        } else if (op.op === 'set_theme') {
+          // Workbook theme presets resolve against the renderer catalogs
+          // (they live here, not in the DSL); the helper journals the theme
+          // and re-themes the loaded styles, or returns a self-correcting
+          // error listing the valid ids.
+          const error = applyThemePresets(
+            state,
+            runtime,
+            {
+              ...(op.theme === undefined ? {} : { theme: op.theme }),
+              ...(op.colors === undefined ? {} : { colors: op.colors }),
+              ...(op.fonts === undefined ? {} : { fonts: op.fonts }),
+            },
+            lazyWorkbookRef,
+          )
+          if (error !== null) throw new Error(error)
+          setPendingEdits(journalSize(state.editJournal))
         } else if (op.op === 'set_filter') {
           const target = sheetById(op.sheetId)
           const existing = target.getFilter()
@@ -3163,10 +3260,24 @@ export function App(): React.JSX.Element {
             throw new Error(t('appAutoFilterRemoveFailed'))
           }
         } else if (op.op === 'set_filter_criteria') {
+          // Two shapes ride the one op: checkbox values, or custom conditions
+          // (and = AND, false = OR); null/absent values clears the column.
           applyFilterCriteria(
             sheetById(op.sheetId),
             op.column,
-            op.values === null ? null : { values: op.values },
+            op.conditions !== undefined
+              ? {
+                  customs: {
+                    and: op.and ?? true,
+                    filters: op.conditions.map((condition) => ({
+                      operator: condition.operator,
+                      val: condition.value,
+                    })),
+                  },
+                }
+              : op.values === null || op.values === undefined
+                ? null
+                : { values: op.values },
           )
         } else if (op.op === 'add_conditional_format') {
           applyAiConditionalFormat(sheetById(op.sheetId), op)
@@ -3198,18 +3309,24 @@ export function App(): React.JSX.Element {
           if (op.printArea !== undefined) patch.printArea = op.printArea
           if (op.printTitles !== undefined) patch.printTitles = op.printTitles
           if (op.header !== undefined) {
-            patch.header = op.header === null ? null : {
-              ...(op.header.left !== undefined ? { left: op.header.left } : {}),
-              ...(op.header.center !== undefined ? { center: op.header.center } : {}),
-              ...(op.header.right !== undefined ? { right: op.header.right } : {}),
-            }
+            patch.header =
+              op.header === null
+                ? null
+                : {
+                    ...(op.header.left !== undefined ? { left: op.header.left } : {}),
+                    ...(op.header.center !== undefined ? { center: op.header.center } : {}),
+                    ...(op.header.right !== undefined ? { right: op.header.right } : {}),
+                  }
           }
           if (op.footer !== undefined) {
-            patch.footer = op.footer === null ? null : {
-              ...(op.footer.left !== undefined ? { left: op.footer.left } : {}),
-              ...(op.footer.center !== undefined ? { center: op.footer.center } : {}),
-              ...(op.footer.right !== undefined ? { right: op.footer.right } : {}),
-            }
+            patch.footer =
+              op.footer === null
+                ? null
+                : {
+                    ...(op.footer.left !== undefined ? { left: op.footer.left } : {}),
+                    ...(op.footer.center !== undefined ? { center: op.footer.center } : {}),
+                    ...(op.footer.right !== undefined ? { right: op.footer.right } : {}),
+                  }
           }
           if (op.rowBreaks !== undefined) patch.rowBreaks = op.rowBreaks
           if (op.colBreaks !== undefined) patch.colBreaks = op.colBreaks
@@ -3688,11 +3805,43 @@ export function App(): React.JSX.Element {
       // Same facade setters as the ribbon, so the edit journal records them
       // (indent included — it lands as a pd patch in set-range-values).
       for (const formatChange of stored.plan.formatChanges) {
-        applyFormatPatchToRange(
-          sheetById(formatChange.sheetId).getRange(formatChange.range),
-          formatChange.format,
-        )
+        const format = formatChange.format
+        const target = sheetById(formatChange.sheetId).getRange(formatChange.range)
+        // Cell protection has no Univer model: it journals one neutral style
+        // delta per cell (file-only, not rendered, not undoable). Size the
+        // range BEFORE the visual patch lands so an oversized request fails
+        // without leaving a half-applied format behind.
+        let protectionDelta: WorkbookStyleEdit | null = null
+        if (format.locked !== undefined || format.hidden !== undefined) {
+          const cells = rangeCellCount(parseRange(formatChange.range))
+          if (cells > MAX_DATA_TOOL_CELLS) {
+            throw new Error(
+              `Cell protection on ${formatChange.range} covers ` +
+                `${cells.toLocaleString('en-US')} cells — the limit is ` +
+                `${MAX_DATA_TOOL_CELLS.toLocaleString('en-US')}. Apply it to a smaller range.`,
+            )
+          }
+          protectionDelta = {}
+          // null restores the OOXML default (locked = true, hidden = false).
+          if (format.locked !== undefined) {
+            protectionDelta.protectionLocked = format.locked ?? true
+          }
+          if (format.hidden !== undefined) {
+            protectionDelta.protectionHidden = format.hidden ?? false
+          }
+        }
+        applyFormatPatchToRange(target, format)
         anyApplied = true
+        if (protectionDelta !== null) {
+          const bounds = parseRange(formatChange.range)
+          const delta = protectionDelta
+          for (let row = bounds.startRow; row <= bounds.endRow; row += 1) {
+            for (let column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
+              recordNeutralStyleEdit(state.editJournal, formatChange.sheetId, row, column, delta)
+            }
+          }
+          setPendingEdits(journalSize(state.editJournal))
+        }
       }
       for (const rename of stored.plan.sheetRenames) {
         sheetById(rename.sheetId).setName(rename.after)
@@ -4226,6 +4375,13 @@ export function App(): React.JSX.Element {
       requestAnimationFrame(() => {
         const workbook = runtime.univerAPI.getActiveWorkbook()
         if (!workbook) return
+        // Agent readiness (EverRoom hidden view): the requested workbook is now
+        // installed in Univer, so the host may describe/apply against it. An
+        // in-memory/blank workbook reports null; the host ignores nulls while
+        // waiting for a specific path. Report after the workbook exists but
+        // before the async table/range installs: those are display-only and the
+        // agent's edits go through the same journaled session API.
+        window.desktopApi?.reportAgentReady?.(selected.path ?? null)
         // Register existing file tables so Univer renders filter dropdowns
         // and banding. This is visual-only (the journal is empty for file
         // tables), so failures are swallowed — the data is still usable.
@@ -4404,10 +4560,9 @@ export function App(): React.JSX.Element {
       const reply = (payload: unknown) =>
         window.desktopApi?.reportAgentToolReply?.(request.requestId, payload)
       if (request.kind === 'describe') {
-        if (READONLY_EMBED) {
-          reply({ ok: false, error: 'this workbook is open read-only' })
-          return
-        }
+        // Read-only workbooks stay readable by the host agent: describe only
+        // returns workbook context/vocabulary/guides. Only editing is refused
+        // (the reading path must not be gated on READONLY_EMBED).
         reply({
           ok: true,
           describe: {
@@ -4422,6 +4577,12 @@ export function App(): React.JSX.Element {
             ),
           },
         })
+        return
+      }
+      // Read-only sessions must never be mutated. The desktop already rejects
+      // apply for non-editable files, so this is the last line of defence.
+      if (READONLY_EMBED) {
+        reply({ ok: false, error: 'this workbook is open read-only' })
         return
       }
       const calls = Array.isArray(request.calls) ? request.calls : []

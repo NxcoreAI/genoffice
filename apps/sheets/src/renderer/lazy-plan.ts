@@ -31,7 +31,7 @@ export function buildLazyChangePlan(
   const sheetRenames: ChangePlan['sheetRenames'][number][] = []
   const structuralChanges: ChangePlan['structuralChanges'][number][] = []
   const formatChanges: ChangePlan['formatChanges'][number][] = []
-  for (const operation of expandToPrimitiveOps(batch.operations, readCell)) {
+  for (const operation of expandToPrimitiveOps(batch.operations, readCell, sheetNameById)) {
     if (operation.op === 'fill_range') {
       // Range-level bulk op: no per-cell before-state (like layout ops);
       // the apply executor performs one setValues over the target.

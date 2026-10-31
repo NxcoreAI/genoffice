@@ -1,7 +1,14 @@
 import { z } from 'zod'
 import { ADDABLE_SHAPE_TYPES } from '../shared/shape-types'
-import { columnIndex, columnLabel, formatAddress, parseRange, rangeCellCount } from './cell-address'
-import { computeSortChanges } from './sort-range'
+import {
+  columnIndex,
+  columnLabel,
+  formatAddress,
+  parseAddress,
+  parseRange,
+  rangeCellCount,
+} from './cell-address'
+import { computeSortChanges, type SortSpec } from './sort-range'
 
 const cellAddressSchema = z.string().regex(/^[A-Z]{1,3}[1-9][0-9]{0,6}$/)
 const cellRangeSchema = z.string().regex(/^[A-Z]{1,3}[1-9][0-9]{0,6}(:[A-Z]{1,3}[1-9][0-9]{0,6})?$/)
@@ -156,8 +163,31 @@ const editChartSchema = z.object({
   legend: z.enum(['none', 'right', 'bottom', 'top', 'left']).optional(),
   /** plot-level data labels; 'none' removes them */
   dataLabels: z.enum(['none', 'value', 'percent', 'category-percent']).optional(),
+  /** pie/doughnut slice fills: series index → point index → #RRGGBB */
+  pointColors: z
+    .record(
+      z.string().regex(/^[0-9]{1,3}$/),
+      z.record(z.string().regex(/^[0-9]{1,3}$/), hexColorSchema),
+    )
+    .optional(),
+  /** data-label placement (c:dLblPos) */
+  dataLabelPosition: z.enum(['center', 'inside-end', 'outside-end']).optional(),
+  /** number format for data labels, e.g. "#,##0.0" or "0%" */
+  dataLabelFormat: z.string().min(1).max(64).optional(),
   /** bar/line/area stacking; 'clustered' restores side-by-side */
   grouping: z.enum(['clustered', 'stacked', 'percentStacked']).optional(),
+  /** value-axis major gridlines on/off (axis-based charts only) */
+  gridlines: z.boolean().optional(),
+  /** explicit value-axis bounds; null resets that bound to auto */
+  valueAxis: z
+    .object({
+      min: z.number().finite().nullable().optional(),
+      max: z.number().finite().nullable().optional(),
+    })
+    .refine((axis) => axis.min !== undefined || axis.max !== undefined, {
+      message: 'valueAxis needs min or max',
+    })
+    .optional(),
   /** axis-based charts only; null removes that axis title */
   axisTitles: z
     .object({
@@ -462,6 +492,44 @@ const protectSheetSchema = z.object({
   protected: z.boolean(),
 })
 
+// Workbook structure protection (Review → Protect Workbook): blocks sheet
+// add/delete/move/rename/hide while protected. File-level setting — the
+// executor writes it into workbook.xml on save.
+const protectWorkbookSchema = z.object({
+  op: z.literal('protect_workbook'),
+  protected: z.boolean(),
+})
+
+// Page Layout → Themes / Theme Colors / Theme Fonts: preset ids are resolved
+// against the renderer's theme catalogs by the executor (the catalogs live in
+// the renderer, so id validation cannot happen here). At least one id is
+// required — checked at expansion, a discriminated-union member cannot refine.
+const themePresetIdSchema = z.string().min(1).max(64)
+const setThemeSchema = z.object({
+  op: z.literal('set_theme'),
+  /** full theme preset id, e.g. "office" */
+  theme: themePresetIdSchema.optional(),
+  /** color-scheme preset id, e.g. "office" */
+  colors: themePresetIdSchema.optional(),
+  /** font-scheme preset id, e.g. "calibri" */
+  fonts: themePresetIdSchema.optional(),
+})
+
+const allowEditRangeSchema = z.object({
+  /** optional label shown in the Allow Edit Ranges dialog */
+  name: z.string().min(1).max(255).optional(),
+  /** the range that stays editable on the protected sheet, e.g. "B2:D10" */
+  sqref: cellRangeSchema,
+})
+
+// Review → Allow Edit Ranges: which ranges remain editable while the sheet is
+// protected. An empty `ranges` list clears the sheet's allow-edit ranges.
+const allowEditRangesSchema = z.object({
+  op: z.literal('allow_edit_ranges'),
+  sheetId: z.string().min(1),
+  ranges: z.array(allowEditRangeSchema).max(100),
+})
+
 // Creates (or replaces) the sheet's auto-filter over the range. Filter
 // criteria are then chosen by the user through the column dropdowns.
 const setFilterSchema = z.object({
@@ -475,13 +543,34 @@ const clearFilterSchema = z.object({
   sheetId: z.string().min(1),
 })
 
-// Checkbox-style column criteria on an existing auto-filter: rows whose cell
-// text is in `values` stay visible. values: null clears the column's criteria.
+// Column criteria on an existing auto-filter, in one of two shapes:
+// - checkbox style: rows whose displayed cell text is in `values` stay visible;
+// - custom conditions: 1–2 value comparisons joined with AND (`and` default
+//   true) or OR (`and:false`), e.g. [{operator:"greaterThan", value:"100"}].
+// `values: null` clears the column's criteria. Exactly one of values /
+// conditions must be present — checked at expansion because discriminated-
+// union members cannot carry refinements.
+const filterConditionSchema = z.object({
+  operator: z.enum([
+    'equal',
+    'notEqual',
+    'greaterThan',
+    'greaterThanOrEqual',
+    'lessThan',
+    'lessThanOrEqual',
+  ]),
+  /** compared against the cell's displayed value (numbers/booleans as text) */
+  value: z.string().max(255),
+})
+
 const setFilterCriteriaSchema = z.object({
   op: z.literal('set_filter_criteria'),
   sheetId: z.string().min(1),
   column: columnLabelSchema,
-  values: z.array(z.string().max(255)).min(1).max(1000).nullable(),
+  values: z.array(z.string().max(255)).min(1).max(1000).nullable().optional(),
+  conditions: z.array(filterConditionSchema).min(1).max(2).optional(),
+  /** join for `conditions`: true = AND (default), false = OR */
+  and: z.boolean().optional(),
 })
 
 const cfFormatSchema = z
@@ -579,7 +668,9 @@ export const cfRuleSchema = z.discriminatedUnion('kind', [
     showValue: z.boolean().optional(),
     /** descending greaterThanOrEqual thresholds; length = icon count - 1; default percentile split */
     thresholds: z
-      .array(z.object({ type: z.enum(['num', 'percent', 'percentile']), value: z.number().finite() }))
+      .array(
+        z.object({ type: z.enum(['num', 'percent', 'percentile']), value: z.number().finite() }),
+      )
       .max(4)
       .optional(),
   }),
@@ -654,7 +745,11 @@ const setPageSetupSchema = z.object({
   /** A1 range to print; null clears the print area */
   printArea: cellRangeSchema.nullable().optional(),
   /** Rows repeated at the top of every printed page, e.g. "1:2"; null clears */
-  printTitles: z.string().regex(/^\d+(:\d+)?$/).nullable().optional(),
+  printTitles: z
+    .string()
+    .regex(/^\d+(:\d+)?$/)
+    .nullable()
+    .optional(),
   /** Printed header sections; text carries Excel codes (&P page, &N pages, &D date, &A sheet name); null clears */
   header: z
     .object({
@@ -734,11 +829,32 @@ const deleteDefinedNameSchema = z.object({
   name: z.string().min(1).max(255),
 })
 
+/// OOXML ST_BorderStyle line styles — the same list as the shared
+/// `editableBorderStyleSchema` (shared/desktop-api.ts) the save path validates
+/// against, so an AI border style always round-trips into the file.
+const borderLineStyleSchema = z.enum([
+  'thin',
+  'medium',
+  'thick',
+  'dashed',
+  'dotted',
+  'double',
+  'hair',
+  'dashDot',
+  'dashDotDot',
+  'mediumDashed',
+  'mediumDashDot',
+  'mediumDashDotDot',
+  'slantDashDot',
+])
+
 // Per-cell edge semantics: every cell in the range gets the named edge(s);
 // 'none' removes all borders. Clearing is 'none', so null is not accepted.
 const borderPatchSchema = z.object({
   type: z.enum(['all', 'top', 'bottom', 'left', 'right', 'none']),
   color: hexColorSchema.optional(),
+  /** OOXML line style applied to the edge(s); ignored when type is 'none' */
+  style: borderLineStyleSchema.optional(),
 })
 
 // Every field optional; null clears that property back to the default.
@@ -764,6 +880,10 @@ const formatPatchSchema = z
     /** OOXML indent steps (0 or null clears); renders as left cell padding */
     indent: z.number().int().min(0).max(250).nullable().optional(),
     border: borderPatchSchema.optional(),
+    /** cell protection: locked cells reject edits on a protected sheet */
+    locked: z.boolean().nullable().optional(),
+    /** cell protection: hidden cells hide their formula on a protected sheet */
+    hidden: z.boolean().nullable().optional(),
   })
   .refine((patch) => Object.values(patch).some((value) => value !== undefined), {
     message: 'format must set at least one property',
@@ -776,12 +896,60 @@ const formatRangeSchema = z.object({
   format: formatPatchSchema,
 })
 
+// Clear Formats: resets the range's styling AND cell-protection flags by
+// expanding to ONE format_range carrying every clearing value for the full
+// patch shape (false / null / indent 0 / border 'none' / locked+hidden null).
+// Content-classed, so it may share a batch with other cell edits.
+const clearFormatsSchema = z.object({
+  op: z.literal('clear_formats'),
+  sheetId: z.string().min(1),
+  range: cellRangeSchema,
+})
+
+/// Every field of formatPatchSchema in its cleared state — what clear_formats
+/// expands into. null clears the property in the format engine, `indent: 0`
+/// resets padding, border 'none' removes all edges, and locked/hidden null
+/// restores the protection defaults (locked=true, hidden=false).
+const CLEARED_FORMAT_PATCH: CellFormatPatch = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strikethrough: false,
+  fontFamily: null,
+  fontSize: null,
+  fontColor: null,
+  fillColor: null,
+  numberFormat: null,
+  horizontalAlign: null,
+  verticalAlign: null,
+  wrapText: null,
+  textRotation: null,
+  indent: 0,
+  border: { type: 'none' },
+  locked: null,
+  hidden: null,
+}
+
+// Sort rows by 1–3 key columns: later keys break ties of earlier ones, the
+// sort is stable, and blanks always stay last. `keys` takes precedence over
+// the legacy single-key pair `byColumn`+`order`; at least one of the two forms
+// is required (checked at expansion — a zod refinement cannot live on a
+// discriminated-union member).
+const sortKeySchema = z.object({
+  byColumn: columnLabelSchema,
+  order: z.enum(['asc', 'desc']),
+})
+
 const sortRangeSchema = z.object({
   op: z.literal('sort_range'),
   sheetId: z.string().min(1),
   range: cellRangeSchema,
-  byColumn: columnLabelSchema,
-  order: z.enum(['asc', 'desc']),
+  /** legacy single-key form; ignored when `keys` is present */
+  byColumn: columnLabelSchema.optional(),
+  /** legacy single-key form; ignored when `keys` is present */
+  order: z.enum(['asc', 'desc']).optional(),
+  /** 1–3 keys applied in order, e.g. [{byColumn:"B",order:"desc"}] */
+  keys: z.array(sortKeySchema).min(1).max(3).optional(),
   hasHeader: z.boolean().optional(),
 })
 
@@ -863,6 +1031,145 @@ const findReplaceSchema = z.object({
   wholeCell: z.boolean().optional(),
 })
 
+// Data → Remove Duplicates: keeps the first occurrence of each identical row
+// (text compared case-insensitively across the range's full width) and
+// deletes the later duplicate rows as WHOLE rows, exactly like Excel. It is
+// structural: deleting rows shifts every address below, so this op needs its
+// own batch. Expands into delete_rows primitives (bottom-up) instead of
+// carrying any new executor behavior.
+const removeDuplicatesSchema = z.object({
+  op: z.literal('remove_duplicates'),
+  sheetId: z.string().min(1),
+  /** the table, header row included when hasHeader is true */
+  range: cellRangeSchema,
+  hasHeader: z.boolean().optional(),
+})
+
+// Data → Text to Columns: splits every cell of a one-column (or one-row)
+// source on a delimiter and writes the pieces into the adjacent cells.
+// `delimiter: null` splits on runs of any whitespace. `destination` is the
+// output's top-left cell (default: the source's top-left). `clearSource`
+// removes the original text when the output lands elsewhere (default true).
+// The exact in-place/away clear rules are documented at the expansion site.
+const textToColumnsSchema = z.object({
+  op: z.literal('text_to_columns'),
+  sheetId: z.string().min(1),
+  /** single column (spills right) or single row (spills down) */
+  source: cellRangeSchema,
+  /** null = split on any run of whitespace */
+  delimiter: z.string().min(1).max(32).nullable(),
+  /** top-left cell of the output block; defaults to the source's top-left */
+  destination: cellAddressSchema.optional(),
+  /** treat consecutive delimiters as one (default true) */
+  collapseConsecutive: z.boolean().optional(),
+  /** clear the source cells after splitting (default true; only matters when destination differs) */
+  clearSource: z.boolean().optional(),
+})
+
+// Data → Consolidate: aggregates several same-shaped source ranges into a
+// block of live formulas, one per target cell. Cross-sheet references are
+// qualified (`Sheet2!B2`), same-sheet ones are bare, and sheet names are
+// quoted only when they need to be. The target block is exactly the shape of
+// the reference ranges.
+const consolidateReferenceSchema = z.object({
+  /** sheet the range lives on; defaults to the target sheet */
+  sheetId: z.string().min(1).optional(),
+  range: cellRangeSchema,
+})
+
+const consolidateSchema = z.object({
+  op: z.literal('consolidate'),
+  sheetId: z.string().min(1),
+  /** top-left cell of the output block */
+  target: cellAddressSchema,
+  /** aggregation function applied to the aligned value of every reference */
+  function: z.enum(['sum', 'count', 'average', 'max', 'min']),
+  /** 1–20 source ranges, all of identical shape */
+  references: z.array(consolidateReferenceSchema).min(1).max(20),
+})
+
+// Formulas → Create Names from Selection: turns a label row/column into
+// defined names for the adjacent data row/column, like the ribbon command.
+// Expands into add_defined_name primitives with absolute refs; labels are
+// sanitized into legal names (invalid characters → _, leading digit or
+// cell-like text gets an _ prefix) and empty/duplicate labels are skipped or
+// numbered.
+const createNamesSchema = z.object({
+  op: z.literal('create_names_from_selection'),
+  sheetId: z.string().min(1),
+  range: cellRangeSchema,
+  /** where the labels live: the range's first/last row or column */
+  label: z.enum(['top', 'left', 'bottom', 'right']),
+})
+
+// Data → Subtotal: inserts a bold SUBTOTAL summary row under each contiguous
+// group of `groupColumn` values, plus a Grand Total row, aggregating
+// `valueColumn` with the matching SUBTOTAL function. STRUCTURAL: summary rows
+// shift every address below, so it needs its own batch. Passes through
+// unchanged — the executor drives Univer's insertRowsBefore/formula mutations,
+// which cannot be expressed as per-cell primitives here.
+const subtotalSchema = z.object({
+  op: z.literal('subtotal'),
+  sheetId: z.string().min(1),
+  /** the table; its FIRST row is the header and does not participate */
+  range: cellRangeSchema,
+  /** column whose runs of equal values define the groups, e.g. "A" */
+  groupColumn: columnLabelSchema,
+  /** column each group's SUBTOTAL is computed over, e.g. "D" */
+  valueColumn: columnLabelSchema,
+  /** SUBTOTAL function number: sum→9 average→1 count→2 counta→3 max→4 min→5 product→6 stdev→7 stdevp→8 var→10 varp→11 */
+  function: z.enum([
+    'sum',
+    'average',
+    'count',
+    'counta',
+    'max',
+    'min',
+    'product',
+    'stdev',
+    'stdevp',
+    'var',
+    'varp',
+  ]),
+})
+
+// Outline groups (Data → Group / Subtotal outline buttons). These are
+// layout-class pass-through ops: the executor edits the outline journal and
+// row/column visibility. `range` is axis-local like Excel's row/column
+// ranges — "5:12" for rows, "B:D" for cols — A1-style ranges ("A5:C12",
+// "B1:D1") are accepted too; the executor reads only the range's rows (axis
+// rows) or columns (axis cols).
+const outlineSpanSchema = z
+  .string()
+  .regex(
+    /^(?:[A-Z]{1,3}[1-9][0-9]{0,6}(?::[A-Z]{1,3}[1-9][0-9]{0,6})?|[1-9][0-9]{0,6}(?::[1-9][0-9]{0,6})?|[A-Z]{1,3}(?::[A-Z]{1,3})?)$/,
+  )
+const outlineAxisSchema = z.enum(['rows', 'cols'])
+const outlineGroupSchema = z.object({
+  op: z.literal('outline.group'),
+  sheetId: z.string().min(1),
+  axis: outlineAxisSchema,
+  range: outlineSpanSchema,
+})
+const outlineUngroupSchema = z.object({
+  op: z.literal('outline.ungroup'),
+  sheetId: z.string().min(1),
+  axis: outlineAxisSchema,
+  range: outlineSpanSchema,
+})
+const outlineHideDetailSchema = z.object({
+  op: z.literal('outline.hideDetail'),
+  sheetId: z.string().min(1),
+  axis: outlineAxisSchema,
+  range: outlineSpanSchema,
+})
+const outlineShowDetailSchema = z.object({
+  op: z.literal('outline.showDetail'),
+  sheetId: z.string().min(1),
+  axis: outlineAxisSchema,
+  range: outlineSpanSchema,
+})
+
 export const workbookOperationSchema = z.discriminatedUnion('op', [
   setCellSchema,
   setFormulaSchema,
@@ -873,6 +1180,7 @@ export const workbookOperationSchema = z.discriminatedUnion('op', [
   copyRangeSchema,
   convertToValuesSchema,
   formatRangeSchema,
+  clearFormatsSchema,
   sortRangeSchema,
   mergeCellsSchema,
   unmergeCellsSchema,
@@ -893,6 +1201,9 @@ export const workbookOperationSchema = z.discriminatedUnion('op', [
   setColsHiddenSchema,
   setHyperlinkSchema,
   protectSheetSchema,
+  protectWorkbookSchema,
+  setThemeSchema,
+  allowEditRangesSchema,
   setFilterSchema,
   clearFilterSchema,
   setFilterCriteriaSchema,
@@ -919,6 +1230,15 @@ export const workbookOperationSchema = z.discriminatedUnion('op', [
   deleteTableSchema,
   findReplaceSchema,
   addSparklineSchema,
+  removeDuplicatesSchema,
+  textToColumnsSchema,
+  consolidateSchema,
+  createNamesSchema,
+  subtotalSchema,
+  outlineGroupSchema,
+  outlineUngroupSchema,
+  outlineHideDetailSchema,
+  outlineShowDetailSchema,
 ])
 
 export type WorkbookOperation = z.infer<typeof workbookOperationSchema>
@@ -979,6 +1299,9 @@ export type LayoutOperation =
   | z.infer<typeof setColsHiddenSchema>
   | SetHyperlinkOperation
   | z.infer<typeof protectSheetSchema>
+  | ProtectWorkbookOperation
+  | SetThemeOperation
+  | AllowEditRangesOperation
   | z.infer<typeof setFilterSchema>
   | z.infer<typeof clearFilterSchema>
   | z.infer<typeof setFilterCriteriaSchema>
@@ -994,9 +1317,25 @@ export type LayoutOperation =
   | DeleteVisualOperation
   | DeleteTableOperation
   | AddSparklineOperation
+  | OutlineOperation
 export type DeleteVisualOperation = z.infer<typeof deleteVisualSchema>
 export type DeleteTableOperation = z.infer<typeof deleteTableSchema>
 export type AddSparklineOperation = z.infer<typeof addSparklineSchema>
+export type OutlineOperation =
+  | z.infer<typeof outlineGroupSchema>
+  | z.infer<typeof outlineUngroupSchema>
+  | z.infer<typeof outlineHideDetailSchema>
+  | z.infer<typeof outlineShowDetailSchema>
+export type ProtectWorkbookOperation = z.infer<typeof protectWorkbookSchema>
+export type SetThemeOperation = z.infer<typeof setThemeSchema>
+export type AllowEditRangesOperation = z.infer<typeof allowEditRangesSchema>
+export type ClearFormatsOperation = z.infer<typeof clearFormatsSchema>
+export type RemoveDuplicatesOperation = z.infer<typeof removeDuplicatesSchema>
+export type TextToColumnsOperation = z.infer<typeof textToColumnsSchema>
+export type ConsolidateOperation = z.infer<typeof consolidateSchema>
+export type CreateNamesOperation = z.infer<typeof createNamesSchema>
+export type SubtotalOperation = z.infer<typeof subtotalSchema>
+export type SortRangeOperation = z.infer<typeof sortRangeSchema>
 export type FindReplaceOperation = z.infer<typeof findReplaceSchema>
 export type CopyRangeOperation = z.infer<typeof copyRangeSchema>
 export type ConvertToValuesOperation = z.infer<typeof convertToValuesSchema>
@@ -1016,6 +1355,11 @@ export type PrimitiveOperation =
   | FindReplaceOperation
   | LayoutOperation
   | StructuralOperation
+  // Subtotal passes through as one structural op (it inserts summary rows the
+  // executor performs via Univer commands); it is not part of the
+  // StructuralOperation union, whose members the row/column shift helpers
+  // switch over exhaustively.
+  | SubtotalOperation
   | z.infer<typeof renameSheetSchema>
 
 const STRUCTURAL_OPS = new Set([
@@ -1028,6 +1372,12 @@ const STRUCTURAL_OPS = new Set([
   'duplicate_sheet',
   'set_sheet_hidden',
   'move_sheet',
+  // remove_duplicates expands into delete_rows: it shifts addresses exactly
+  // like a row deletion, so it belongs to the structural lane (own batch).
+  'remove_duplicates',
+  // subtotal inserts summary rows (addresses below shift), so it must not
+  // share a batch with cell edits. It passes through to the executor as-is.
+  'subtotal',
 ])
 const LAYOUT_OPS = new Set([
   'merge_cells',
@@ -1049,6 +1399,9 @@ const LAYOUT_OPS = new Set([
   'set_cols_hidden',
   'set_hyperlink',
   'protect_sheet',
+  'protect_workbook',
+  'set_theme',
+  'allow_edit_ranges',
   'set_filter',
   'clear_filter',
   'set_filter_criteria',
@@ -1064,6 +1417,10 @@ const LAYOUT_OPS = new Set([
   'delete_visual',
   'delete_table',
   'add_sparkline',
+  'outline.group',
+  'outline.ungroup',
+  'outline.hideDetail',
+  'outline.showDetail',
 ])
 // Content addresses cells, so it must not ride in the same batch as
 // row/column shifts that would move those addresses. Layout ops keep their
@@ -1078,14 +1435,20 @@ const CELL_CONTENT_OPS = new Set([
   'copy_range',
   'convert_to_values',
   'format_range',
+  'clear_formats',
   'sort_range',
   'find_replace',
+  // Data tools that expand into per-cell writes / formulas / defined names.
+  // They do not shift addresses, so they may share a batch with content edits.
+  'text_to_columns',
+  'consolidate',
+  'create_names_from_selection',
   ...LAYOUT_OPS,
 ])
 
 export function isStructuralOp(
   op: WorkbookOperation | PrimitiveOperation,
-): op is StructuralOperation {
+): op is StructuralOperation | SubtotalOperation {
   return STRUCTURAL_OPS.has(op.op)
 }
 
@@ -1128,6 +1491,11 @@ export const MAX_EXPANDED_CELL_OPS = 2000
 export const MAX_RANGE_OP_CELLS = 200_000
 /** a fill's source block is read cell by cell, so it stays small */
 export const MAX_FILL_SOURCE_CELLS = 2000
+/** data-tool ops (remove_duplicates / text_to_columns / consolidate) carry
+ * their own cell budget: they expand into many plain cell edits, but a bulk
+ * split/aggregation legitimately touches more cells than the per-cell preview
+ * ceiling allows */
+export const MAX_DATA_TOOL_CELLS = 20_000
 
 /// fill_range geometry guards: the source must tile the target exactly, and
 /// an overlapping source must sit at the target's top-left corner (the
@@ -1377,12 +1745,435 @@ function setRangeOrigin(operation: SetRangeOperation): { startRow: number; start
   return bounds
 }
 
+/// Excel formula prefix for a sheet: bare when the name is a simple
+/// identifier, quoted (embedded ' doubled) otherwise. Mirrors the Consolidate
+/// dialog's helper so AI-written and UI-written formulas look the same.
+function sheetFormulaPrefix(sheetName: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_.]*$/.test(sheetName)
+    ? `${sheetName}!`
+    : `'${sheetName.replaceAll("'", "''")}'!`
+}
+
+/// Defined-name refs always quote the sheet ('Sheet1'!$B$2:$B$10): the
+/// sheets UI writes refs that way and quoting is always legal Excel.
+function absoluteQuotedRangeRef(
+  sheetName: string,
+  bounds: { startRow: number; endRow: number; startColumn: number; endColumn: number },
+): string {
+  return (
+    `'${sheetName.replaceAll("'", "''")}'!` +
+    `$${columnLabel(bounds.startColumn)}$${bounds.startRow + 1}` +
+    `:$${columnLabel(bounds.endColumn)}$${bounds.endRow + 1}`
+  )
+}
+
+/// Excel defined-name rules applied to a label: invalid characters become
+/// underscores and a name that could be read as a reference (leading digit,
+/// "A1", "R1C1", the reserved "R"/"C") gets an underscore prefix. Returns
+/// null for a label that is empty after trimming.
+function sanitizeDefinedName(label: string): string | null {
+  const trimmed = label.trim()
+  if (trimmed === '') return null
+  const cleaned = trimmed.replace(/[^\p{L}\p{N}_.\\]/gu, '_')
+  if (cleaned === '' || /^\.+$/.test(cleaned)) return null
+  // Defined names must start with a letter, underscore, or backslash.
+  const named = /^[\p{L}_\\]/u.test(cleaned) ? cleaned : `_${cleaned}`
+  const cellLike =
+    /^[A-Za-z]{1,3}\d+$/.test(named) || /^[Rr]\d*([Cc]\d*)?$/.test(named) || /^[Cc]$/.test(named)
+  // Excel name length limit is 255 characters.
+  const bounded = (cellLike ? `_${named}` : named).slice(0, 255)
+  return bounded
+}
+
+/// Makes a defined name unique within this expansion by appending _2, _3, …
+/// (Excel names are case-insensitive, so the taken set is lowercased).
+function uniqueDefinedName(base: string, taken: Set<string>): string {
+  const stem = base.slice(0, 248)
+  let candidate = stem
+  let serial = 2
+  while (taken.has(candidate.toLowerCase())) {
+    candidate = `${stem}_${serial}`
+    serial += 1
+  }
+  taken.add(candidate.toLowerCase())
+  return candidate
+}
+
+/// Splits one cell's text into the pieces text-to-columns writes. A null
+/// delimiter means "any run of whitespace" and trims the text; a literal
+/// delimiter is escaped, and collapseConsecutive folds runs of it into one.
+function splitTextColumnParts(
+  text: string,
+  delimiter: string | null,
+  collapseConsecutive: boolean,
+): string[] {
+  if (delimiter === null) {
+    return text
+      .trim()
+      .split(/\s+/)
+      .filter((part) => part !== '')
+  }
+  if (!collapseConsecutive) return text.split(delimiter)
+  const escaped = delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text.split(new RegExp(`${escaped}+`)).filter((part) => part !== '')
+}
+
+/// set_filter_criteria carries its cross-field rule (exactly one of values /
+/// conditions) here rather than as a zod refinement, because discriminated-
+/// union members cannot carry refinements.
+function validateFilterCriteria(operation: z.infer<typeof setFilterCriteriaSchema>): void {
+  if ((operation.values !== undefined) === (operation.conditions !== undefined)) {
+    throw new Error(
+      'set_filter_criteria needs exactly one of "values" (checkbox list, or null to clear the column) ' +
+        'and "conditions" (1–2 custom comparisons) — e.g. {"values":["East","South"]} or ' +
+        '{"conditions":[{"operator":"greaterThan","value":"100"}],"and":true}.',
+    )
+  }
+}
+
+/// Outline spans are axis-local: "5:12" only makes sense for rows, "B:D" only
+/// for columns. A1-style ranges are accepted for either axis (the executor
+/// reads just that axis's extents). Rejecting the mismatch here gives the
+/// model the fix instruction before a plan exists.
+function validateOutlineOperation(operation: OutlineOperation): void {
+  const rowSpan = /^[1-9][0-9]{0,6}(?::[1-9][0-9]{0,6})?$/.test(operation.range)
+  const columnSpan = /^[A-Z]{1,3}(?::[A-Z]{1,3})?$/.test(operation.range)
+  if (rowSpan && operation.axis === 'cols') {
+    throw new Error(
+      `${operation.op} range "${operation.range}" is a row span but axis is "cols" — pass a column span like "B:D" (or an A1 range like "B1:D1").`,
+    )
+  }
+  if (columnSpan && operation.axis === 'rows') {
+    throw new Error(
+      `${operation.op} range "${operation.range}" is a column span but axis is "rows" — pass a row span like "5:12" (or an A1 range like "A5:A12").`,
+    )
+  }
+}
+
+/// Remove Duplicates, agent edition: read the range, keep the first occurrence
+/// of each identical row (text compared case-insensitively across the full
+/// range width, numbers/booleans by value — the same rule as the ribbon's
+/// dedupe helper), and emit one whole-row delete_rows per later duplicate.
+/// Deletes are emitted bottom-up (largest row first) so every row number stays
+/// valid while the batch applies.
+function expandRemoveDuplicates(
+  operation: RemoveDuplicatesOperation,
+  readCell: ExpandCellReader,
+): PrimitiveOperation[] {
+  const bounds = parseRange(operation.range)
+  const cells = rangeCellCount(bounds)
+  if (cells > MAX_DATA_TOOL_CELLS) {
+    throw new Error(
+      `remove_duplicates covers ${cells.toLocaleString('en-US')} cells — the limit is ` +
+        `${MAX_DATA_TOOL_CELLS.toLocaleString('en-US')}. Remove duplicates on a smaller table or split the range.`,
+    )
+  }
+  const firstDataRow = bounds.startRow + (operation.hasHeader === true ? 1 : 0)
+  const seen = new Set<string>()
+  const duplicateRows: number[] = []
+  for (let row = firstDataRow; row <= bounds.endRow; row += 1) {
+    const key: (string | number | boolean | null)[] = []
+    for (let column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
+      const value = readCell(formatAddress(row, column), operation.sheetId).value
+      key.push(typeof value === 'string' ? value.toLowerCase() : value)
+    }
+    const encoded = JSON.stringify(key)
+    if (seen.has(encoded)) duplicateRows.push(row)
+    else seen.add(encoded)
+  }
+  return duplicateRows.reverse().map((row) => ({
+    op: 'delete_rows',
+    sheetId: operation.sheetId,
+    row: row + 1,
+    count: 1,
+  }))
+}
+
+/// Text to Columns, agent edition. One-column sources spill parts rightwards
+/// within each source row; one-row sources spill downward within each source
+/// column (the range "orientation" decides the flow direction).
+///
+/// Clear rules, exactly:
+/// - **destination == source top-left (in place)**: every source cell is
+///   overwritten by its first part, and the trailing cells of each output
+///   row/column that its source cell did not fill (up to the widest split) are
+///   cleared with clear_cell — the stale values Excel's Text to Columns also
+///   wipes when it widens a column.
+/// - **destination elsewhere**: with clearSource (default true) the WHOLE
+///   source is cleared first (so the data is moved, not duplicated), then the
+///   parts are written; with clearSource:false the source text stays.
+/// - Empty source cells are left untouched; numbers/booleans are split by
+///   their text form. Formula cells are split from their computed value and
+///   rejected when that value is unavailable (only the live grid knows it).
+function expandTextToColumns(
+  operation: TextToColumnsOperation,
+  readCell: ExpandCellReader,
+): PrimitiveOperation[] {
+  const source = parseRange(operation.source)
+  const sourceRows = source.endRow - source.startRow + 1
+  const sourceColumns = source.endColumn - source.startColumn + 1
+  if (sourceRows > 1 && sourceColumns > 1) {
+    throw new Error(
+      `text_to_columns source ${operation.source} must be a single column (spills right, e.g. "A2:A100") ` +
+        'or a single row (spills down, e.g. "A2:Z2") — split one line of cells at a time.',
+    )
+  }
+  if (rangeCellCount(source) > MAX_DATA_TOOL_CELLS) {
+    throw new Error(
+      `text_to_columns source covers more than ${MAX_DATA_TOOL_CELLS.toLocaleString('en-US')} cells — split it in several ranges.`,
+    )
+  }
+  const destination =
+    operation.destination === undefined
+      ? { row: source.startRow, column: source.startColumn }
+      : parseAddress(operation.destination)
+  const columnFlow = sourceColumns === 1
+  const collapseConsecutive = operation.collapseConsecutive ?? true
+
+  interface SourceEntry {
+    readonly row: number
+    readonly column: number
+    readonly parts: readonly string[]
+  }
+  const entries: SourceEntry[] = []
+  let maxParts = 0
+  for (let row = source.startRow; row <= source.endRow; row += 1) {
+    for (let column = source.startColumn; column <= source.endColumn; column += 1) {
+      const address = formatAddress(row, column)
+      const state = readCell(address, operation.sheetId)
+      if (state.formula !== undefined && state.value === null) {
+        throw new Error(
+          `text_to_columns found a formula at ${address} whose computed value is unavailable — ` +
+            'convert that formula to a value first (convert_to_values), then split.',
+        )
+      }
+      if (state.value === null) continue
+      const text = typeof state.value === 'string' ? state.value : String(state.value)
+      if (text.trim() === '') continue
+      const parts = splitTextColumnParts(text, operation.delimiter, collapseConsecutive)
+      if (parts.length === 0) continue
+      entries.push({ row, column, parts })
+      maxParts = Math.max(maxParts, parts.length)
+    }
+  }
+  if (maxParts === 0) return []
+  const outputRows = columnFlow ? sourceRows : maxParts
+  const outputColumns = columnFlow ? maxParts : sourceColumns
+  if (outputRows * outputColumns > MAX_DATA_TOOL_CELLS) {
+    throw new Error(
+      `text_to_columns would write ${outputRows * outputColumns} output cells (` +
+        `${outputRows}×${outputColumns}) — the limit is ${MAX_DATA_TOOL_CELLS.toLocaleString('en-US')}. ` +
+        'Split fewer rows at a time.',
+    )
+  }
+
+  const inPlace = destination.row === source.startRow && destination.column === source.startColumn
+  const expanded: PrimitiveOperation[] = []
+  if (!inPlace && (operation.clearSource ?? true)) {
+    // Clear before writing: an away destination may overlap the source, and
+    // clearing afterwards would wipe the freshly split parts.
+    for (let row = source.startRow; row <= source.endRow; row += 1) {
+      for (let column = source.startColumn; column <= source.endColumn; column += 1) {
+        expanded.push({
+          op: 'clear_cell',
+          sheetId: operation.sheetId,
+          address: formatAddress(row, column),
+        })
+      }
+    }
+  }
+  for (const entry of entries) {
+    const rowOffset = columnFlow ? entry.row - source.startRow : 0
+    const columnOffset = columnFlow ? 0 : entry.column - source.startColumn
+    const positionOf = (index: number): { row: number; column: number } =>
+      columnFlow
+        ? { row: destination.row + rowOffset, column: destination.column + index }
+        : { row: destination.row + index, column: destination.column + columnOffset }
+    entry.parts.forEach((part, index) => {
+      const position = positionOf(index)
+      expanded.push({
+        op: 'set_cell',
+        sheetId: operation.sheetId,
+        address: formatAddress(position.row, position.column),
+        // An empty piece (leading/trailing delimiter) clears the cell, which
+        // matches what typing an empty value into the grid does.
+        value: part === '' ? null : part,
+      })
+    })
+    if (!inPlace) continue
+    // In-place: clear the trailing part of this output row/column that the
+    // source cell did not fill (stale values from before the split).
+    for (let index = entry.parts.length; index < maxParts; index += 1) {
+      const position = positionOf(index)
+      expanded.push({
+        op: 'clear_cell',
+        sheetId: operation.sheetId,
+        address: formatAddress(position.row, position.column),
+      })
+    }
+  }
+  return expanded
+}
+
+const CONSOLIDATE_FUNCTION_NAMES: Record<ConsolidateOperation['function'], string> = {
+  sum: 'SUM',
+  count: 'COUNT',
+  average: 'AVERAGE',
+  max: 'MAX',
+  min: 'MIN',
+}
+
+/// Consolidate, agent edition: one live formula per target cell, aggregating
+/// the same offset from every reference range. All references must have the
+/// same shape (that shape is the output shape). Cross-sheet refs are
+/// qualified and quoted only when needed; same-sheet refs stay bare.
+function expandConsolidate(
+  operation: ConsolidateOperation,
+  sheetNameById: (sheetId: string) => string,
+): PrimitiveOperation[] {
+  const first = operation.references[0]
+  if (!first) throw new Error('consolidate needs at least one reference range.')
+  const shape = parseRange(first.range)
+  const rows = shape.endRow - shape.startRow + 1
+  const columns = shape.endColumn - shape.startColumn + 1
+  if (rows * columns > MAX_DATA_TOOL_CELLS) {
+    throw new Error(
+      `consolidate would write ${rows * columns} output cells — the limit is ` +
+        `${MAX_DATA_TOOL_CELLS.toLocaleString('en-US')}. Aggregate a smaller block or split the target.`,
+    )
+  }
+  const references = operation.references.map((reference, index) => {
+    const bounds = parseRange(reference.range)
+    if (
+      bounds.endRow - bounds.startRow !== shape.endRow - shape.startRow ||
+      bounds.endColumn - bounds.startColumn !== shape.endColumn - shape.startColumn
+    ) {
+      throw new Error(
+        `consolidate reference #${index + 1} (${reference.range}) is ` +
+          `${bounds.endRow - bounds.startRow + 1}×${bounds.endColumn - bounds.startColumn + 1} but ` +
+          `reference #1 (${first.range}) is ${rows}×${columns} — every reference must have the same shape, ` +
+          'because each target cell aggregates the same offset from each source.',
+      )
+    }
+    if (reference.sheetId === undefined || reference.sheetId === operation.sheetId) {
+      return { bounds, prefix: '' }
+    }
+    return { bounds, prefix: sheetFormulaPrefix(sheetNameById(reference.sheetId)) }
+  })
+  const target = parseAddress(operation.target)
+  const fnName = CONSOLIDATE_FUNCTION_NAMES[operation.function]
+  const expanded: PrimitiveOperation[] = []
+  for (let rowOffset = 0; rowOffset < rows; rowOffset += 1) {
+    for (let columnOffset = 0; columnOffset < columns; columnOffset += 1) {
+      const args = references.map(
+        (reference) =>
+          `${reference.prefix}${formatAddress(
+            reference.bounds.startRow + rowOffset,
+            reference.bounds.startColumn + columnOffset,
+          )}`,
+      )
+      expanded.push({
+        op: 'set_formula',
+        sheetId: operation.sheetId,
+        address: formatAddress(target.row + rowOffset, target.column + columnOffset),
+        formula: `=${fnName}(${args.join(',')})`,
+      })
+    }
+  }
+  return expanded
+}
+
+/// Create Names from Selection, agent edition: read the label row/column and
+/// emit one add_defined_name per adjacent data column/row, with absolute A1
+/// refs. Invalid characters become _, a leading digit / cell-like label gets
+/// an _ prefix, and duplicate names get a numeric suffix (_2, _3, …).
+/// Labels are read from the cell VALUE (the file's stored value); a label
+/// formula whose computed value is unavailable counts as empty and is skipped.
+function expandCreateNames(
+  operation: CreateNamesOperation,
+  readCell: ExpandCellReader,
+  sheetNameById: (sheetId: string) => string,
+): PrimitiveOperation[] {
+  const bounds = parseRange(operation.range)
+  const rows = bounds.endRow - bounds.startRow + 1
+  const columns = bounds.endColumn - bounds.startColumn + 1
+  const tableStyle = operation.label === 'top' || operation.label === 'bottom'
+  if (tableStyle ? rows < 2 : columns < 2) {
+    throw new Error(
+      tableStyle
+        ? `create_names_from_selection with label "${operation.label}" needs at least two rows: one label row plus at least one data row.`
+        : `create_names_from_selection with label "${operation.label}" needs at least two columns: one label column plus at least one data column.`,
+    )
+  }
+  const sheetName = sheetNameById(operation.sheetId)
+  const labelText = (address: string): string => {
+    const value = readCell(address, operation.sheetId).value
+    if (value === null) return ''
+    return typeof value === 'string' ? value : String(value)
+  }
+  const entries: { label: string; ref: string }[] = []
+  if (tableStyle) {
+    const labelRow = operation.label === 'top' ? bounds.startRow : bounds.endRow
+    const dataStartRow = operation.label === 'top' ? bounds.startRow + 1 : bounds.startRow
+    const dataEndRow = operation.label === 'top' ? bounds.endRow : bounds.endRow - 1
+    for (let column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
+      entries.push({
+        label: labelText(formatAddress(labelRow, column)),
+        ref: absoluteQuotedRangeRef(sheetName, {
+          startRow: dataStartRow,
+          endRow: dataEndRow,
+          startColumn: column,
+          endColumn: column,
+        }),
+      })
+    }
+  } else {
+    const labelColumn = operation.label === 'left' ? bounds.startColumn : bounds.endColumn
+    const dataStartColumn = operation.label === 'left' ? bounds.startColumn + 1 : bounds.startColumn
+    const dataEndColumn = operation.label === 'left' ? bounds.endColumn : bounds.endColumn - 1
+    for (let row = bounds.startRow; row <= bounds.endRow; row += 1) {
+      entries.push({
+        label: labelText(formatAddress(row, labelColumn)),
+        ref: absoluteQuotedRangeRef(sheetName, {
+          startRow: row,
+          endRow: row,
+          startColumn: dataStartColumn,
+          endColumn: dataEndColumn,
+        }),
+      })
+    }
+  }
+  const taken = new Set<string>()
+  const expanded: PrimitiveOperation[] = []
+  for (const entry of entries) {
+    const base = sanitizeDefinedName(entry.label)
+    if (base === null) continue
+    expanded.push({
+      op: 'add_defined_name',
+      name: uniqueDefinedName(base, taken),
+      ref: entry.ref,
+    })
+  }
+  if (expanded.length === 0) {
+    throw new Error(
+      `create_names_from_selection found no non-empty labels in the ${operation.label} ` +
+        `row/column of ${operation.range} — check the range and the label direction.`,
+    )
+  }
+  return expanded
+}
+
 /// Expands set_range/clear_range into per-cell primitives so the preview,
-/// CAS checks, and both apply paths keep working on single cells. sort_range
-/// additionally needs `readCell` to compute the reordered values.
+/// CAS checks, and both apply paths keep working on single cells. sort_range,
+/// find_replace, remove_duplicates, text_to_columns, consolidate, and
+/// create_names_from_selection additionally need `readCell` (the current grid
+/// contents); consolidate/create_names_from_selection need `sheetNameById`
+/// to qualify cross-sheet formula/defined-name references — callers pass a
+/// real sheetId→sheetName resolver from the open workbook.
 export function expandToPrimitiveOps(
   operations: readonly WorkbookOperation[],
   readCell?: ExpandCellReader,
+  sheetNameById?: (sheetId: string) => string,
 ): PrimitiveOperation[] {
   const convertBatchError = convertToValuesBatchError(operations)
   if (convertBatchError) throw new Error(convertBatchError)
@@ -1465,6 +2256,25 @@ export function expandToPrimitiveOps(
         )
       }
       expanded.push(operation)
+    } else if (operation.op === 'clear_formats') {
+      // One range-level format_range carrying every clearing value: the same
+      // shape the format engine already applies, so no new executor branch.
+      const cells = rangeCellCount(parseRange(operation.range))
+      if (cells > MAX_DATA_TOOL_CELLS) {
+        throw new Error(
+          `clear_formats covers ${cells.toLocaleString('en-US')} cells — the limit is ` +
+            `${MAX_DATA_TOOL_CELLS.toLocaleString('en-US')}. Clear it in several ranges.`,
+        )
+      }
+      expanded.push({
+        op: 'format_range',
+        sheetId: operation.sheetId,
+        range: operation.range,
+        // Fresh object per expansion: the patch is embedded in plans that a
+        // future consumer could normalize in place, and sharing one module
+        // constant would leak that mutation into every later clear_formats.
+        format: { ...CLEARED_FORMAT_PATCH, border: { type: 'none' } },
+      })
     } else if (operation.op === 'find_replace') {
       const bounds = parseRange(operation.range)
       const cells = rangeCellCount(bounds)
@@ -1505,15 +2315,33 @@ export function expandToPrimitiveOps(
       if (rangeCellCount(parseRange(operation.range)) > MAX_EXPANDED_CELL_OPS) {
         throw new Error(`sort_range covers more than ${MAX_EXPANDED_CELL_OPS} cells.`)
       }
-      const changes = computeSortChanges(
-        {
-          range: operation.range,
-          byColumn: operation.byColumn,
-          ascending: operation.order === 'asc',
-          hasHeader: operation.hasHeader ?? false,
-        },
-        (address) => readCell(address, operation.sheetId),
-      )
+      if (
+        operation.keys === undefined &&
+        (operation.byColumn === undefined || operation.order === undefined)
+      ) {
+        throw new Error(
+          'sort_range needs a sort key: pass "keys" (1–3 entries, e.g. ' +
+            '[{"byColumn":"B","order":"desc"}]) or both "byColumn" and "order".',
+        )
+      }
+      const hasHeader = operation.hasHeader ?? false
+      const spec: SortSpec =
+        operation.keys !== undefined
+          ? {
+              range: operation.range,
+              hasHeader,
+              keys: operation.keys.map((key) => ({
+                byColumn: key.byColumn,
+                ascending: key.order === 'asc',
+              })),
+            }
+          : {
+              range: operation.range,
+              hasHeader,
+              byColumn: operation.byColumn as string,
+              ascending: operation.order === 'asc',
+            }
+      const changes = computeSortChanges(spec, (address) => readCell(address, operation.sheetId))
       for (const change of changes) {
         countCell()
         expanded.push({
@@ -1524,6 +2352,75 @@ export function expandToPrimitiveOps(
           expectedValue: change.before,
         })
       }
+    } else if (operation.op === 'remove_duplicates') {
+      if (!readCell)
+        throw new Error('remove_duplicates needs the current cell contents to plan against.')
+      expanded.push(...expandRemoveDuplicates(operation, readCell))
+    } else if (operation.op === 'text_to_columns') {
+      if (!readCell)
+        throw new Error('text_to_columns needs the current cell contents to plan against.')
+      // These data tools carry their own MAX_DATA_TOOL_CELLS budget instead of
+      // the per-cell MAX_EXPANDED_CELL_OPS preview ceiling: a bulk split or
+      // aggregation legitimately writes more than 2,000 plain cells.
+      expanded.push(...expandTextToColumns(operation, readCell))
+    } else if (operation.op === 'consolidate') {
+      if (!sheetNameById)
+        throw new Error(
+          'consolidate needs sheet names to build cross-sheet references — open the workbook through a path that resolves sheet ids to names.',
+        )
+      expanded.push(...expandConsolidate(operation, sheetNameById))
+    } else if (operation.op === 'create_names_from_selection') {
+      if (!readCell)
+        throw new Error(
+          'create_names_from_selection needs the current cell contents to read its labels.',
+        )
+      if (!sheetNameById)
+        throw new Error(
+          'create_names_from_selection needs the sheet name to write absolute defined-name references.',
+        )
+      expanded.push(...expandCreateNames(operation, readCell, sheetNameById))
+    } else if (operation.op === 'subtotal') {
+      // Structural pass-through: the executor inserts the summary rows through
+      // Univer. Validate the geometry here so the model gets a fix instruction
+      // before a plan exists.
+      const bounds = parseRange(operation.range)
+      const rows = bounds.endRow - bounds.startRow + 1
+      if (rows < 2) {
+        throw new Error(
+          `subtotal range ${operation.range} needs at least two rows — a header row plus at least one data row.`,
+        )
+      }
+      const groupColumn = columnIndex(operation.groupColumn)
+      const valueColumn = columnIndex(operation.valueColumn)
+      if (groupColumn < bounds.startColumn || groupColumn > bounds.endColumn) {
+        throw new Error(
+          `subtotal groupColumn ${operation.groupColumn} is outside the range ${operation.range} — ` +
+            "the grouping column must be one of the range's columns.",
+        )
+      }
+      if (valueColumn < bounds.startColumn || valueColumn > bounds.endColumn) {
+        throw new Error(
+          `subtotal valueColumn ${operation.valueColumn} is outside the range ${operation.range} — ` +
+            "the subtotaled column must be one of the range's columns.",
+        )
+      }
+      if (groupColumn === valueColumn) {
+        throw new Error(
+          `subtotal groupColumn and valueColumn are both ${operation.groupColumn} — ` +
+            'group by one column and subtotal a different (numeric) column.',
+        )
+      }
+      expanded.push(operation)
+    } else if (
+      operation.op === 'outline.group' ||
+      operation.op === 'outline.ungroup' ||
+      operation.op === 'outline.hideDetail' ||
+      operation.op === 'outline.showDetail'
+    ) {
+      // Layout-class pass-through: the executor edits the outline journal and
+      // row/column visibility. Only axis/span consistency is validated here.
+      validateOutlineOperation(operation)
+      expanded.push(operation)
     } else if (operation.op === 'add_pivot') {
       const columnFieldsArray =
         operation.columnField === undefined
@@ -1613,14 +2510,19 @@ export function expandToPrimitiveOps(
         operation.title === undefined &&
         operation.chartType === undefined &&
         (!operation.seriesColors || Object.keys(operation.seriesColors).length === 0) &&
+        (!operation.pointColors || Object.keys(operation.pointColors).length === 0) &&
         operation.legend === undefined &&
         operation.axisTitles === undefined &&
         operation.dataLabels === undefined &&
+        operation.dataLabelPosition === undefined &&
+        operation.dataLabelFormat === undefined &&
         operation.grouping === undefined &&
+        operation.gridlines === undefined &&
+        operation.valueAxis === undefined &&
         (!operation.seriesData || operation.seriesData.length === 0)
       ) {
         throw new Error(
-          'edit_chart needs at least one of title / chartType / seriesColors / legend / dataLabels / grouping / axisTitles / seriesData.',
+          'edit_chart needs at least one of title / chartType / seriesColors / pointColors / legend / dataLabels / dataLabelPosition / dataLabelFormat / grouping / gridlines / valueAxis / axisTitles / seriesData.',
         )
       }
       for (const entry of operation.seriesData ?? []) {
@@ -1664,6 +2566,21 @@ export function expandToPrimitiveOps(
         throw new Error('set_page_setup: scale and fitToWidth/fitToHeight are mutually exclusive.')
       }
       expanded.push(operation)
+    } else if (operation.op === 'set_theme') {
+      if (
+        operation.theme === undefined &&
+        operation.colors === undefined &&
+        operation.fonts === undefined
+      ) {
+        throw new Error(
+          'set_theme needs at least one of "theme" (a full theme preset id), "colors" (a color-scheme preset id), ' +
+            'or "fonts" (a font-scheme preset id) — read the available ids with read_workbook_context first.',
+        )
+      }
+      expanded.push(operation)
+    } else if (operation.op === 'set_filter_criteria') {
+      validateFilterCriteria(operation)
+      expanded.push(operation)
     } else {
       if (CELL_CONTENT_OPS.has(operation.op)) countCell()
       expanded.push(operation)
@@ -1687,9 +2604,25 @@ const FORMAT_FIELD_LABELS: Record<string, string> = {
   wrapText: 'wrap',
   textRotation: 'rotation',
   indent: 'indent',
+  locked: 'locked',
+  hidden: 'hidden',
+}
+
+/// True when a patch is exactly what clear_formats expands to (every format
+/// field present, in its cleared state) — labelled as one "Clear formatting"
+/// line instead of a dozen "no bold / clear font …" fragments.
+function isClearedFormatPatch(format: CellFormatPatch): boolean {
+  const entries = Object.entries(CLEARED_FORMAT_PATCH)
+  if (Object.keys(format).length !== entries.length) return false
+  return entries.every(([key, cleared]) => {
+    const value = (format as Record<string, unknown>)[key]
+    if (key === 'border') return JSON.stringify(value) === JSON.stringify(cleared)
+    return value === cleared
+  })
 }
 
 export function formatOpLabel(op: FormatRangeOperation): string {
+  if (isClearedFormatPatch(op.format)) return `Clear formatting on ${op.range}`
   const parts = Object.entries(op.format)
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => {
@@ -1697,7 +2630,17 @@ export function formatOpLabel(op: FormatRangeOperation): string {
       if (key === 'border') {
         const border = value as BorderPatch
         if (border.type === 'none') return 'clear borders'
-        return `border ${border.type}${border.color ? ` ${border.color}` : ''}`
+        return `border ${border.type}${border.style ? ` ${border.style}` : ''}${
+          border.color ? ` ${border.color}` : ''
+        }`
+      }
+      if (key === 'locked') {
+        if (value === null) return 'reset locked'
+        return value === true ? 'locked' : 'unlocked'
+      }
+      if (key === 'hidden') {
+        if (value === null) return 'reset hidden'
+        return value === true ? 'hidden' : 'not hidden'
       }
       if (value === null) return `clear ${name}`
       if (value === true) return name
@@ -1705,6 +2648,15 @@ export function formatOpLabel(op: FormatRangeOperation): string {
       return `${name} ${String(value)}`
     })
   return `${op.range}: ${parts.join(', ')}`
+}
+
+const FILTER_OPERATOR_SYMBOLS: Record<z.infer<typeof filterConditionSchema>['operator'], string> = {
+  equal: '=',
+  notEqual: '<>',
+  greaterThan: '>',
+  greaterThanOrEqual: '>=',
+  lessThan: '<',
+  lessThanOrEqual: '<=',
 }
 
 export function layoutOpLabel(op: LayoutOperation): string {
@@ -1738,6 +2690,13 @@ export function layoutOpLabel(op: LayoutOperation): string {
             .join(', ')}`,
         )
       }
+      if (op.pointColors && Object.keys(op.pointColors).length > 0) {
+        const count = Object.values(op.pointColors).reduce(
+          (total, points) => total + Object.keys(points).length,
+          0,
+        )
+        parts.push(`${count} point color${count === 1 ? '' : 's'}`)
+      }
       if (op.legend !== undefined) {
         parts.push(op.legend === 'none' ? 'hide legend' : `legend ${op.legend}`)
       }
@@ -1754,6 +2713,25 @@ export function layoutOpLabel(op: LayoutOperation): string {
             ? 'clear value-axis title'
             : `value axis "${op.axisTitles.value}"`,
         )
+      }
+      if (op.dataLabelPosition !== undefined) {
+        parts.push(`label position ${op.dataLabelPosition}`)
+      }
+      if (op.dataLabelFormat !== undefined) {
+        parts.push(`label format "${op.dataLabelFormat}"`)
+      }
+      if (op.gridlines !== undefined) {
+        parts.push(op.gridlines ? 'gridlines on' : 'gridlines off')
+      }
+      if (op.valueAxis !== undefined) {
+        const bounds: string[] = []
+        if (op.valueAxis.min !== undefined) {
+          bounds.push(op.valueAxis.min === null ? 'min auto' : `min ${op.valueAxis.min}`)
+        }
+        if (op.valueAxis.max !== undefined) {
+          bounds.push(op.valueAxis.max === null ? 'max auto' : `max ${op.valueAxis.max}`)
+        }
+        parts.push(`value axis ${bounds.join(' / ')}`)
       }
       for (const entry of op.seriesData ?? []) {
         const detail = [
@@ -1816,18 +2794,50 @@ export function layoutOpLabel(op: LayoutOperation): string {
           ? ` ${op.column}`
           : `s ${op.column}–${columnLabel(columnIndex(op.column) + op.count - 1)}`
       }`
+    case 'outline.group':
+      return `Group ${op.axis === 'rows' ? 'rows' : 'columns'} ${op.range}`
+    case 'outline.ungroup':
+      return `Ungroup ${op.axis === 'rows' ? 'rows' : 'columns'} ${op.range}`
+    case 'outline.hideDetail':
+      return `Hide detail ${op.axis === 'rows' ? 'rows' : 'columns'} ${op.range}`
+    case 'outline.showDetail':
+      return `Show detail ${op.axis === 'rows' ? 'rows' : 'columns'} ${op.range}`
     case 'set_hyperlink':
       return op.target === null
         ? `Remove link at ${op.address}`
         : `Link ${op.address} → ${op.target}`
     case 'protect_sheet':
       return op.protected ? 'Protect sheet' : 'Unprotect sheet'
+    case 'protect_workbook':
+      return op.protected ? 'Protect workbook structure' : 'Unprotect workbook structure'
+    case 'set_theme': {
+      const parts: string[] = []
+      if (op.theme !== undefined) parts.push(op.theme)
+      if (op.colors !== undefined) parts.push(`colors ${op.colors}`)
+      if (op.fonts !== undefined) parts.push(`fonts ${op.fonts}`)
+      return `Apply theme ${parts.join(', ')}`
+    }
+    case 'allow_edit_ranges':
+      if (op.ranges.length === 0) return 'Clear allowed edit ranges'
+      return (
+        `Allow editing ${op.ranges.length} range${op.ranges.length === 1 ? '' : 's'}: ` +
+        `${op.ranges
+          .slice(0, 3)
+          .map((range) => range.name ?? range.sqref)
+          .join(', ')}${op.ranges.length > 3 ? ', …' : ''}`
+      )
     case 'set_filter':
       return `Add auto-filter on ${op.range}`
     case 'clear_filter':
       return 'Remove auto-filter'
     case 'set_filter_criteria':
-      return op.values === null
+      if (op.conditions !== undefined) {
+        const joiner = (op.and ?? true) ? ' AND ' : ' OR '
+        return `Filter column ${op.column}: ${op.conditions
+          .map((condition) => `${FILTER_OPERATOR_SYMBOLS[condition.operator]} ${condition.value}`)
+          .join(joiner)}`
+      }
+      return op.values === null || op.values === undefined
         ? `Clear filter criteria on column ${op.column}`
         : `Filter column ${op.column} to ${op.values.length} value${op.values.length === 1 ? '' : 's'}`
     case 'add_conditional_format':
@@ -1916,8 +2926,10 @@ function dvRuleLabel(rule: DvRule): string {
   }
 }
 
-export function structuralOpLabel(op: StructuralOperation): string {
+export function structuralOpLabel(op: StructuralOperation | SubtotalOperation): string {
   switch (op.op) {
+    case 'subtotal':
+      return `Insert SUBTOTAL ${op.function} rows on ${op.range} grouped by ${op.groupColumn}`
     case 'insert_rows':
       return op.count === 1
         ? `Insert 1 row before row ${op.row}`

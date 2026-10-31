@@ -75,34 +75,36 @@ export function proposeOperations(
         summary,
         operations,
       })
-      // find_replace plans against the grid; unloaded cells read as empty
-      // and would silently miss matches — fail early instead. Ranges above
-      // the per-cell expansion cap are exempt: they stay range-level and the
-      // apply executor loads each chunk before scanning it.
+      // Data ops that plan against the grid read cells synchronously; unloaded
+      // cells read as empty, which would silently miss matches (find_replace)
+      // or — worse for remove_duplicates — look like duplicate rows and delete
+      // real data. Fail early instead. find_replace ranges above the per-cell
+      // expansion cap are exempt: they stay range-level and the apply executor
+      // loads each chunk before scanning it.
       for (const operation of batch.operations) {
-        if (operation.op !== 'find_replace') continue
-        const bounds = parseRange(operation.range)
-        if (rangeCellCount(bounds) > MAX_EXPANDED_CELL_OPS) continue
-        const loaded = state.loadedRanges.get(operation.sheetId)
+        const requirement = lazyReadRequirement(operation)
+        if (!requirement) continue
+        const loaded = state.loadedRanges.get(requirement.sheetId)
         const rangeLoaded =
           state.formulaMode ||
           (loaded !== undefined &&
-            bounds.startRow >= loaded.startRow &&
-            bounds.endRow <= loaded.endRow &&
-            bounds.startColumn >= loaded.startColumn &&
-            bounds.endColumn <= loaded.endColumn)
-        if (!rangeLoaded) {
-          return {
-            ok: false,
-            error:
-              'The find_replace range is not fully loaded yet — narrow it to a loaded region, or read_range first and rewrite precisely with set_range.',
-          }
-        }
+            requirement.bounds.startRow >= loaded.startRow &&
+            requirement.bounds.endRow <= loaded.endRow &&
+            requirement.bounds.startColumn >= loaded.startColumn &&
+            requirement.bounds.endColumn <= loaded.endColumn)
+        if (!rangeLoaded) return { ok: false, error: requirement.error }
       }
       const workbook = ctx.univerRef.current?.univerAPI.getActiveWorkbook()
       if (!workbook) return { ok: false, error: 'No workbook is open.' }
       const reader = lazyWorkbookCellReader(workbook)
-      for (const operation of expandToPrimitiveOps(batch.operations, reader)) {
+      const sheetNameById = (id: string): string => {
+        const sheet = workbook.getSheetBySheetId(id)
+        if (!sheet) throw new Error(`Unknown sheet: ${id}`)
+        return sheet.getSheetName()
+      }
+      // consolidate / create_names_from_selection qualify cross-sheet refs by
+      // sheet name, so expansion gets the same live resolver the plan uses.
+      for (const operation of expandToPrimitiveOps(batch.operations, reader, sheetNameById)) {
         // Every sheet-addressed op must reference an existing sheet BEFORE the
         // batch starts applying: apply routes through sheetById and a mid-batch
         // throw would leave earlier ops committed while the tool reports the
@@ -774,7 +776,12 @@ export function runDeterministicPlan(
         planPrompt(instruction, { revision: 0, sheetId }),
       )
       const reader = lazyWorkbookCellReader(workbook)
-      for (const operation of expandToPrimitiveOps(command.operations, reader)) {
+      const sheetNameById = (id: string): string => {
+        const sheet = workbook.getSheetBySheetId(id)
+        if (!sheet) throw new Error(`Unknown sheet: ${id}`)
+        return sheet.getSheetName()
+      }
+      for (const operation of expandToPrimitiveOps(command.operations, reader, sheetNameById)) {
         // Range-level ops pass through unexpanded; the apply executor loads
         // unloaded chunks itself, so no streaming check here.
         if (
@@ -794,11 +801,7 @@ export function runDeterministicPlan(
           return { text: t('appCellStreaming'), isError: true }
         }
       }
-      const plan = buildLazyChangePlan(command, reader, (id) => {
-        const sheet = workbook.getSheetBySheetId(id)
-        if (!sheet) throw new Error(`Unknown sheet: ${id}`)
-        return sheet.getSheetName()
-      })
+      const plan = buildLazyChangePlan(command, reader, sheetNameById)
       ctx.lazyPreviewRef.current = { sessionId: state.file.sessionId, sheetId, plan }
       ctx.setPreview(plan)
       void ctx.autoApplySafePlan(plan)
@@ -840,6 +843,9 @@ const PIVOT_GATED_OPS = new Set([
   'delete_cols',
   'merge_cells',
   'unmerge_cells',
+  // subtotal inserts summary rows (insertRowsBefore), which shifts addresses
+  // exactly like insert_rows — the same pivot-desync gate applies.
+  'subtotal',
 ])
 const FILTER_GATED_OPS = new Set(['set_filter', 'clear_filter', 'set_filter_criteria'])
 
@@ -885,6 +891,75 @@ export function lazyGateError(
     return "This sheet's data-validation rules are still being indexed — retry after workbook indexing completes."
   }
   return null
+}
+
+/** The grid region a sync-planning data op must have loaded, plus the error
+ * to return when it is not. Null for ops that do not read cells. */
+interface LazyReadRequirement {
+  readonly sheetId: string
+  readonly bounds: {
+    startRow: number
+    endRow: number
+    startColumn: number
+    endColumn: number
+  }
+  readonly error: string
+}
+
+function lazyReadRequirement(operation: WorkbookOperation): LazyReadRequirement | null {
+  switch (operation.op) {
+    case 'find_replace': {
+      const bounds = parseRange(operation.range)
+      if (rangeCellCount(bounds) > MAX_EXPANDED_CELL_OPS) return null
+      return {
+        sheetId: operation.sheetId,
+        bounds,
+        error:
+          'The find_replace range is not fully loaded yet — narrow it to a loaded region, or read_range first and rewrite precisely with set_range.',
+      }
+    }
+    case 'remove_duplicates':
+      return {
+        sheetId: operation.sheetId,
+        bounds: parseRange(operation.range),
+        error:
+          'The remove_duplicates range is not fully loaded yet — read_range it first (that loads the region), then retry: unloaded rows read as empty and would be deleted as duplicates.',
+      }
+    case 'text_to_columns':
+      return {
+        sheetId: operation.sheetId,
+        bounds: parseRange(operation.source),
+        error:
+          'The text_to_columns source is not loaded yet — read_range the source first (that loads it), then retry: unloaded cells would split as empty.',
+      }
+    case 'create_names_from_selection': {
+      const bounds = parseRange(operation.range)
+      // Only the label row/column is read — require that strip, not the whole
+      // data block.
+      const labelBounds =
+        operation.label === 'top'
+          ? { ...bounds, endRow: bounds.startRow }
+          : operation.label === 'bottom'
+            ? { ...bounds, startRow: bounds.endRow }
+            : operation.label === 'left'
+              ? { ...bounds, endColumn: bounds.startColumn }
+              : { ...bounds, startColumn: bounds.endColumn }
+      return {
+        sheetId: operation.sheetId,
+        bounds: labelBounds,
+        error: `The ${operation.label} label row/column of ${operation.range} is not loaded yet — read_range it first (that loads it), then retry.`,
+      }
+    }
+    case 'subtotal':
+      return {
+        sheetId: operation.sheetId,
+        bounds: parseRange(operation.range),
+        error:
+          'The subtotal range is not fully loaded yet — read_range it first (that loads the region), then retry: unloaded rows would be grouped as empty.',
+      }
+    default:
+      return null
+  }
 }
 
 /** Every formula a batch would write: set_formula plus "="-strings in set_range. */
