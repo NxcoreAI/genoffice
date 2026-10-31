@@ -12,6 +12,8 @@ import * as slideActions from './slide-actions'
 import * as showActions from './show-actions'
 import { shouldRouteUndoToDeck } from './undo-routing'
 
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 /** Whether focus is in a text input (input/textarea/contentEditable) — these cases use native undo/delete */
 function inTextField(): boolean {
   const el = document.activeElement as HTMLElement | null
@@ -71,8 +73,15 @@ export function handleGlobalKeydown(
     ctx.setFindOpen(true)
     return
   }
-  // ⌘K: annotate the selection with an AI edit
-  if (mod && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+  // ⌘K: annotate the selection with an AI edit (folded out of the EverRoom
+  // embed: the AI annotation popover does not exist there)
+  if (
+    !__GENOFFICE_EMBED_ONLY__ &&
+    mod &&
+    !e.altKey &&
+    !e.shiftKey &&
+    (e.key === 'k' || e.key === 'K')
+  ) {
     if (editing || inField || selectedIds.length === 0) return
     e.preventDefault()
     ctx.openAskPopover()

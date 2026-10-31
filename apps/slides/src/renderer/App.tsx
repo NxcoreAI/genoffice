@@ -4126,7 +4126,10 @@ export function App() {
         </div>
       )}
 
-      {!askState &&
+      {/* EverRoom embed builds fold the AI annotation entry (floating chip and
+          its popover) out; the host drives edits through its own agent UI. */}
+      {!everroomEmbed &&
+        !askState &&
         !editing &&
         !editingCell &&
         !cropTarget &&
@@ -4137,7 +4140,7 @@ export function App() {
           <AiAskTrigger getAnchorRect={getAskTriggerRect} onOpen={openAskPopover} />
         )}
 
-      {askState && askTargets.length > 0 && (
+      {!everroomEmbed && askState && askTargets.length > 0 && (
         <AiAskPopover
           targets={askTargets}
           getAnchorRect={getAskAnchorRect}

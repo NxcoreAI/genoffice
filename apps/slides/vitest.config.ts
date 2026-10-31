@@ -5,6 +5,12 @@ import { defineConfig } from 'vitest/config'
 const here = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
+  // Unit tests exercise the standalone renderer: the embed-only define folds
+  // AI entries out of the EverRoom runtime, so keep them on here (the electron
+  // builds still fold it from GENOFFICE_EMBED_ONLY).
+  define: {
+    __GENOFFICE_EMBED_ONLY__: JSON.stringify(false),
+  },
   // Pin resolution to this repo's workspace sources (matches tsconfig paths)
   resolve: {
     alias: {

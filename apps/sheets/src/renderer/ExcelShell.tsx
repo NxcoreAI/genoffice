@@ -2362,26 +2362,30 @@ function Ribbon({
             onClick={() => onCommand('workbook-statistics')}
           />
         </RibbonGroup>
-        <RibbonGroup label={t('appGroupLanguage')}>
-          <div className="ribbon-tool large" data-tip={t('appTranslateTitle')}>
-            <span className="tool-icon-row">
-              <ToolSymbol symbol="文" />
-              <CaretIcon />
-            </span>
-            <span>
-              <strong>{t('appTranslate')}</strong>
-            </span>
-            <MenuSelect
-              cover
-              label={t('appTranslate')}
-              options={TRANSLATE_LANGUAGES.map((language) => ({
-                value: language,
-                label: language,
-              }))}
-              onPick={(language) => onAiRun(t('appTranslatePrompt', { language }))}
-            />
-          </div>
-        </RibbonGroup>
+        {/* Translate is an AI preset; EverRoom embed builds have no provider
+            behind it, so the Language group is folded out there. */}
+        {!__GENOFFICE_EMBED_ONLY__ && (
+          <RibbonGroup label={t('appGroupLanguage')}>
+            <div className="ribbon-tool large" data-tip={t('appTranslateTitle')}>
+              <span className="tool-icon-row">
+                <ToolSymbol symbol="文" />
+                <CaretIcon />
+              </span>
+              <span>
+                <strong>{t('appTranslate')}</strong>
+              </span>
+              <MenuSelect
+                cover
+                label={t('appTranslate')}
+                options={TRANSLATE_LANGUAGES.map((language) => ({
+                  value: language,
+                  label: language,
+                }))}
+                onPick={(language) => onAiRun(t('appTranslatePrompt', { language }))}
+              />
+            </div>
+          </RibbonGroup>
+        )}
         <RibbonGroup label={t('appGroupComments')}>
           <RibbonButton
             large

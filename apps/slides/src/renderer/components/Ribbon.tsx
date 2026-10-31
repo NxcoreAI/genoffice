@@ -118,6 +118,10 @@ import { RibbonInsertTab } from './RibbonInsertTab'
 import { ShapeGalleryContent } from './ShapeGalleryPopover'
 import { contextTabForElement, type ContextTab } from './context-tabs'
 
+/// EverRoom embed build: folds out the AI-backed Review-tab proofing group
+/// (spell check / translate) — there is no AI provider behind it.
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 const IS_MAC = navigator.platform.toLowerCase().includes('mac')
 /** shell tab mode: the tab strip above owns traffic lights / caption buttons */
 const IN_TAB = new URLSearchParams(window.location.search).get('mode') === 'tab'
@@ -2439,61 +2443,65 @@ export function Ribbon({
           </>
         ) : tab === 'review' ? (
           <>
-            <Group label={t('ribbonGroupProofing')}>
-              <button
-                className="rb-big"
-                disabled={!hasDoc}
-                data-tip={`${t('ribbonSpellCheckTip')} — ${t('ribbonAiCreditNote')}`}
-                onClick={() => {
-                  if (confirmAiRewrite()) onAiPreset(t('ribbonSpellCheckPrompt'))
-                }}
-              >
-                <span className="rb-big-icon">
-                  <span className="ai-feature-icon" aria-hidden="true">
-                    <img src={iconSpelling} width={22} height={22} alt="" />
-                  </span>
-                </span>
-                <span>{t('ribbonSpellCheck')}</span>
-              </button>
-              <div className="rb-drop-wrap">
-                <button
-                  className={`rb-big ${translateOpen ? 'active' : ''}`}
-                  disabled={!hasDoc}
-                  data-tip={`${t('ribbonTranslateTip')} — ${t('ribbonAiCreditNote')}`}
-                  onMouseDown={(e) => {
-                    e.stopPropagation()
-                    closeSiblingPanels(e, closePanels, 'translate')
-                  }}
-                  onClick={() => setTranslateOpen((v) => !v)}
-                >
-                  <span className="rb-big-icon">
-                    <span className="ai-feature-icon" aria-hidden="true">
-                      <img src={iconTranslate} width={22} height={22} alt="" />
+            {!__GENOFFICE_EMBED_ONLY__ && (
+              <>
+                <Group label={t('ribbonGroupProofing')}>
+                  <button
+                    className="rb-big"
+                    disabled={!hasDoc}
+                    data-tip={`${t('ribbonSpellCheckTip')} — ${t('ribbonAiCreditNote')}`}
+                    onClick={() => {
+                      if (confirmAiRewrite()) onAiPreset(t('ribbonSpellCheckPrompt'))
+                    }}
+                  >
+                    <span className="rb-big-icon">
+                      <span className="ai-feature-icon" aria-hidden="true">
+                        <img src={iconSpelling} width={22} height={22} alt="" />
+                      </span>
                     </span>
-                    <RbCaret />
-                  </span>
-                  <span>{t('ribbonTranslate')}</span>
-                </button>
-                {translateOpen && (
-                  <div className="rb-drop rb-menu" onMouseDown={(e) => e.stopPropagation()}>
-                    {TRANSLATE_TARGETS.map((lang) => (
-                      <button
-                        key={lang}
-                        onClick={() => {
-                          setTranslateOpen(false)
-                          if (confirmAiRewrite()) {
-                            onAiPreset(t('ribbonTranslatePrompt', { lang: t(lang) }))
-                          }
-                        }}
-                      >
-                        {t(lang)}
-                      </button>
-                    ))}
+                    <span>{t('ribbonSpellCheck')}</span>
+                  </button>
+                  <div className="rb-drop-wrap">
+                    <button
+                      className={`rb-big ${translateOpen ? 'active' : ''}`}
+                      disabled={!hasDoc}
+                      data-tip={`${t('ribbonTranslateTip')} — ${t('ribbonAiCreditNote')}`}
+                      onMouseDown={(e) => {
+                        e.stopPropagation()
+                        closeSiblingPanels(e, closePanels, 'translate')
+                      }}
+                      onClick={() => setTranslateOpen((v) => !v)}
+                    >
+                      <span className="rb-big-icon">
+                        <span className="ai-feature-icon" aria-hidden="true">
+                          <img src={iconTranslate} width={22} height={22} alt="" />
+                        </span>
+                        <RbCaret />
+                      </span>
+                      <span>{t('ribbonTranslate')}</span>
+                    </button>
+                    {translateOpen && (
+                      <div className="rb-drop rb-menu" onMouseDown={(e) => e.stopPropagation()}>
+                        {TRANSLATE_TARGETS.map((lang) => (
+                          <button
+                            key={lang}
+                            onClick={() => {
+                              setTranslateOpen(false)
+                              if (confirmAiRewrite()) {
+                                onAiPreset(t('ribbonTranslatePrompt', { lang: t(lang) }))
+                              }
+                            }}
+                          >
+                            {t(lang)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </Group>
-            <div className="ribbon-sep" />
+                </Group>
+                <div className="ribbon-sep" />
+              </>
+            )}
             <Group label={t('ribbonGroupComments')}>
               <button
                 className="rb-big"

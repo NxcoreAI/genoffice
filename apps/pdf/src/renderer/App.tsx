@@ -7825,7 +7825,9 @@ export default function App() {
                 )}
               </div>
             )}
-            {askPop && (
+            {/* AI ask popover: folded out of the EverRoom embed together with the
+              selection-toolbar entry that opens it. */}
+            {!everroomEmbed && askPop && (
               <AiAskPopover
                 rect={askPop.rect}
                 excerpt={askPop.excerpt}
