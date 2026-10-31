@@ -68,6 +68,8 @@ import { defaultEastAsiaFontFor } from './font-list'
 import { hasPrintableHeaderFooter } from './pagination'
 import { showToast } from './components/toast-bus'
 
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 /** The App state the file actions need; built fresh per call. */
 export interface FileActionContext {
   editor: Editor | null
@@ -420,8 +422,12 @@ export async function newFile(ctx: FileActionContext): Promise<boolean | undefin
     ctx.onWriteProtectionLoaded(null)
     ctx.setCompareResult(null)
     ctx.dirtyRef.current = false
-    ctx.setShowAi(true)
-    ctx.setStatus(t('appNewDocCreated'))
+    // Both the AI panel and its "type into the AI panel" hint are standalone
+    // only: the EverRoom embed ships no AI panel to open.
+    if (!__GENOFFICE_EMBED_ONLY__) {
+      ctx.setShowAi(true)
+      ctx.setStatus(t('appNewDocCreated'))
+    }
     return true
   } catch (err) {
     ctx.setStatus(t('appNewFailed', { error: String(err) }))

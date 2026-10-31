@@ -112,6 +112,52 @@ export function setTableAutoFit(mode: TableAutoFitMode, contentWidthPx: number):
   }
 }
 
+/**
+ * Resize the selected table to `ratio` (0.1–1) of the text column width.
+ * OOXML has no "table width percent" for fixed tables — the width is the sum
+ * of the grid columns — so scale the grid proportionally and persist the
+ * result as a fixed layout (dxa on save, inline widthPx on canvas). Used by the
+ * host agent tool that answers "this table is too wide, make it narrower".
+ */
+export function setTableWidthRatio(ratio: number, contentWidthPx: number): Command {
+  return (state, dispatch) => {
+    const selected = selectedTable(state)
+    if (!selected) return false
+    const r = Math.min(Math.max(ratio, 0.1), 1)
+    const { node: table, rect, tableStart } = selected
+    const widths = fixedGridWidths(table, rect.map.width, contentWidthPx)
+    const currentTotal = widths.reduce((sum, width) => sum + width, 0) || contentWidthPx
+    const target = Math.max(120, Math.round(contentWidthPx * r))
+    const scaled = widths.map((width) =>
+      Math.max(24, Math.round((width * target) / currentTotal)),
+    )
+    const total = scaled.reduce((sum, width) => sum + width, 0)
+    let tr: Transaction = state.tr
+    table.descendants((node, pos) => {
+      if (node.type.name !== 'docTableCell' && node.type.name !== 'docTableHeader') return
+      try {
+        const cell = rect.map.findCell(pos)
+        tr = tr.setNodeMarkup(tableStart + pos, undefined, {
+          ...node.attrs,
+          colwidth: scaled.slice(cell.left, cell.right),
+        })
+      } catch {
+        // A malformed grid should not prevent the table-level width change.
+      }
+    })
+    tr = tr.setNodeMarkup(selected.pos, undefined, {
+      ...table.attrs,
+      tblAutoFit: 'fixed',
+      tblAutoFitEdited: true,
+      widthPx: total,
+      widthPct: null,
+      colWidthsPct: scaled.map((width) => (width / total) * 100),
+    })
+    dispatch?.(tr)
+    return true
+  }
+}
+
 export interface RepeatHeaderState {
   enabled: boolean
   active: boolean

@@ -488,6 +488,20 @@ function applyRevisions(editor: Editor, ranges: RevisionRange[], mode: 'accept' 
   editor.view.dispatch(tr)
 }
 
+/**
+ * Apply accept/reject to an explicit list of revision ranges (host agent B4).
+ * Ranges come from collectRevisions, so callers can target a subset; pass the
+ * CURRENT ranges for the same document state (positions shift after edits).
+ */
+export function applyRevisionRanges(
+  editor: Editor,
+  ranges: RevisionRange[],
+  mode: 'accept' | 'reject',
+): void {
+  if (ranges.length === 0) return
+  applyRevisions(editor, ranges, mode)
+}
+
 export function acceptAllRevisions(editor: Editor): void {
   applyRevisions(editor, collectRevisions(editor.state.doc), 'accept')
 }

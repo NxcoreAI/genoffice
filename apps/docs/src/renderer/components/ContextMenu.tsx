@@ -27,6 +27,8 @@ import { setSelectionAlign } from '../editor/direction'
 import { IconSparkle } from './icons'
 import { useModalKeys } from './modal-keys'
 
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 /**
  * Editor context menu (right click in the document body):
  * Cut/Copy/Paste · Font… · Paragraph… · Synonyms · Translate · Hyperlink… · New Comment.
@@ -424,37 +426,47 @@ export function EditorContextMenu({
           })}
         </>
       )}
-      <div className="ctx-sep" />
-      {item(t('appSynonyms'), {
-        disabled: !synonymText,
-        ai: true,
-        onClick: run(() => onAiPreset(t('appSynonymsPrompt', { text: synonymText }))),
-      })}
-      <div className="ctx-item-wrap" onMouseLeave={() => setSubmenu(null)}>
-        {item(t('appTranslate'), { disabled: !hasSelection, submenuKey: 'translate', ai: true })}
-        {submenu === 'translate' && hasSelection && (
-          <div className="ctx-submenu">
-            {TRANSLATE_TARGETS.map((target) => (
-              <button
-                key={target.labelKey}
-                className="ctx-item"
-                onClick={run(() =>
-                  onAiPreset(
-                    t('appTranslateSelectionPrompt', {
-                      lang: t(target.labelKey),
-                      text: selectedText,
-                    }),
-                  ),
-                )}
-              >
-                <span className="ctx-label">
-                  {t('appTranslateTo', { lang: t(target.labelKey) })}
-                </span>
-              </button>
-            ))}
+      {/* EverRoom embed builds fold this to true: Synonyms/Translate are AI
+          presets and have no provider behind them in the embed. */}
+      {!__GENOFFICE_EMBED_ONLY__ && (
+        <>
+          <div className="ctx-sep" />
+          {item(t('appSynonyms'), {
+            disabled: !synonymText,
+            ai: true,
+            onClick: run(() => onAiPreset(t('appSynonymsPrompt', { text: synonymText }))),
+          })}
+          <div className="ctx-item-wrap" onMouseLeave={() => setSubmenu(null)}>
+            {item(t('appTranslate'), {
+              disabled: !hasSelection,
+              submenuKey: 'translate',
+              ai: true,
+            })}
+            {submenu === 'translate' && hasSelection && (
+              <div className="ctx-submenu">
+                {TRANSLATE_TARGETS.map((target) => (
+                  <button
+                    key={target.labelKey}
+                    className="ctx-item"
+                    onClick={run(() =>
+                      onAiPreset(
+                        t('appTranslateSelectionPrompt', {
+                          lang: t(target.labelKey),
+                          text: selectedText,
+                        }),
+                      ),
+                    )}
+                  >
+                    <span className="ctx-label">
+                      {t('appTranslateTo', { lang: t(target.labelKey) })}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
       {isFloating && (
         <>
           <div className="ctx-sep" />

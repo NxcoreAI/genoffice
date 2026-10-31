@@ -369,11 +369,15 @@ describe('setHeadingLevel', () => {
   it('promoting a paragraph sheds the runs direct font/size so the heading style owns the look', () => {
     const editor = createEditor(fixtureDoc())
     // block 3 = 'Body paragraph'; give its run an explicit size like CJK templates / AI-generated docs
-    const before = editor.state.doc.child(3)
-    expect(before.type.name).toBe('docParagraph')
+    let blockPos = 0
+    editor.state.doc.forEach((node, offset) => {
+      if (node.textContent === 'Body paragraph') blockPos = offset
+    })
+    const before = editor.state.doc.nodeAt(blockPos)
+    expect(before?.type.name).toBe('docParagraph')
     const { tr } = editor.state
     const markType = editor.schema.marks.docTextStyle
-    tr.addMark(before.pos + 1, before.pos + before.nodeSize - 1, markType.create({ sizeHalfPoints: 22, color: 'FF0000' }))
+    tr.addMark(blockPos + 1, blockPos + (before?.nodeSize ?? 0) - 1, markType.create({ sizeHalfPoints: 22, color: 'FF0000' }))
     editor.view.dispatch(tr)
 
     const outcome = executeCommands(editor, {

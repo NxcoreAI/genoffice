@@ -1674,3 +1674,14 @@ export function GensparkMark({ size = 30 }: { size?: number }) {
     </svg>
   )
 }
+
+/** Chrome visibility toggle: a panel with a chevron toward its edge —
+ *  hide the operation area / restore it (EverRoom embed clean canvas). */
+export function IconChromeToggle(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="1.5" y="3" width="13" height="10" rx="1.5" />
+      <path d="M4.5 7.2 8 10.2l3.5-3" />
+    </Svg>
+  )
+}

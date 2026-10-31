@@ -14,11 +14,13 @@ import { SHAPE_GALLERY_GROUPS } from '@genoffice/ui'
 import { nextCommentId } from './editor/comments'
 import { TRACK_IGNORE } from './editor/revisions'
 import { updateTocField } from './components/ribbon-references-tab'
+import { setTableAutoFit, setTableWidthRatio } from './editor/table-properties'
+import { agentImageInsertPos, clampImageWidth, scaledImageSize } from './editor/agent-image'
 import type { CSSProperties, MouseEvent as ReactMouseEvent, SetStateAction } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/core'
 import { DOMParser as PmDOMParser, type Mark as PmMark } from '@tiptap/pm/model'
-import { NodeSelection } from '@tiptap/pm/state'
+import { NodeSelection, TextSelection } from '@tiptap/pm/state'
 import { Dropdown } from '@genoffice/ui'
 import { markdownPasteHtml } from './editor/markdown-paste'
 import {
@@ -49,6 +51,7 @@ import {
   AGENT_TOOLS,
   executeTool,
   markDocSeen,
+  sniffImageMime,
 } from './ai/tools'
 import {
   COMMANDS_GUIDE,
@@ -57,8 +60,16 @@ import {
   buildDocContext,
   findNumId,
   getSelectionScope,
+  type AiHfState,
   type NumIds,
 } from './ai/protocol'
+import {
+  APPLY_OPERATIONS_DESCRIPTION,
+  APPLY_OPERATIONS_INPUT_SCHEMA,
+  OPERATIONS_GUIDE,
+  contentWidthPxFromSection,
+  runOperations,
+} from './ai/operations'
 import { applyHfText, hfEditText } from './editor/hf-text'
 import { AiAskPopover } from './components/AiAskPopover'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type DocsEditQueueItem } from './ai/edit-queue'
@@ -150,7 +161,7 @@ import { useShallowStable, useStableCallbacks } from './use-stable'
 import { FindPanel } from './components/FindPanel'
 import { Ribbon } from './components/Ribbon'
 import { computeFormatState } from './components/ribbon-format-state'
-import { IconRedo, IconSave, IconUndo } from './components/icons'
+import { IconChromeToggle, IconRedo, IconSave, IconUndo } from './components/icons'
 import { ToastHost } from './components/toast'
 import {
   AI_REWRITE_ACK_KEY,
@@ -433,7 +444,13 @@ const HOST_KNOWN_SHAPE_PRSTS: ReadonlySet<string> = new Set<string>(
   SHAPE_GALLERY_GROUPS.flatMap((g) => g.shapes.map((s) => s.prst)),
 )
 
-/** Host-driven image insert: base64 bytes -> the ribbon's dataUrl path. */
+/**
+ * Host-driven image insert: base64 bytes -> the ribbon's dataUrl path.
+ *
+ * `afterIndex` is a top-level block anchor: a valid index lands the image
+ * right after that block, while -1/omitted/out-of-range means end of
+ * document. `maxWidthPx` is the real width cap (the image is never upscaled).
+ */
 async function insertAgentImage(
   editor: Editor,
   input: {
@@ -448,21 +465,23 @@ async function insertAgentImage(
   | { ok: false; error: string }
 > {
   const dataUrl = `data:${input.mime};base64,${input.base64}`
-  // decode dimensions first for the result report (insertImageFromDataUrl
-  // measures internally too and caps at MAX_IMAGE_WIDTH_PX)
+  // decode dimensions first: the insert path measures again internally, and
+  // the same helper decides the width so the reported size is what was written
   let natural: { width: number; height: number }
   try {
     natural = await imageSizeOf(dataUrl)
   } catch {
     return { ok: false, error: 'cannot decode the image bytes (corrupt base64 or unsupported layout?)' }
   }
-  const doc2 = editor.state.doc
-  const idx = input.afterIndex >= 0 && input.afterIndex < doc2.childCount ? input.afterIndex : doc2.childCount - 1
-  const { to } = blockRangePositions(editor, idx, idx)
-  const ok = await insertImageFromDataUrl(editor, dataUrl, input.label)
+  const atPos = agentImageInsertPos(editor.state.doc, input.afterIndex)
+  const capPx = clampImageWidth(input.maxWidthPx, MAX_IMAGE_WIDTH_PX)
+  const ok = await insertImageFromDataUrl(editor, dataUrl, input.label, {
+    atPos,
+    maxWidthPx: capPx,
+  })
   if (!ok) return { ok: false, error: 'image insert failed (unsupported format?)' }
-  const scale = Math.min(1, Math.min(input.maxWidthPx, MAX_IMAGE_WIDTH_PX) / natural.width)
-  return { ok: true, widthPx: Math.round(natural.width * scale), heightPx: Math.round(natural.height * scale) }
+  const { width, height } = scaledImageSize(natural, capPx)
+  return { ok: true, widthPx: width, heightPx: height }
 }
 
 /** Host-driven comment: anchor on a block range via the same comment-mark
@@ -508,6 +527,68 @@ function addAgentComment(
   input.setCommentsDirty(true)
   input.dirtyRef.current = true
   return { ok: true, id }
+}
+
+/** Host-side table resize: block index -> cursor inside the table -> editor
+ *  command -> persisted fixed grid. widthPercent narrows the table; autoFit
+ *  window/contents ride Word's own AutoFit modes. */
+function applyTableWidth(
+  editor: Editor,
+  refs: { section: SectionSettings | null },
+  raw: Record<string, unknown>,
+): { ok: true; output: string } | { ok: false; error: string } {
+  const doc = editor.state.doc
+  const blockIndex = Number(raw.blockIndex)
+  if (!Number.isInteger(blockIndex) || blockIndex < 0 || blockIndex >= doc.childCount) {
+    return { ok: false, error: `blockIndex out of range (document has ${doc.childCount} blocks)` }
+  }
+  const node = doc.child(blockIndex)
+  if (node.type.name !== 'docTable') {
+    const tableIndexes: number[] = []
+    doc.forEach((child, _offset, index) => {
+      if (child.type.name === 'docTable') tableIndexes.push(index)
+    })
+    return {
+      ok: false,
+      error: `block ${blockIndex} is a ${node.type.name}, not a table`
+        + (tableIndexes.length ? `; table blocks: ${tableIndexes.join(', ')}` : '; the document has no table'),
+    }
+  }
+  let blockPos = 0
+  for (let i = 0; i < blockIndex; i++) blockPos += doc.child(i).nodeSize
+  // first cell's first paragraph: a cursor there puts selectedRect() in the table
+  const cursorPos = blockPos + 3
+  const sec = refs.section
+  if (!sec) return { ok: false, error: 'section settings unavailable' }
+  const contentTw = sec.pageWidth - sec.marginLeft - sec.marginRight
+  const cols = Math.max(1, sec.columns ?? 1)
+  const columnTw =
+    cols > 1 ? (contentTw - (sec.colSpace ?? 720) * (cols - 1)) / cols : contentTw
+  const contentWpx = twipsToPx(columnTw)
+  // PM commands (not TipTap chain commands): the cursor must sit inside the
+  // table for selectedRect(), then the command dispatches on the live state
+  editor.commands.setTextSelection(TextSelection.create(doc, cursorPos))
+  const autoFit = typeof raw.autoFit === 'string' ? raw.autoFit : ''
+  if (autoFit === 'window') {
+    const ok = setTableAutoFit('window', contentWpx)(editor.state, editor.view.dispatch)
+    if (!ok) return { ok: false, error: 'table AutoFit to window failed' }
+    markDocSeen(editor)
+    return { ok: true, output: 'Table now fills the text column (AutoFit to window).' }
+  }
+  if (autoFit === 'contents') {
+    const ok = setTableAutoFit('contents', contentWpx)(editor.state, editor.view.dispatch)
+    if (!ok) return { ok: false, error: 'table AutoFit to contents failed' }
+    markDocSeen(editor)
+    return { ok: true, output: 'Table shrunk to its content width (AutoFit to contents).' }
+  }
+  const percent = Number(raw.widthPercent)
+  if (!Number.isFinite(percent) || percent < 10 || percent > 100) {
+    return { ok: false, error: 'pass widthPercent (10-100) or autoFit "window"/"contents"' }
+  }
+  const ok = setTableWidthRatio(percent / 100, contentWpx)(editor.state, editor.view.dispatch)
+  if (!ok) return { ok: false, error: 'table resize failed' }
+  markDocSeen(editor)
+  return { ok: true, output: `Table resized to ${percent}% of the text column.` }
 }
 
 /** Inputs the host accepts for set_page_setup — a subset of SectionSettings
@@ -592,6 +673,80 @@ function describePageSetup(refs: {
   }
 }
 
+/** Compact live document state for the host agent's describe payload: the
+ *  facts the block list does not carry (section/header-footer/note/bookmark/
+ *  source/protection/field counts). Counts only — no document text — so the
+ *  describe reply stays small and safe to cache per turn. */
+function describeDocumentState(refs: {
+  editor: Editor | null
+  doc: DocState | null
+  sections: SectionInfo[]
+  hf: AiHfState | null
+  commentCount: number
+}): Record<string, unknown> {
+  const parsed = refs.doc?.parsed ?? null
+  let bookmarks = 0
+  let fields = 0
+  for (const block of parsed?.blocks ?? []) {
+    bookmarks += block.bookmarks?.length ?? 0
+    for (const run of block.runs ?? []) {
+      if (run.instrField || run.refField || run.fldBeginXml) fields++
+    }
+  }
+  let tables = 0
+  refs.editor?.state.doc.forEach((node) => {
+    if (node.type.name === 'docTable') tables++
+  })
+  const hf = refs.hf
+  const hfParts = [
+    hf?.header,
+    hf?.footer,
+    hf?.headerFirst,
+    hf?.footerFirst,
+    hf?.headerEven,
+    hf?.footerEven,
+  ].filter((text) => typeof text === 'string' && text.length > 0).length
+  const protection = parsed?.protection ?? null
+  const writeProtection = parsed?.writeProtection ?? null
+  return {
+    sections: refs.sections.length,
+    headerFooter: {
+      partsWithContent: hfParts,
+      differentFirstPage: hf?.titlePg === true,
+      evenOddPages: hf?.evenOddHf === true,
+    },
+    notes: {
+      footnotes: parsed?.footnotes.length ?? 0,
+      endnotes: parsed?.endnotes.length ?? 0,
+      // ids the notes.update / notes.delete ops address (compact: numeric ids)
+      footnoteIds: (parsed?.footnotes ?? []).map((note) => note.id),
+      endnoteIds: (parsed?.endnotes ?? []).map((note) => note.id),
+    },
+    bookmarks,
+    sources: parsed?.sources.length ?? 0,
+    protection: {
+      editingRestriction: protection ? (protection.enforced ? protection.edit : null) : null,
+      writePassword: !!writeProtection?.hash,
+      readOnlyRecommended: writeProtection?.recommended === true,
+    },
+    fields,
+    tables,
+    // document character-style ids addressable by format.applyCharacterStyle.styleId
+    // (same gallery filter as the ribbon: no Hyperlink/FollowedHyperlink/DefaultParagraphFont,
+    // no semiHidden or linked "… Char" shells); capped so the describe payload stays compact
+    characterStyles: [...(parsed?.styles ?? new Map())]
+      .filter(([id, info]) => {
+        if (info.type !== 'character') return false
+        if (id === 'Hyperlink' || id === 'FollowedHyperlink' || id === 'DefaultParagraphFont') return false
+        return !info.semiHidden && !info.linkedCharShell
+      })
+      .slice(0, 50)
+      .map(([id, info]) => ({ id, name: info.name })),
+    revisions: refs.editor ? collectRevisions(refs.editor.state.doc).length : 0,
+    comments: refs.commentCount,
+  }
+}
+
 function applyPageSetup(
   refs: {
     sections: SectionInfo[]
@@ -609,6 +764,7 @@ function applyPageSetup(
     setThemeColorsDirty: (v: boolean) => void
   },
   raw: Record<string, unknown>,
+  dryRun = false,
 ): { ok: true; output: string; summary: string } | { ok: false; error: string } {
   const input = raw as HostPageSetupInput
   const summaryBits: string[] = []
@@ -672,7 +828,7 @@ function applyPageSetup(
     }
     // flushSync: the immediate silent save below reads fileCtxRef.current,
     // which is rebuilt during render (same timing trap as set_watermark).
-    flushSync(() => {
+    if (!dryRun) flushSync(() => {
       refs.setSections((prev) =>
         prev.map((s, i) => (i === refs.activeSection ? { ...s, settings: next } : s)),
       )
@@ -691,7 +847,7 @@ function applyPageSetup(
     if (c !== null && !/^[0-9A-Fa-f]{6}$/.test(c)) {
       return { ok: false, error: 'pageColor must be 6 hex digits (no #) or null to clear' }
     }
-    flushSync(() => {
+    if (!dryRun) flushSync(() => {
       refs.setPageColor(c)
       refs.setPageColorDirty(true)
     })
@@ -702,7 +858,7 @@ function applyPageSetup(
   if (input.theme !== undefined) {
     const preset = HOST_THEMES[input.theme]
     if (!preset) return { ok: false, error: `theme must be one of ${Object.keys(HOST_THEMES).join('/')}` }
-    flushSync(() => {
+    if (!dryRun) flushSync(() => {
       refs.setThemeFonts(preset.fonts)
       refs.setThemeFontsDirty(true)
       refs.setThemeColors(preset.colors)
@@ -715,7 +871,7 @@ function applyPageSetup(
   if (input.themeFonts !== undefined) {
     const preset = HOST_THEME_FONTS[input.themeFonts]
     if (!preset) return { ok: false, error: `themeFonts must be one of ${Object.keys(HOST_THEME_FONTS).join('/')}` }
-    flushSync(() => {
+    if (!dryRun) flushSync(() => {
       refs.setThemeFonts(preset)
       refs.setThemeFontsDirty(true)
     })
@@ -728,7 +884,7 @@ function applyPageSetup(
     if (!preset) {
       return { ok: false, error: `themeColors must be one of ${Object.keys(HOST_THEME_COLOR_PRESETS_HOST).join('/')}` }
     }
-    flushSync(() => {
+    if (!dryRun) flushSync(() => {
       refs.setThemeColors(preset)
       refs.setThemeColorsDirty(true)
     })
@@ -740,7 +896,7 @@ function applyPageSetup(
   }
   return {
     ok: true,
-    output: `Applied: ${summaryBits.join(', ')}.`,
+    output: `${dryRun ? 'Would apply' : 'Applied'}: ${summaryBits.join(', ')}.`,
     summary: 'page setup',
   }
 }
@@ -779,6 +935,18 @@ export function App() {
   const [_recent, setRecent] = useState<string[]>([])
   const [settings, setSettings] = useState<AiSettings>(DEFAULT_SETTINGS)
   const [showAi, setShowAi] = useState(() => !everroomEmbed && localStorage.getItem('aidocs.showAi') !== '0')
+  /**
+   * EverRoom embed clean-canvas mode: hide the editor's operation area
+   * (Ribbon / status bar / ruler / nav pane / header-footer chips) and leave the
+   * document page. The host agent performs the operations, so hiding the chrome
+   * must not reduce functionality. Defaults to hidden in the embed; persisted
+   * per user; restorable via the floating pill, ⌘⇧F, or the host toggle IPC.
+   */
+  const [chromeHidden, setChromeHidden] = useState(() => {
+    const stored = localStorage.getItem('aidocs.chromeHidden')
+    if (stored === '1' || stored === '0') return stored === '1'
+    return everroomEmbed
+  })
   /** Increments on every open/new document: AiPanel remounts by key to reset the conversation and history (save path changes don't bump it, so the session continues) */
   const [aiPanelKey, setAiPanelKey] = useState(0)
   const [ribbonTabRequest, setRibbonTabRequest] = useState<{ tab: string; nonce: number } | null>(
@@ -1584,6 +1752,52 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, loadFile])
 
+  // ── Agent readiness (EverRoom embed): report that this view has finished
+  // loading a document. The host may have created the view hidden and must not
+  // drive describe/apply before the requested working copy — not the boot blank
+  // document — is in the editor. loadFile sets the editor content and doc state
+  // together after the parse, so this effect fires once the document is loaded.
+  // A blank/unsaved document reports null; waitForAgentReady only accepts a
+  // path matching its expectedPath, so intermediate nulls are ignored. ──
+  const agentReadyReportedRef = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (!editor) return
+    const filePath = doc?.filePath ?? null
+    if (agentReadyReportedRef.current === filePath) return
+    agentReadyReportedRef.current = filePath
+    window.desktop.reportAgentReady?.(filePath)
+  }, [editor, doc?.filePath])
+
+  // Clean-canvas preference persists per user (EverRoom defaults to hidden).
+  useEffect(() => {
+    localStorage.setItem('aidocs.chromeHidden', chromeHidden ? '1' : '0')
+  }, [chromeHidden])
+  // Host-driven toggle (EverRoom toolbar / menu): payload may carry an explicit
+  // hidden value; omitted = toggle.
+  useEffect(() => window.desktop.onChromeToggle?.((hidden) => {
+    setChromeHidden((current) => (typeof hidden === 'boolean' ? hidden : !current))
+  }), [])
+
+  /** true while the user is typing in a form field: ⌘⇧F must not steal it */
+  const focusInFormField = (): boolean => {
+    const active = document.activeElement as HTMLElement | null
+    if (!active) return false
+    const tag = active.tagName
+    // contentEditable (the document itself) must keep the shortcut working.
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+  }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey) return
+      if (event.key.toLowerCase() !== 'f') return
+      if (focusInFormField()) return
+      event.preventDefault()
+      setChromeHidden((current) => !current)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const openFile = useCallback(async () => {
     await loadFile(await window.desktop.openDocx())
   }, [loadFile])
@@ -1625,18 +1839,29 @@ export function App() {
   }
 
   /** apply the diff the Protect Document dialog produced (undefined field = unchanged) */
+  /** Open-password intent (docs:set-password); the file is re-encrypted on the next save.
+   *  Shared by the Protect dialog and the host agent's review.encrypt op; the password
+   *  itself is never returned to callers. */
+  const agentSetOpenPassword = useCallback(
+    async (password: string | null): Promise<{ ok: boolean; error?: string }> => {
+      const cur = fileCtxRef.current.doc
+      const res = await window.desktop.setDocPassword(cur?.filePath ?? null, password)
+      if (res.ok) {
+        flushSync(() => setDoc((d) => (d ? { ...d, encrypted: !!password } : d)))
+        // the on-disk file only changes on the next save
+        dirtyRef.current = true
+      }
+      return res
+    },
+    [],
+  )
+
   const applyProtectDialog = async (result: ProtectDialogResult) => {
     setShowProtectDialog(false)
     let changed = false
     if (result.openPassword !== undefined) {
-      const cur = fileCtxRef.current.doc
-      const res = await window.desktop.setDocPassword(cur?.filePath ?? null, result.openPassword)
-      if (res.ok) {
-        setDoc((d) => (d ? { ...d, encrypted: !!result.openPassword } : d))
-        // the on-disk file only changes on the next save
-        dirtyRef.current = true
-        changed = true
-      }
+      const res = await agentSetOpenPassword(result.openPassword)
+      if (res.ok) changed = true
     }
     if (result.writeProtection !== undefined) {
       setWriteProtection(result.writeProtection)
@@ -1695,9 +1920,39 @@ export function App() {
    * original current section sectPr's) w:type.
    */
   const insertSectionBreak = useCallback(
-    (type: SectionInfo['startType']) => {
+    (type: SectionInfo['startType'], afterBlockIndex?: number) => {
       if (!editor || !doc) return
-      const cur = sections[activeSection]
+      // Agent ops address the break target explicitly (deterministic in a hidden
+      // view); the menu path keeps Word's behavior and breaks at the caret. The
+      // copied sectPr and the start-type write must use the target block's
+      // section, not the caret's.
+      let sectionIdx = activeSection
+      let pos: number
+      if (
+        afterBlockIndex !== undefined
+        && Number.isInteger(afterBlockIndex)
+        && afterBlockIndex >= 0
+        && afterBlockIndex < editor.state.doc.childCount
+      ) {
+        const pmDoc = editor.state.doc
+        pos = 0
+        for (let i = 0; i <= afterBlockIndex; i++) pos += pmDoc.child(i).nodeSize
+        let docxIndex: number | null = null
+        for (let i = afterBlockIndex; i >= 0; i--) {
+          const di = pmDoc.child(i).attrs?.docxIndex as number | null | undefined
+          if (di !== null && di !== undefined) {
+            docxIndex = di
+            break
+          }
+        }
+        const found =
+          docxIndex === null ? 0 : sections.findIndex((sec) => docxIndex! <= sec.lastBlockIndex)
+        sectionIdx = found >= 0 ? found : Math.max(0, sections.length - 1)
+      } else {
+        const { $head } = editor.state.selection
+        pos = $head.depth > 0 ? $head.after(1) : $head.pos
+      }
+      const cur = sections[sectionIdx]
       const sectPrCopy =
         cur?.sectPrXml ||
         applySectionSettings(
@@ -1705,8 +1960,6 @@ export function App() {
           section ?? sections[0]?.settings ?? DEFAULT_SECTION,
         )
       const genXml = `<w:p><w:pPr>${sectPrCopy}</w:pPr></w:p>`
-      const { $head } = editor.state.selection
-      const pos = $head.depth > 0 ? $head.after(1) : $head.pos
       editor
         .chain()
         .focus()
@@ -1723,13 +1976,13 @@ export function App() {
       // the section after the break is terminated by the "original current section sectPr",
       // whose w:type decides how the new section starts: always write the chosen type back
       // (including a nextPage reset, so a leftover continuous from the original section doesn't linger)
-      if (sections.length === 0 || activeSection === sections.length - 1) {
+      if (sections.length === 0 || sectionIdx === sections.length - 1) {
         setTrailingStartType(type)
       } else {
         setSections((prev) =>
-          prev.map((s, i) => (i === activeSection ? { ...s, startType: type } : s)),
+          prev.map((s, i) => (i === sectionIdx ? { ...s, startType: type } : s)),
         )
-        setSectionsDirty((d) => (d.includes(activeSection) ? d : [...d, activeSection]))
+        setSectionsDirty((d) => (d.includes(sectionIdx) ? d : [...d, sectionIdx]))
       }
       const labels: Record<SectionInfo['startType'], string> = {
         nextPage: t('appBreakNextPage'),
@@ -3422,6 +3675,24 @@ export function App() {
 
   const agentCommentsRef = useRef<AiCommentsAccess | null>(null)
   const agentHfRef = useRef<AiHeaderFooterAccess | null>(null)
+  /** apply_operations app-state bridge: run the real applyPageSetup pipeline for a
+   *  specific section (section ops target a section index, not just the caret) and
+   *  support dryRun validation without touching state. */
+  const agentApplyPageSetup = useCallback(
+    (
+      input: Record<string, unknown>,
+      sectionIndex?: number,
+      dryRun?: boolean,
+    ): { ok: true; output: string; summary: string } | { ok: false; error: string } => {
+      const refs = agentDocRefs.current
+      const idx =
+        sectionIndex === undefined
+          ? refs.activeSection
+          : Math.min(Math.max(0, sectionIndex), Math.max(0, refs.sections.length - 1))
+      return applyPageSetup({ ...refs, activeSection: idx }, input, dryRun === true)
+    },
+    [],
+  )
   const agentDocRefs = useRef({
     editor,
     doc,
@@ -3446,6 +3717,30 @@ export function App() {
     themeColors,
     setThemeColors,
     setThemeColorsDirty,
+    // B2 page/section/notes/fields app-state bridge (apply_operations)
+    applyPageSetup: agentApplyPageSetup,
+    insertSectionBreak,
+    insertField,
+    updateFields,
+    pgNumEdit,
+    setPgNumEdit,
+    pgNumDirtySections,
+    setPgNumDirtySections,
+    review: () => reviewCtxRef.current,
+    headerFooter: () => agentHfRef.current,
+    numbering: () => numberingCtxRef.current,
+    // B4 references/review/protection bridge
+    getSources: () => fileCtxRef.current.sources,
+    addSource: (source: SourceInfo) => {
+      flushSync(() => {
+        setSources((prev) => [...prev, source])
+        setSourcesDirty(true)
+      })
+    },
+    getBlocks: () => fileCtxRef.current.doc?.parsed.blocks ?? [],
+    setTrackChanges,
+    applyProtection: (result: ProtectDialogResult) => applyProtectDialog(result),
+    setOpenPassword: agentSetOpenPassword,
   })
   agentDocRefs.current = {
     editor,
@@ -3471,6 +3766,30 @@ export function App() {
     themeColors,
     setThemeColors,
     setThemeColorsDirty,
+    // B2 page/section/notes/fields app-state bridge (apply_operations)
+    applyPageSetup: agentApplyPageSetup,
+    insertSectionBreak,
+    insertField,
+    updateFields,
+    pgNumEdit,
+    setPgNumEdit,
+    pgNumDirtySections,
+    setPgNumDirtySections,
+    review: () => reviewCtxRef.current,
+    headerFooter: () => agentHfRef.current,
+    numbering: () => numberingCtxRef.current,
+    // B4 references/review/protection bridge
+    getSources: () => fileCtxRef.current.sources,
+    addSource: (source: SourceInfo) => {
+      flushSync(() => {
+        setSources((prev) => [...prev, source])
+        setSourcesDirty(true)
+      })
+    },
+    getBlocks: () => fileCtxRef.current.doc?.parsed.blocks ?? [],
+    setTrackChanges,
+    applyProtection: (result) => applyProtectDialog(result),
+    setOpenPassword: agentSetOpenPassword,
   }
   useEffect(() => {
     const ALLOWED_TOOLS = new Set([
@@ -3493,6 +3812,8 @@ export function App() {
       'delete_comment',
       'insert_shape',
       'update_toc',
+      'set_table_width',
+      'apply_operations',
     ])
     const offRequest = window.desktop.onAgentToolRequest?.((request) => {
       const reply = (payload: unknown) =>
@@ -3587,19 +3908,49 @@ export function App() {
               {
                 name: 'insert_image_base64',
                 description:
-                  'Insert an image from raw base64 bytes (png/jpeg/gif) at the end of the document '
-                  + 'or after a given block index. The host fetches/generates the image and passes '
-                  + 'the bytes; width scales down automatically to a sane max.',
+                  'Insert an image (png/jpeg/gif) after a block index or at the end of the document. '
+                  + 'Give the image by exactly ONE of: path (absolute local image path — preferred for files on '
+                  + 'disk), url (public http(s) image URL — preferred for web images), or base64 (raw bytes, only '
+                  + 'when the bytes are already in hand). The gateway host resolves path/url into bytes and '
+                  + 'forwards base64 to the editor, so NEVER copy image bytes into the tool arguments — do not '
+                  + 'paste a long base64 string, pass path or url instead. Width is capped by maxWidthPx '
+                  + '(default 480, max 1200) and never upscaled.',
                 inputSchema: {
                   type: 'object',
                   properties: {
-                    base64: { type: 'string', description: 'raw base64 (no data: prefix), png/jpeg/gif' },
-                    mime: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/gif'] },
-                    afterIndex: { type: 'integer', minimum: -1, description: 'insert after this block index; -1/omitted = end of document' },
-                    maxWidthPx: { type: 'integer', minimum: 16, maximum: 1200, description: 'cap width; default 480' },
-                    label: { type: 'string', maxLength: 80 },
+                    path: {
+                      type: 'string',
+                      minLength: 1,
+                      description: 'absolute path of a local image file (e.g. /tmp/scene.png); gateway reads it',
+                    },
+                    url: {
+                      type: 'string',
+                      minLength: 1,
+                      description: 'public http(s) image URL; gateway downloads it (private/loopback hosts are rejected)',
+                    },
+                    base64: {
+                      type: 'string',
+                      description: 'raw base64 bytes (no data: prefix), png/jpeg/gif — only when the bytes are already available',
+                    },
+                    mime: {
+                      type: 'string',
+                      enum: ['image/png', 'image/jpeg', 'image/gif'],
+                      description: 'optional; sniffed from the image bytes when omitted',
+                    },
+                    afterIndex: {
+                      type: 'integer',
+                      minimum: -1,
+                      description: 'insert right after this block index; -1/omitted = end of document',
+                    },
+                    maxWidthPx: {
+                      type: 'integer',
+                      minimum: 16,
+                      maximum: 1200,
+                      description: 'width cap in px (default 480); the image keeps its aspect ratio and is never upscaled',
+                    },
+                    label: { type: 'string', maxLength: 80, description: 'optional short caption / alt label' },
                   },
-                  required: ['base64', 'mime'],
+                  anyOf: [{ required: ['path'] }, { required: ['url'] }, { required: ['base64'] }],
                 },
               },
               {
@@ -3653,11 +4004,41 @@ export function App() {
                   + 'and backfill real page numbers. No-op error if the document has no TOC field or no headings.',
                 inputSchema: { type: 'object', properties: {} },
               },
+              {
+                name: 'set_table_width',
+                description:
+                  'Resize a table block: widthPercent narrows it to a ratio of the text column '
+                  + '(e.g. 70 = 70%), or autoFit:\'window\' fills the column, \'contents\' shrinks to content. '
+                  + 'Use when the table is too wide / should be narrower or full width. '
+                  + 'Pass blockIndex of the table block (from the block list).',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    blockIndex: { type: 'integer', minimum: 0, description: 'index of the table block' },
+                    widthPercent: { type: 'number', minimum: 10, maximum: 100, description: 'target width as % of the text column' },
+                    autoFit: { type: 'string', enum: ['window', 'contents'] },
+                  },
+                  required: ['blockIndex'],
+                },
+              },
+              {
+                name: 'apply_operations',
+                description: APPLY_OPERATIONS_DESCRIPTION,
+                inputSchema: APPLY_OPERATIONS_INPUT_SCHEMA,
+              },
             ],
             commandsGuide: COMMANDS_GUIDE,
             htmlRules: HTML_RULES,
             watermark: agentDocRefs.current.watermark,
             pageSetup: describePageSetup(agentDocRefs.current),
+            operationsGuide: OPERATIONS_GUIDE,
+            documentState: describeDocumentState({
+              editor: liveEditor,
+              doc: agentDocRefs.current.doc,
+              sections: agentDocRefs.current.sections,
+              hf: agentHfRef.current?.read() ?? null,
+              commentCount: agentCommentsRef.current?.list().length ?? 0,
+            }),
           },
         })
         return
@@ -3748,29 +4129,68 @@ export function App() {
             })
             continue
           }
-          // insert_image_base64: the host (gateway) fetches/generates the
-          // image and passes raw bytes; the renderer reuses the ribbon's
-          // dataUrl insert path (size sniff + proportional scaling + genImage
-          // persistence) — no network in the embed.
+          // insert_image_base64: the host (gateway) resolves the image source
+          // (path/url/base64) into bytes and passes raw base64; the renderer
+          // reuses the ribbon's dataUrl insert path (size sniff + proportional
+          // scaling + genImage persistence) — no network / fs access in the embed.
           if (call.name === 'insert_image_base64') {
-            const base64 = String((call.input as { base64?: unknown })?.base64 ?? '')
-            const mime = String((call.input as { mime?: unknown })?.mime ?? '')
-            const afterIndex = Number((call.input as { afterIndex?: unknown })?.afterIndex ?? -1)
-            const maxWidthPx = Number((call.input as { maxWidthPx?: unknown })?.maxWidthPx ?? 480)
-            const label = String((call.input as { label?: unknown })?.label ?? 'Image (agent)')
-            if (!base64 || !/^[-A-Za-z0-9+/=]+$/.test(base64)) {
-              results.push({ id: call.id, name: call.name, output: 'base64 must be non-empty standard base64', isError: true })
+            const input = (call.input ?? {}) as Record<string, unknown>
+            const rawBase64 = String(input.base64 ?? '').trim()
+            // tolerate a data: prefix / wrapped whitespace even though the
+            // gateway strips both; the insert path expects bare base64
+            const base64 = rawBase64.replace(/^data:[^,]*,/, '').replace(/\s+/g, '')
+            const afterIndex = Number(input.afterIndex ?? -1)
+            const maxWidthPx = Number(input.maxWidthPx ?? 480)
+            const label = String(input.label ?? 'Image (agent)')
+            if (!base64) {
+              const source =
+                typeof input.path === 'string' && input.path.trim()
+                  ? `path "${input.path.trim()}"`
+                  : typeof input.url === 'string' && input.url.trim()
+                    ? `url "${input.url.trim()}"`
+                    : 'path/url/base64'
+              results.push({
+                id: call.id,
+                name: call.name,
+                output:
+                  `no image bytes reached the editor: the gateway resolves ${source} into base64 `
+                  + 'before forwarding; pass path or url to the gateway and never copy image bytes '
+                  + 'into the tool arguments',
+                isError: true,
+              })
               continue
             }
+            if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length % 4 !== 0) {
+              results.push({
+                id: call.id,
+                name: call.name,
+                output: 'base64 is not valid standard base64; pass path (local image file) or url (public image URL) instead',
+                isError: true,
+              })
+              continue
+            }
+            // mime is optional: the bytes are authoritative (path/url are
+            // resolved before the request ever leaves the host)
+            const mime = sniffImageMime(base64) ?? String(input.mime ?? '')
             if (!/^image\/(png|jpeg|gif)$/.test(mime)) {
-              results.push({ id: call.id, name: call.name, output: 'mime must be image/png, image/jpeg or image/gif', isError: true })
+              results.push({
+                id: call.id,
+                name: call.name,
+                output: 'unsupported image format: only png/jpeg/gif can be embedded (convert webp/svg first)',
+                isError: true,
+              })
               continue
             }
+            const truncatedAfter = Number.isFinite(afterIndex) ? Math.trunc(afterIndex) : -1
+            const atEnd =
+              !(Number.isInteger(truncatedAfter)
+                && truncatedAfter >= 0
+                && truncatedAfter < liveEditor.state.doc.childCount)
             const inserted = await insertAgentImage(liveEditor, {
               base64,
               mime,
-              afterIndex: Number.isFinite(afterIndex) ? Math.trunc(afterIndex) : -1,
-              maxWidthPx: Number.isFinite(maxWidthPx) ? Math.min(Math.max(maxWidthPx, 16), 1200) : 480,
+              afterIndex: truncatedAfter,
+              maxWidthPx: Number.isFinite(maxWidthPx) ? maxWidthPx : 480,
               label: label.slice(0, 80),
             })
             if (!inserted.ok) {
@@ -3781,7 +4201,9 @@ export function App() {
             results.push({
               id: call.id,
               name: call.name,
-              output: `Inserted image (${mime}, ${inserted.widthPx}x${inserted.heightPx}px).`,
+              output:
+                `Inserted image (${mime}, ${inserted.widthPx}x${inserted.heightPx}px) `
+                + `${atEnd ? 'at the end of the document' : `after block ${truncatedAfter}`}.`,
               mutated: true,
               summary: 'insert image',
             })
@@ -3917,6 +4339,53 @@ export function App() {
                 isError: true,
               })
             }
+            continue
+          }
+          // set_table_width: host-side table resize (the AI tool layer has no
+          // table-width channel; the editor commands exist, driven by a cursor
+          // placed inside the table).
+          if (call.name === 'set_table_width') {
+            const outcome = applyTableWidth(liveEditor, agentDocRefs.current, call.input ?? {})
+            if (!outcome.ok) {
+              results.push({ id: call.id, name: call.name, output: outcome.error, isError: true })
+              continue
+            }
+            mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: outcome.output,
+              mutated: true,
+              summary: 'resize table',
+            })
+            continue
+          }
+          // apply_operations: structured ops (B1 = table structure/layout) with
+          // per-op isolation. Each successful op counts as a mutation; after the
+          // batch markDocSeen refreshes the baseline so later index-addressed
+          // calls in the same batch do not trip the stale-doc guard.
+          if (call.name === 'apply_operations') {
+            const input = (call.input ?? {}) as { ops?: unknown; dryRun?: unknown }
+            const outcome = await runOperations(liveEditor, input.ops, {
+              dryRun: input.dryRun === true,
+              contentWidthPx: contentWidthPxFromSection(agentDocRefs.current.section),
+              // live App-state setters + real ribbon helpers for page/section/notes/fields ops
+              app: agentDocRefs.current,
+            })
+            if (outcome.applied > 0) {
+              mutated = true
+              markDocSeen(liveEditor)
+            }
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: outcome.output,
+              isError: !outcome.ok && outcome.applied === 0,
+              mutated: outcome.applied > 0,
+              summary: outcome.dryRun
+                ? 'validate operations'
+                : `apply ${outcome.applied} operation${outcome.applied === 1 ? '' : 's'}`,
+            })
             continue
           }
           try {
@@ -4225,8 +4694,9 @@ export function App() {
           insertField(instr)
         }
       }
-      // Proofread F7 (Word's spelling & grammar check)
-      if (e.key === 'F7' && !e.shiftKey && doc) {
+      // Proofread F7 (Word's spelling & grammar check) — AI-backed, so the
+      // embed build drops the shortcut along with the Review-tab entry.
+      if (e.key === 'F7' && !e.shiftKey && doc && !__GENOFFICE_EMBED_ONLY__) {
         e.preventDefault()
         runAiProofread()
       }
@@ -4800,6 +5270,15 @@ export function App() {
           />
         </label>
         <span className="qa-sep" aria-hidden="true" />
+        {/* EverRoom clean canvas: collapse the operation area from the toolbar. */}
+        <button
+          className="qa-btn qa-chrome-toggle"
+          data-tip={t('appHideToolbar')}
+          aria-label={t('appHideToolbar')}
+          onClick={() => setChromeHidden(true)}
+        >
+          <IconChromeToggle size={16} />
+        </button>
       </>
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4873,9 +5352,20 @@ export function App() {
 
   return (
     <div
-      className={`app ${readMode ? 'read-mode' : ''}${revisionDisplay !== 'all' ? ` rev-display-${revisionDisplay}` : ''}${revisionDisplay === 'all' && viewMode === 'print' ? ' rev-balloon' : ''}`}
+      className={`app ${readMode ? 'read-mode' : ''}${revisionDisplay !== 'all' ? ` rev-display-${revisionDisplay}` : ''}${revisionDisplay === 'all' && viewMode === 'print' ? ' rev-balloon' : ''}${chromeHidden ? ' chrome-hidden' : ''}`}
     >
       <ToastHost />
+      {chromeHidden && (
+        <button
+          className="chrome-restore"
+          data-tip={t('appShowToolbar')}
+          aria-label={t('appShowToolbar')}
+          onClick={() => setChromeHidden(false)}
+        >
+          <IconChromeToggle size={14} />
+          <span className="chrome-restore-label">{t('appShowToolbar')}</span>
+        </button>
+      )}
       {docCss && <style>{docCss}</style>}
       {doc && liveDocCjk != null && (
         <style>{`.doc-page { --doc-line-factor:${docLineFactor(doc.parsed, liveDocCjk)} }`}</style>
@@ -4896,7 +5386,21 @@ export function App() {
         // is the single-flow measuring state (columns removed, content-box width = column width,
         // toggled instantaneously for measurement, invisible).
         // .doc-page is border-box, so the measured width must add back the left/right margin padding
-        <style>{`.editor-scroll .doc-page { column-count: ${colFlow.cols}; column-gap: ${colFlow.gapPx}px; column-fill: balance; }
+        <style>{`.editor-scroll .doc-page { column-count: ${colFlow.cols}; column-gap: ${colFlow.gapPx}px; column-fill: balance;
+/* inside a columned canvas the "content box" for block width budgets (over-wide
+   tables spill into margins up to the paper edge) is the column, not the page:
+   --doc-content-w = column width and the margin spill allowance = 0, so a fixed
+   w:tblW table wider than the column is compressed to it instead of painting
+   over the neighbouring column. Non-column tables are unaffected. */
+--doc-content-w: ${colFlow.colWidthPx}px; --doc-margin-left: 0px; --doc-margin-right: 0px; }
+/* page-gap widgets (page bottom margin + inter-page band + next page's top margin,
+   carrying that page's header/footer strips) are page-level chrome: spanning all
+   columns makes each fragment between two gaps its own multi-column region, so a
+   page's content balances into its columns and the page boundary never falls
+   inside a column. Without it the whole document is balanced across all columns
+   (page 2's text starts below page 1's footer inside column 1) and the hf strips
+   center within a single column instead of the page. */
+.editor-scroll .doc-page > .page-gap { column-span: all; }
 .editor-scroll .doc-page.measuring-columns { column-count: auto; width: ${colFlow.colWidthPx + twipsToPx(canvasSection?.marginLeft ?? section?.marginLeft ?? 0) + twipsToPx(canvasSection?.marginRight ?? section?.marginRight ?? 0)}px; }`}</style>
       )}
       <Ribbon
@@ -4995,7 +5499,7 @@ export function App() {
               />
             )}
             {doc && showNav && <NavPane editor={editor} doc={editor.state.doc} />}
-            {doc && (
+            {doc && !everroomEmbed && (
               <AiAskPopover
                 editor={editor}
                 queueFull={editQueue.length >= EDIT_QUEUE_MAX}

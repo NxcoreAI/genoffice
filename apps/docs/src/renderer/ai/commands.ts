@@ -83,6 +83,14 @@ export interface ReplaceAllText {
   containsText: string
   replaceText: string
   matchCase?: boolean
+  /**
+   * Whole-word matches only: the character immediately before/after the match
+   * must not be an ASCII word character (letter/digit/underscore). CJK text has
+   * no word boundaries, so for CJK the flag behaves like a plain match.
+   */
+  wholeWord?: boolean
+  /** Replace only the first occurrence (document order); default = every occurrence. */
+  replaceFirstOnly?: boolean
   /** omitted = whole document */
   target?: Target
 }
@@ -355,6 +363,13 @@ export function validateEnvelope(envelope: unknown): string | null {
           error = `${where}: containsText must not be empty`
         } else if (typeof payload.replaceText !== 'string') {
           error = `${where}: replaceText must be a string`
+        } else if (payload.wholeWord !== undefined && typeof payload.wholeWord !== 'boolean') {
+          error = `${where}: wholeWord must be a boolean`
+        } else if (
+          payload.replaceFirstOnly !== undefined &&
+          typeof payload.replaceFirstOnly !== 'boolean'
+        ) {
+          error = `${where}: replaceFirstOnly must be a boolean`
         } else if (payload.target !== undefined) {
           error = validateTarget(payload.target, where)
         }
@@ -442,13 +457,13 @@ export function validateEnvelope(envelope: unknown): string | null {
 
 // ---- target matching ----
 
-interface TopBlock {
+export interface TopBlock {
   index: number
   pos: number
   node: PmDocNode
 }
 
-interface SelRange {
+export interface SelRange {
   from: number
   to: number
 }
@@ -500,6 +515,26 @@ function matchTarget(doc: PmDocNode, target: Target, sel: SelRange): TopBlock[] 
     }
     return true
   })
+}
+
+/**
+ * apply_operations (B3 format ops) reuses the exact apply_commands target
+ * vocabulary/semantics: the same validation and the same block matcher, so
+ * "blockIndexes/containsText/nodeType/scope:selection" behave identically in
+ * both tools.
+ */
+export type TargetBlock = TopBlock
+
+export function validateCommandTarget(target: unknown): string | null {
+  return validateTarget(target, 'target')
+}
+
+export function resolveTargetBlocks(
+  doc: PmDocNode,
+  target: Target,
+  selection: { from: number; to: number },
+): TargetBlock[] {
+  return matchTarget(doc, target, selection)
 }
 
 // ---- executors (each reads tr.doc fresh, so sequential commands compose) ----
@@ -708,25 +743,44 @@ function runReplaceAllText(
   const touchedIndexes = new Set<number>()
   let skippedProtected = 0
   let skippedDeleted = 0
+  // ASCII word boundaries for wholeWord (CJK has none — documented on the type)
+  const isWordChar = (ch: string | undefined): boolean => !!ch && /[A-Za-z0-9_]/.test(ch)
+  const wholeWord = cmd.wholeWord === true
+  const firstOnly = cmd.replaceFirstOnly === true
+  let done = false
 
   for (const b of blocks) {
+    if (done) break
     if (b.node.type.name === 'docProtected') {
       if (blockText(b.node).includes(cmd.containsText)) skippedProtected++
       continue
     }
     const blockDeleted = isTrackedDeleted(b.node)
     b.node.forEach((child, offset) => {
-      if (!child.isText || !child.text) return
+      if (done || !child.isText || !child.text) return
       const struck = blockDeleted || child.marks.some((m) => m.type.name === 'del')
       const hay = matchCase ? child.text : child.text.toLowerCase()
+      const raw = child.text
       let at = hay.indexOf(needle)
       while (at !== -1) {
+        if (
+          wholeWord
+          && (isWordChar(raw[at - 1]) || isWordChar(raw[at + needle.length]))
+        ) {
+          // boundary violation: keep scanning from the next character
+          at = hay.indexOf(needle, at + 1)
+          continue
+        }
         if (struck) {
           skippedDeleted++
         } else {
           const from = b.pos + 1 + offset + at
           replacements.push({ from, to: from + needle.length, marks: child.marks })
           touchedIndexes.add(b.index)
+          if (firstOnly) {
+            done = true
+            break
+          }
         }
         at = hay.indexOf(needle, at + needle.length)
       }

@@ -356,6 +356,20 @@ export interface DesktopApi {
    */
   onAgentToolRequest(handler: (request: DocsAgentToolRequest) => void): () => void
   reportAgentToolReply(requestId: string, reply: unknown): void
+  /**
+   * EverRoom embed: report that the editor has finished loading a document and
+   * is ready for the host agent (describe/apply). Called after the doc state
+   * lands; a blank/unsaved document reports null. Main pairs this with
+   * waitForAgentReady(contents, expectedPath) before driving a hidden view.
+   */
+  reportAgentReady(filePath: string | null): void
+  /**
+   * EverRoom embed: clean-canvas mode. The host toolbar/menu can hide or show
+   * the editor's operation area (Ribbon/status/ruler/nav); payload.hidden is
+   * explicit, omitted = toggle. The renderer also exposes its own restore pill
+   * and ⌘⇧F, so a host-driven hide is always reversible.
+   */
+  onChromeToggle(handler: (hidden?: boolean) => void): () => void
   /** keep the native View menu's checkbox items in sync with renderer state */
   reportViewMenuState(state: { aiSidebar: boolean; darkCanvas: boolean }): void
   /**

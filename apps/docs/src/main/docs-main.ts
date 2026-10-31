@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import {
   BrowserWindow,
   Menu,
@@ -93,6 +93,8 @@ import {
   snapshotDocPassword,
 } from './docx-encryption'
 import { isExternallyModified, type DiskFileState } from './external-change'
+
+declare const __GENOFFICE_EMBED_ONLY__: boolean
 
 /**
  * Docs main-process logic as an embeddable module: no top-level side effects.
@@ -3940,13 +3942,19 @@ export function buildDocsMenu(): void {
         { label: tm('menuPageWidth'), click: () => sendCommand('zoom-page-width') },
         { label: tm('menuWholePage'), click: () => sendCommand('zoom-whole-page') },
         { type: 'separator' },
-        {
-          id: 'docs-menu-ai-sidebar',
-          type: 'checkbox',
-          checked: activeViewMenuState().aiSidebar,
-          label: tm('menuAiSidebar'),
-          click: () => sendCommand('toggle-ai'),
-        },
+        // EverRoom embed builds ship no AI dock, so the "AI Sidebar" toggle
+        // is folded out of the menu along with every other AI entry.
+        ...(!__GENOFFICE_EMBED_ONLY__
+          ? [
+              {
+                id: 'docs-menu-ai-sidebar',
+                type: 'checkbox' as const,
+                checked: activeViewMenuState().aiSidebar,
+                label: tm('menuAiSidebar'),
+                click: () => sendCommand('toggle-ai'),
+              },
+            ]
+          : []),
         {
           id: 'docs-menu-dark-mode',
           type: 'checkbox',
@@ -4016,9 +4024,14 @@ export function buildDocsMenu(): void {
       label: tm('menuTools'),
       submenu: [
         { label: tm('menuWordCount'), click: () => sendCommand('word-count') },
-        { type: 'separator' },
-        // Runs the same AI proofread as Review > Editor (renderer shows the one-time ack)
-        { label: tm('menuAiProofread'), click: () => sendCommand('ai-proofread') },
+        // Runs the same AI proofread as Review > Editor (renderer shows the
+        // one-time ack). Folded out of EverRoom embeds: no AI provider there.
+        ...(!__GENOFFICE_EMBED_ONLY__
+          ? [
+              { type: 'separator' as const },
+              { label: tm('menuAiProofread'), click: () => sendCommand('ai-proofread') },
+            ]
+          : []),
       ],
     },
     windowMenuTemplate(process.platform, appMenuLabels(getUiLang())),
@@ -4207,6 +4220,12 @@ export interface DocsAgentDescribeResult {
   watermark?: string | null
   /** current page setup (orientation/paper/margins/columns/pageColor) */
   pageSetup?: Record<string, unknown>
+  /** grouped apply_operations vocabulary (B1 table ops + addressing/units rules) */
+  operationsGuide?: string
+  /** compact live document state: sections / header-footer / notes (counts +
+   *  ids for notes.update/delete) / bookmarks / sources / protection / fields /
+   *  tables / revisions counts */
+  documentState?: Record<string, unknown>
 }
 
 interface DocsAgentReply {
@@ -4288,6 +4307,105 @@ export async function applyAgentDocTools(
   })
   if (!reply.ok || !reply.results) return { error: reply.error ?? 'apply failed' }
   return { results: reply.results }
+}
+
+// ── Agent readiness (EverRoom hidden docs view): "document loaded and ready" ──
+// EverRoom creates a docs WebContentsView on demand (possibly hidden) and then
+// drives describeAgentDoc/applyAgentDocTools. Opening a docx is asynchronous
+// (main-side read + renderer parse), so the host needs a positive signal that
+// the requested working copy — not the boot blank document — is in the editor.
+// The renderer reports the path after the doc state lands; a blank/unsaved
+// document reports null (tracked, but never satisfied for a non-null expected
+// path). Tracking is per webContents so a destroyed view cannot leak waiters.
+
+/** Latest reported path per webContents; null = renderer ready on a blank/unsaved doc. */
+const agentReadyPathByWebContents = new Map<number, string | null>()
+const agentReadyWaiters = new Map<number, Set<(filePath: string | null) => void>>()
+
+function sameDocPath(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  if (a === b) return true
+  try {
+    return resolve(a) === resolve(b)
+  } catch {
+    return false
+  }
+}
+
+ipcMain.on('docs:agent-ready', (event, payload: unknown) => {
+  const p = payload as { filePath?: unknown } | null
+  const filePath = typeof p?.filePath === 'string' && p.filePath.length > 0 ? p.filePath : null
+  const wcId = event.sender.id
+  agentReadyPathByWebContents.set(wcId, filePath)
+  if (filePath === null) return // blank doc: not a usable readiness signal for a path
+  const waiters = agentReadyWaiters.get(wcId)
+  if (!waiters) return
+  for (const waiter of [...waiters]) waiter(filePath)
+})
+
+/** Destroy-time cleanup: drop the tracked path and fail every pending wait. */
+function dropAgentReadyState(wcId: number): void {
+  agentReadyPathByWebContents.delete(wcId)
+  const waiters = agentReadyWaiters.get(wcId)
+  agentReadyWaiters.delete(wcId)
+  waiters?.forEach((finish) => finish(null))
+}
+
+/**
+ * Wait until this webContents has loaded exactly `expectedPath` and reported
+ * readiness. Resolves true only on a matching report (a report that arrived
+ * before the call counts), false on timeout or when the view is destroyed.
+ * `timeoutMs` defaults to 15s (a cold hidden view must boot + parse the docx).
+ */
+export function waitForAgentReady(
+  contents: WebContents,
+  expectedPath: string,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  if (!expectedPath || typeof expectedPath !== 'string') return Promise.resolve(false)
+  if (contents.isDestroyed()) return Promise.resolve(false)
+  const reported = agentReadyPathByWebContents.get(contents.id)
+  if (sameDocPath(reported, expectedPath)) return Promise.resolve(true)
+  return new Promise<boolean>((resolveWait) => {
+    let settled = false
+    const finish = (filePath: string | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const waiters = agentReadyWaiters.get(contents.id)
+      waiters?.delete(listener)
+      if (waiters && waiters.size === 0) agentReadyWaiters.delete(contents.id)
+      resolveWait(filePath !== null && sameDocPath(filePath, expectedPath))
+    }
+    const listener = (filePath: string | null) => {
+      // null = view destroyed / cleanup; a different path's report is ignored
+      // so concurrent waits for different paths keep waiting
+      if (filePath === null) {
+        finish(null)
+        return
+      }
+      if (sameDocPath(filePath, expectedPath)) finish(filePath)
+    }
+    const timer = setTimeout(() => finish(null), Math.max(0, timeoutMs))
+    let waiters = agentReadyWaiters.get(contents.id)
+    if (!waiters) {
+      waiters = new Set()
+      agentReadyWaiters.set(contents.id, waiters)
+    }
+    waiters.add(listener)
+    // destroyed between the isDestroyed check and registration: settle now
+    if (contents.isDestroyed()) finish(null)
+  })
+}
+
+/**
+ * Host-side clean-canvas control (EverRoom embed): hide/show the editor's
+ * operation area (Ribbon/status/ruler/nav). `hidden` omitted = toggle. The
+ * renderer keeps its own restore pill and ⌘⇧F, so hiding is always reversible.
+ */
+export function setDocsChromeHidden(contents: WebContents, hidden?: boolean): void {
+  if (contents.isDestroyed()) return
+  contents.send('docs:chrome-toggle', hidden === undefined ? {} : { hidden })
 }
 
 /** Ask the renderer for pre-close state (dirty flag + autosave switch); no reply within 2s
@@ -4455,6 +4573,7 @@ export function createDocsView(
     closeSaveWaiters.delete(wcId)
     agentToolWaiters.get(wcId)?.forEach((w) => w({ ok: false, error: 'view closed' }))
     agentToolWaiters.delete(wcId)
+    dropAgentReadyState(wcId)
   })
   return view
 }

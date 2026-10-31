@@ -14,10 +14,13 @@ export {
   registerDocsIpc,
   requestDocsClose,
   setActiveDocsResolver,
+  setDocsChromeHidden,
   setDocsFileSavedHook,
+  setDocsMenuGate,
   setDocsShellWindow,
   setDocsThesisPanelHook,
   teardownDocsRenderer,
+  waitForAgentReady,
 } from './docs-main'
 export type {
   DocsAgentDescribeResult,

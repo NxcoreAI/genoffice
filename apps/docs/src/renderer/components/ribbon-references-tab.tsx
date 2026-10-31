@@ -1,10 +1,7 @@
 import { useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import {
-  bibliographyLine,
   citationText,
-  generateCaptionXml,
-  generateIndexFieldXml,
   generateTocFieldXml,
   type Block,
   type SourceInfo,
@@ -13,6 +10,16 @@ import {
 import { Dropdown } from '@genoffice/ui'
 import { PromptModal } from './PromptModal'
 import { collectHeadings } from '../editor/headings'
+import {
+  insertBibliography,
+  insertCaption,
+  insertCitation,
+  insertIndexField,
+  makeSourceInfo,
+  markIndexEntry as insertIndexEntryMark,
+  nextCaptionNumber,
+  xmlOfNode,
+} from '../editor/references'
 import { t, useI18n, type StringKey } from '../i18n/locale'
 import {
   IconBook,
@@ -66,14 +73,6 @@ function tocFieldNodes(entries: TocEntry[]): Array<Record<string, unknown>> {
 }
 
 const PAGE_BREAK_PARAGRAPH_XML = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
-
-/** OOXML of a top-level PM node: editor-generated fragment or original slice */
-function xmlOfNode(node: { attrs: Record<string, unknown> }, blocks: Block[]): string {
-  if (node.attrs.genXml) return String(node.attrs.genXml)
-  const idx = node.attrs.docxIndex
-  if (idx === null || idx === undefined) return ''
-  return blocks.find((b) => b.docxIndex === idx)?.originalXml ?? ''
-}
 
 /**
  * Find the TOC field region (field begin ... matching end, tracked by fldChar
@@ -164,35 +163,10 @@ function CaptionModal({
   const [label, setLabel] = useState<string>(() => t(CAPTION_LABEL_KEYS[0]))
   const [text, setText] = useState('')
 
-  const nextNumber = (lbl: string): number => {
-    let count = 0
-    const re = new RegExp(`SEQ\\s+${lbl}[\\s\\\\]`)
-    editor.state.doc.forEach((node) => {
-      if (node.type.name !== 'docProtected') return
-      if (re.test(xmlOfNode(node as never, blocks))) count += 1
-    })
-    return count + 1
-  }
+  const nextNumber = (lbl: string): number => nextCaptionNumber(editor, blocks, lbl)
 
   const insert = () => {
-    const number = nextNumber(label)
-    const xml = generateCaptionXml(label, number, text.trim())
-    const display = `${label} ${number}${text.trim() ? ` ${text.trim()}` : ''}`
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: 'docProtected',
-        attrs: {
-          docxIndex: null,
-          blockType: 'passthrough',
-          label: t('ribbonCaption'),
-          genXml: xml,
-          fieldDisplay: { kind: 'text', left: display },
-        },
-      } as never)
-      .run()
-    onClose()
+    if (insertCaption(editor, blocks, label, text).ok) onClose()
   }
 
   return (
@@ -257,21 +231,9 @@ function SourceModal({
   const [url, setUrl] = useState('')
 
   const add = () => {
-    if (!title.trim()) return
-    // unique tag derived from author/title initials + year
-    const base = (author.trim() || title.trim()).replace(/[\s,，、]+/g, '').slice(0, 8) || 'Src'
-    let tag = `${base}${year.trim()}`
-    let n = 1
-    while (sources.some((s) => s.tag === tag)) tag = `${base}${year.trim()}_${++n}`
-    onAdd({
-      tag,
-      type,
-      author: author.trim(),
-      title: title.trim(),
-      year: year.trim(),
-      ...(publisher.trim() ? { publisher: publisher.trim() } : {}),
-      ...(url.trim() ? { url: url.trim() } : {}),
-    })
+    const result = makeSourceInfo(sources, { author, title, year, publisher, url, type })
+    if (!result.ok || !result.source) return
+    onAdd(result.source)
     onClose()
   }
 
@@ -372,86 +334,30 @@ export function ReferencesTab({
       .run()
   }
 
-  const insertCitation = (source: SourceInfo) => {
-    editor
-      .chain()
-      .focus()
-      .insertContent({ type: 'text', text: citationText(source) } as never)
-      .run()
+  const insertCitationAtCursor = (source: SourceInfo) => {
+    insertCitation(editor, source)
     setDropdown(() => null)
   }
 
-  const insertBibliography = () => {
-    if (sources.length === 0) {
-      window.alert(t('ribbonNoSources'))
-      return
-    }
-    const nodes: Array<Record<string, unknown>> = [
-      {
-        type: 'docHeading',
-        attrs: { docxIndex: null, styleId: null, aiChanged: false, level: 1 },
-        content: [{ type: 'text', text: t('ribbonBibliographyHeading') }],
-      },
-      ...sources.map((s) => ({
-        type: 'docParagraph',
-        attrs: { docxIndex: null, styleId: null, aiChanged: false },
-        content: [{ type: 'text', text: bibliographyLine(s) }],
-      })),
-    ]
-    editor
-      .chain()
-      .focus()
-      .insertContent(nodes as never)
-      .run()
+  const insertBibliographyAtCursor = () => {
+    if (!insertBibliography(editor, sources).ok) window.alert(t('ribbonNoSources'))
     setDropdown(() => null)
   }
 
   const [xePrompt, setXePrompt] = useState<{ initial: string; at: number } | null>(null)
 
-  const markIndexEntry = () => {
+  const openIndexEntryPrompt = () => {
     const { from, to } = editor.state.selection
     setXePrompt({ initial: editor.state.doc.textBetween(from, to, ' ').trim(), at: to })
   }
 
   const submitIndexEntry = (term: string) => {
     if (!xePrompt) return
-    editor
-      .chain()
-      .focus()
-      .insertContentAt(Math.min(xePrompt.at, editor.state.doc.content.size), {
-        type: 'docXeMark',
-        attrs: { term },
-      } as never)
-      .run()
+    insertIndexEntryMark(editor, xePrompt.at, term)
   }
 
   const insertIndex = () => {
-    const terms: string[] = []
-    editor.state.doc.descendants((node) => {
-      if (node.type.name === 'docXeMark') terms.push(String(node.attrs.term))
-    })
-    if (terms.length === 0) {
-      window.alert(t('ribbonNoIndexEntries'))
-      return
-    }
-    const unique = [...new Set(terms.map((t) => t.trim()).filter(Boolean))].sort((a, b) =>
-      a.localeCompare(b, 'zh-CN'),
-    )
-    const nodes = generateIndexFieldXml(unique).map((xml, i) => ({
-      type: 'docProtected',
-      attrs: {
-        docxIndex: null,
-        blockType: 'passthrough',
-        label: t('ribbonIndexFieldLabel'),
-        genXml: xml,
-        fieldDisplay: { kind: 'tocLine', left: unique[i], right: '', level: 1 },
-      },
-    }))
-    editor
-      .chain()
-      .focus()
-      .insertContent(nodes as never)
-      .run()
+    if (!insertIndexField(editor).ok) window.alert(t('ribbonNoIndexEntries'))
   }
 
   return (
@@ -534,7 +440,7 @@ export function ReferencesTab({
             {dropdown === 'citation' && (
               <div data-rb-panel="" className="layout-menu">
                 {sources.map((s) => (
-                  <button key={s.tag} data-tip={s.title} onClick={() => insertCitation(s)}>
+                  <button key={s.tag} data-tip={s.title} onClick={() => insertCitationAtCursor(s)}>
                     {citationText(s)} {s.title.slice(0, 12)}
                   </button>
                 ))}
@@ -553,7 +459,7 @@ export function ReferencesTab({
             className="rb-big"
             disabled={!hasDoc}
             data-tip={t('ribbonBibliographyTip')}
-            onClick={insertBibliography}
+            onClick={insertBibliographyAtCursor}
           >
             <span className="rb-big-icon">
               <IconBook size={BIG} />
@@ -588,7 +494,7 @@ export function ReferencesTab({
               <div data-rb-panel="" className="layout-menu">
                 <button
                   onClick={() => {
-                    markIndexEntry()
+                    openIndexEntryPrompt()
                     setDropdown(() => null)
                   }}
                 >

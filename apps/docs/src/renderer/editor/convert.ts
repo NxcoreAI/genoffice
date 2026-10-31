@@ -1668,7 +1668,11 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
             genOffsetX !== undefined && genOffsetY !== undefined
               ? { x: genOffsetX, y: genOffsetY }
               : undefined
-          xml = applyImageWrap(xml, genWrap, posOffset)
+          // carry an explicit stacking rank (object.shape.format zOrder) into the
+          // rebuilt anchor; otherwise the rebuild resets relativeHeight to base
+          const genZOrder =
+            node.attrs?.imageZOrder != null ? Number(node.attrs.imageZOrder) : undefined
+          xml = applyImageWrap(xml, genWrap, posOffset, undefined, genZOrder)
         }
         pushBlock({ kind: 'xml', xml })
       } else if (node.attrs?.genImage) {

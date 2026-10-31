@@ -171,6 +171,20 @@ const api: DesktopApi = {
   },
   reportAgentToolReply: (requestId: string, reply: unknown) =>
     ipcRenderer.send('docs:agent-tool-result', { requestId, reply }),
+  /** Agent readiness: the renderer has finished loading this document (null = blank) */
+  reportAgentReady: (filePath: string | null) =>
+    ipcRenderer.send('docs:agent-ready', {
+      filePath: typeof filePath === 'string' && filePath.length > 0 ? filePath : null,
+    }),
+  /** Host-driven clean-canvas toggle (EverRoom toolbar/menu). */
+  onChromeToggle: (handler: (hidden?: boolean) => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { hidden?: unknown } | undefined) => {
+      const hidden = payload?.hidden
+      handler(typeof hidden === 'boolean' ? hidden : undefined)
+    }
+    ipcRenderer.on('docs:chrome-toggle', listener)
+    return () => ipcRenderer.removeListener('docs:chrome-toggle', listener)
+  },
   thesisListCards: () => ipcRenderer.invoke('docs:thesis-list'),
   thesisPickTemplate: (overwrite?: boolean) => ipcRenderer.invoke('docs:thesis-pick', overwrite === true),
   thesisRemoveCard: (cardId: string) => ipcRenderer.invoke('docs:thesis-remove', cardId),

@@ -6,6 +6,7 @@ import type { ChartDisplay, HeaderFooter, NewChart } from '@genoffice/docx-engin
 import { hfHasPageField, hfWithoutPageMarks } from '../editor/hf-dom'
 import { EquationGallery, EquationModal } from './EquationModal'
 import { COVER_PRESETS, insertCoverPage, type CoverPreset } from '../editor/cover-pages'
+import { collectBookmarks, insertBookmark, insertCrossRef, removeBookmark } from '../editor/references'
 import { startShapeDrawMode } from '../editor/shape-draw'
 import { useI18n, type StringKey } from '../i18n/locale'
 import { useModalKeys } from './modal-keys'
@@ -150,33 +151,6 @@ function HfEditor({
   )
 }
 
-/** all bookmarks in document order: name + owning node position + preview text */
-function collectBookmarks(editor: Editor): Array<{ name: string; pos: number; preview: string }> {
-  const out: Array<{ name: string; pos: number; preview: string }> = []
-  editor.state.doc.descendants((node, pos) => {
-    const names = node.attrs?.bookmarks as string[] | null
-    if (Array.isArray(names)) {
-      for (const name of names) {
-        out.push({ name, pos, preview: node.textContent.slice(0, 40) })
-      }
-    }
-    return !node.isLeaf
-  })
-  return out
-}
-
-/** the paragraph-like node at the cursor that can carry bookmarks */
-function bookmarkTargetAtCursor(editor: Editor): { pos: number; typeName: string } | null {
-  const { $from } = editor.state.selection
-  for (let depth = $from.depth; depth >= 1; depth--) {
-    const node = $from.node(depth)
-    if (['docParagraph', 'docHeading', 'docListItem'].includes(node.type.name)) {
-      return { pos: $from.before(depth), typeName: node.type.name }
-    }
-  }
-  return null
-}
-
 /** Word's Bookmark dialog: list + add (cursor's paragraph) / go to / delete */
 export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
@@ -186,44 +160,24 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
   const bookmarks = collectBookmarks(editor)
 
   const addBookmark = () => {
-    const trimmed = name.trim()
-    if (!/^[A-Za-z一-鿿_][\w一-鿿]*$/.test(trimmed)) {
-      setError(t('ribbonBookmarkNameInvalid'))
+    const result = insertBookmark(editor, name)
+    if (!result.ok) {
+      setError(
+        result.error?.includes('already exists')
+          ? t('ribbonBookmarkExists')
+          : result.error?.includes('not inside')
+            ? t('ribbonBookmarkNoCursor')
+            : t('ribbonBookmarkNameInvalid'),
+      )
       return
     }
-    if (bookmarks.some((b) => b.name === trimmed)) {
-      setError(t('ribbonBookmarkExists'))
-      return
-    }
-    const target = bookmarkTargetAtCursor(editor)
-    if (!target) {
-      setError(t('ribbonBookmarkNoCursor'))
-      return
-    }
-    const node = editor.state.doc.nodeAt(target.pos)
-    const existing = (node?.attrs?.bookmarks as string[] | null) ?? []
-    editor.view.dispatch(
-      editor.state.tr.setNodeMarkup(target.pos, undefined, {
-        ...node?.attrs,
-        bookmarks: [...existing, trimmed],
-      }),
-    )
     setName('')
     setError('')
     forceRender((n) => n + 1)
   }
 
-  const removeBookmark = (entry: { name: string; pos: number }) => {
-    const node = editor.state.doc.nodeAt(entry.pos)
-    if (!node) return
-    const rest = ((node.attrs?.bookmarks as string[] | null) ?? []).filter((n) => n !== entry.name)
-    editor.view.dispatch(
-      editor.state.tr.setNodeMarkup(entry.pos, undefined, {
-        ...node.attrs,
-        bookmarks: rest.length > 0 ? rest : null,
-      }),
-    )
-    forceRender((n) => n + 1)
+  const removeBookmarkAt = (entry: { name: string; pos: number }) => {
+    if (removeBookmark(editor, entry.name)) forceRender((n) => n + 1)
   }
 
   const jumpTo = (pos: number) => {
@@ -266,7 +220,7 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
                 className="bookmark-del"
                 data-tip={t('ribbonBookmarkDeleteTip')}
                 aria-label={t('ribbonBookmarkDeleteTip')}
-                onClick={() => removeBookmark(b)}
+                onClick={() => removeBookmarkAt(b)}
               >
                 <IconClose size={12} />
               </button>
@@ -286,16 +240,7 @@ export function CrossRefModal({ editor, onClose }: { editor: Editor; onClose: ()
   const { t } = useI18n()
   const bookmarks = collectBookmarks(editor)
   const insertRef = (b: { name: string; preview: string }) => {
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: 'text',
-        text: b.preview || b.name,
-        marks: [{ type: 'refField', attrs: { name: b.name } }],
-      })
-      .run()
-    onClose()
+    if (insertCrossRef(editor, b.name).ok) onClose()
   }
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

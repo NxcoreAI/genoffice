@@ -17,6 +17,7 @@ import {
 } from '@genoffice/docx-engine'
 import type { DocsTabInfo } from '../../shared/ipc'
 import { tableModelToPmNode } from '../editor/convert'
+import { clampImageWidth, scaledImageSize } from '../editor/agent-image'
 import { isStraightLineKind } from '../editor/shape-svg'
 import type { InkTool } from '../editor/ink'
 import { t, useI18n, type StringKey } from '../i18n/locale'
@@ -258,11 +259,19 @@ export function insertTableAt(editor: Editor, rows: number, cols: number): void 
   editor.chain().focus().insertContent(tableModelToPmNode(table)).run()
 }
 
-/** Insert an inline image from a dataURL at the cursor (shared by paste/dialog; size scaled to content width) */
+/**
+ * Insert an inline image from a dataURL (shared by paste/dialog/agent; size
+ * scaled to the content width unless a smaller cap is passed).
+ *
+ * `opts.atPos` is an explicit ProseMirror doc position (the agent's
+ * afterIndex-anchored insert); without it the image lands at the cursor,
+ * which keeps the paste/dialog callers unchanged.
+ */
 export async function insertImageFromDataUrl(
   editor: Editor,
   dataUrl: string,
   label = t('ribbonPicture'),
+  opts: { atPos?: number; maxWidthPx?: number } = {},
 ): Promise<boolean> {
   const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl)
   if (!m) return false
@@ -270,29 +279,26 @@ export async function insertImageFromDataUrl(
   if (!/^image\/(png|jpeg|gif)$/.test(mime)) return false
   try {
     const natural = await imageSizeOf(dataUrl)
-    const scale = Math.min(1, MAX_IMAGE_WIDTH_PX / natural.width)
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: 'docProtected',
-        attrs: {
-          docxIndex: null,
-          blockType: 'image',
-          label,
-          imageDataUrl: dataUrl,
-          imageWidthPx: Math.round(natural.width * scale),
-          imageHeightPx: Math.round(natural.height * scale),
-          genImage: {
-            base64: m[2],
-            mime,
-            widthPx: Math.round(natural.width * scale),
-            heightPx: Math.round(natural.height * scale),
-          },
-        },
-      })
-      .run()
-    return true
+    const capPx = clampImageWidth(opts.maxWidthPx ?? MAX_IMAGE_WIDTH_PX, MAX_IMAGE_WIDTH_PX)
+    const { width, height } = scaledImageSize(natural, capPx)
+    const content = {
+      type: 'docProtected',
+      attrs: {
+        docxIndex: null,
+        blockType: 'image',
+        label,
+        imageDataUrl: dataUrl,
+        imageWidthPx: width,
+        imageHeightPx: height,
+        genImage: { base64: m[2], mime, widthPx: width, heightPx: height },
+      },
+    }
+    const inserted = editor.chain().focus()
+    const ok =
+      opts.atPos !== undefined
+        ? inserted.insertContentAt(opts.atPos, content).run()
+        : inserted.insertContent(content).run()
+    return ok
   } catch {
     return false
   }
@@ -686,32 +692,34 @@ export function ReviewTab({
             </span>
             <span>{t('ribbonShowComments')}</span>
           </button>
-          <button
-            className="rb-big"
-            disabled={!hasDoc || openCommentCount === 0}
-            data-tip={`${t('ribbonAiCommentsTip', { count: openCommentCount })} — ${t('ribbonAiCreditNote')}`}
-            onClick={() => onAiPreset(t('ribbonAiCommentsPrompt'))}
-          >
-            <span className="rb-big-icon">
-              <span className="ai-feature-icon" aria-hidden="true">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 3V11.5a7.5 7.5 0 0 1 7.5-7.5h2A7.5 7.5 0 0 1 20 11.5z" />
-                  <path
-                    d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
+          {!__GENOFFICE_EMBED_ONLY__ && (
+            <button
+              className="rb-big"
+              disabled={!hasDoc || openCommentCount === 0}
+              data-tip={`${t('ribbonAiCommentsTip', { count: openCommentCount })} — ${t('ribbonAiCreditNote')}`}
+              onClick={() => onAiPreset(t('ribbonAiCommentsPrompt'))}
+            >
+              <span className="rb-big-icon">
+                <span className="ai-feature-icon" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
                     strokeLinejoin="round"
-                  />
-                </svg>
+                  >
+                    <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 3V11.5a7.5 7.5 0 0 1 7.5-7.5h2A7.5 7.5 0 0 1 20 11.5z" />
+                    <path
+                      d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
               </span>
-            </span>
-            <span>{t('ribbonAiComments')}</span>
-          </button>
+              <span>{t('ribbonAiComments')}</span>
+            </button>
+          )}
         </div>
         <div className="ribbon-group-label">{t('ribbonGroupComments')}</div>
       </div>
@@ -857,33 +865,35 @@ export function ReviewTab({
             </span>
             <span>{t('ribbonNextChange')}</span>
           </button>
-          <button
-            className="rb-big"
-            disabled={!hasDoc || revisionCount === 0}
-            data-tip={`${t('ribbonAiRevisionsTip', { count: revisionCount })} — ${t('ribbonAiCreditNote')}`}
-            onClick={() => onAiPreset(t('ribbonAiRevisionsPrompt'))}
-          >
-            <span className="rb-big-icon">
-              <span className="ai-feature-icon" aria-hidden="true">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M4 5h16M4 9h12M4 13h9M4 17h7" />
-                  <path
-                    d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
+          {!__GENOFFICE_EMBED_ONLY__ && (
+            <button
+              className="rb-big"
+              disabled={!hasDoc || revisionCount === 0}
+              data-tip={`${t('ribbonAiRevisionsTip', { count: revisionCount })} — ${t('ribbonAiCreditNote')}`}
+              onClick={() => onAiPreset(t('ribbonAiRevisionsPrompt'))}
+            >
+              <span className="rb-big-icon">
+                <span className="ai-feature-icon" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
                     strokeLinejoin="round"
-                  />
-                  <path d="M19.5 4.5l-7 7-2 .5.5-2 7-7z" />
-                </svg>
+                  >
+                    <path d="M4 5h16M4 9h12M4 13h9M4 17h7" />
+                    <path
+                      d="M17 14l.26.7c.34.91.5 1.37.84 1.7.33.33.79.5 1.7.84l.7.26-.7.26c-.91.34-1.37.5-1.7.84-.34.33-.5.79-.84 1.7L17 21l-.26-.7c-.34-.91-.5-1.37-.84-1.7-.33-.34-.79-.5-1.7-.84l-.7-.26.7-.26c.91-.34 1.37-.5 1.7-.84.34-.33.5-.79.84-1.7L17 14z"
+                      strokeLinejoin="round"
+                    />
+                    <path d="M19.5 4.5l-7 7-2 .5.5-2 7-7z" />
+                  </svg>
+                </span>
               </span>
-            </span>
-            <span>{t('ribbonAiRevisions')}</span>
-          </button>
+              <span>{t('ribbonAiRevisions')}</span>
+            </button>
+          )}
         </div>
         <div className="ribbon-group-label">{t('ribbonGroupTracking')}</div>
       </div>

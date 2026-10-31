@@ -7,6 +7,12 @@ import { defineConfig } from 'vitest/config'
 const local = (rel: string) => fileURLToPath(new URL(rel, import.meta.url))
 
 export default defineConfig({
+  // Unit tests exercise the standalone renderer: the embed-only define folds
+  // AI entries out of the EverRoom runtime, so keep them on here (the electron
+  // builds still fold it from GENOFFICE_EMBED_ONLY).
+  define: {
+    __GENOFFICE_EMBED_ONLY__: JSON.stringify(false),
+  },
   resolve: {
     alias: {
       '@genoffice/docx-engine': local('../../packages/docx-engine/src/index.ts'),

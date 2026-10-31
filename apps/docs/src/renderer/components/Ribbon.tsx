@@ -39,6 +39,8 @@ import { applyCase, type CaseMode } from '../editor/case-transform'
 import { setParagraphDirection, setSelectionAlign } from '../editor/direction'
 import { setInactiveSelectionShown } from '../editor/inactive-selection'
 import { stepParagraphIndent } from '../editor/indent'
+import { MULTILEVEL_LIBRARY } from '../editor/multilevel-presets'
+import { CHAR_STYLE_PRESETS, DEFAULT_PRESET_ACCENT } from '../editor/character-styles'
 import { formatNumber } from '../editor/numbering'
 import type { InkTool } from '../editor/ink'
 import type { RibbonFormatState } from './ribbon-format-state'
@@ -544,25 +546,6 @@ const NUMBER_LIBRARY: Array<{ numFmt: string; pattern: string }> = [
   { numFmt: 'chineseCountingThousand', pattern: '%1、' },
 ]
 
-const MULTILEVEL_LIBRARY: CustomNumberingLevel[][] = [
-  // 1. / 1.1. / 1.1.1.
-  Array.from({ length: 9 }, (_, i) => ({
-    numFmt: 'decimal',
-    lvlText: `${Array.from({ length: i + 1 }, (_, k) => `%${k + 1}`).join('.')}.`,
-    indentLeft: 720 * (i + 1),
-    hanging: 432,
-  })),
-  // Chinese official-document hierarchy: numeral + comma / parenthesized numeral / 1.
-  Array.from({ length: 9 }, (_, i): CustomNumberingLevel => {
-    if (i === 0)
-      return { numFmt: 'chineseCountingThousand', lvlText: '%1、', indentLeft: 720, hanging: 425 }
-    if (i === 1)
-      return { numFmt: 'chineseCountingThousand', lvlText: '(%2)', indentLeft: 1440, hanging: 425 }
-    return { numFmt: 'decimal', lvlText: `%${i + 1}.`, indentLeft: 720 * (i + 1), hanging: 360 }
-  }),
-  // • / ○ / ■
-  bulletPresetLevels('•'),
-]
 
 /** The level's number text when every level counter is 1 (gallery/dialog preview) */
 function previewLevelText(levels: CustomNumberingLevel[], ilvl: number): string {
@@ -580,32 +563,6 @@ const STYLE_GALLERY = [
   { key: 'h2', labelKey: 'ribbonStyleHeading2', className: 'style-h2' },
   { key: 'h3', labelKey: 'ribbonStyleHeading3', className: 'style-h3' },
 ] as const satisfies ReadonlyArray<{ key: string; labelKey: StringKey; className: string }>
-
-/** Fallback character styles shown when the document has no character styles.
- * Emphasis = italic + accent color, Intense Emphasis = bold + accent color;
- * applied via the plain italic/bold marks plus docTextStyle color. */
-const CHAR_STYLE_PRESETS: Array<{
-  styleId: string
-  labelKey: StringKey
-  mark: 'italic' | 'bold'
-  display: (accentHex: string) => CSSProperties
-}> = [
-  {
-    styleId: '__preset_emphasis',
-    labelKey: 'ribbonStyleEmphasis',
-    mark: 'italic',
-    display: (accentHex) => ({ fontStyle: 'italic', color: `#${accentHex}` }),
-  },
-  {
-    styleId: '__preset_strong',
-    labelKey: 'ribbonStyleIntenseEmphasis',
-    mark: 'bold',
-    display: (accentHex) => ({ fontWeight: 'bold', color: `#${accentHex}` }),
-  },
-]
-
-/** Theme accent used by the preset character styles when the doc theme has none */
-const DEFAULT_PRESET_ACCENT = '4472C4'
 
 function findNumIdOfKind(blocks: Block[], kind: 'bullet' | 'ordered'): string | null {
   for (const b of blocks) {

@@ -14,6 +14,8 @@
 import { macShortcutsToWin, platformShortcuts } from '@genoffice/i18n'
 import type { StringKey } from './i18n/locale'
 
+declare const __GENOFFICE_EMBED_ONLY__: boolean
+
 export type ShortcutGroupId = 'file' | 'edit' | 'text' | 'para' | 'insert' | 'review' | 'view'
 
 export interface ShortcutDef {
@@ -155,7 +157,18 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   // ---- Review & tools ----
   { id: 'track-changes', group: 'review', labelKey: 'ribbonTrackChanges', keys: '⇧⌘E' },
   { id: 'word-count', group: 'review', labelKey: 'appWordCountTitle', keys: '⇧⌘G' },
-  { id: 'proofread', group: 'review', labelKey: 'appScProofread', keys: 'F7' },
+  // Proofread is the AI proofread preset; the EverRoom embed (no AI provider)
+  // folds the shortcut out along with its Review-tab entry.
+  ...(!__GENOFFICE_EMBED_ONLY__
+    ? [
+        {
+          id: 'proofread',
+          group: 'review' as const,
+          labelKey: 'appScProofread' as const,
+          keys: 'F7',
+        },
+      ]
+    : []),
   { id: 'update-fields', group: 'review', labelKey: 'appUpdateField', keys: 'F9' },
 
   // ---- View ----

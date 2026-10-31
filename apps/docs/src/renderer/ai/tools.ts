@@ -105,7 +105,7 @@ export const AGENT_TOOLS: AgentToolDef[] = [
   {
     name: 'read_revisions',
     description:
-      'List every pending tracked revision (insertions, deletions, formatting/move/table changes) with kind, author, date, block index and the affected text. Read-only: revisions are accepted/rejected by the user in the Review tab.',
+      'List every pending tracked revision (insertions, deletions, formatting/move/table changes) with its [rN] id, kind, author, date, block index and the affected text. Reading is non-destructive; the ids can be passed to the host agent review.accept / review.reject operations (destructive, confirm:true required) or the user can decide in the Review tab.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {

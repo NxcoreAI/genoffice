@@ -48,7 +48,7 @@ export const COMMANDS_GUIDE = [
   "{ updateTextStyle: { target, style: { color?, highlight?, sizeHalfPoints?, font?, bold?, italic?, underline?, strike?, baselineOffset?: 'SUPERSCRIPT'|'SUBSCRIPT'|'NONE', link?: {url}|null }, fields: string[] } }  // value null = clear that property; font applies only to its own script's slot (an East Asian font keeps the run's Latin font and vice versa)",
   "{ updateParagraphStyle: { target, style: { align?: 'left'|'center'|'right'|'justify', lineSpacing?, indentLeft?, indentRight?, indentFirstLine?, spaceBefore?, spaceAfter?, pageBreakBefore?, shadingFill?, borders?: subset of 'tblr'|null }, fields: string[] } }  // indentFirstLine positive = first-line indent, negative = hanging; a two-character indent for CJK text ≈ font size in pt × 40 twips",
   '{ setHeadingLevel: { target, level: 0-6 } }  // 0 = demote to body paragraph',
-  "{ replaceAllText: { containsText, replaceText, matchCase?, target? } }  // target narrows the scanned blocks (blockIndexes / scope:'selection' / nodeType); omitted = whole document. The replacement keeps the matched text's formatting — the right tool for small in-place fixes (a few words inside a sentence)",
+  "{ replaceAllText: { containsText, replaceText, matchCase?, wholeWord?, replaceFirstOnly?, target? } }  // target narrows the scanned blocks (blockIndexes / scope:'selection' / nodeType); omitted = whole document. wholeWord = only matches not adjacent to an ASCII letter/digit/underscore (CJK has no word boundaries); replaceFirstOnly = only the first occurrence. The replacement keeps the matched text's formatting — the right tool for small in-place fixes (a few words inside a sentence)",
   '{ updateMatchedTextStyle: { containsText, matchCase?, target?, style, fields } }  // character-level styling: applies the run style (same style/fields as updateTextStyle) only to the matched text itself, not the whole block',
   '{ deleteBlocks: { target } }',
   '{ moveBlocks: { blockIndexes: number[], afterBlockIndex: number } }  // -1 = start of document',
@@ -589,13 +589,15 @@ export function buildRevisionsContext(editor: Editor): string {
   if (revisions.length === 0) return '(the document has no tracked revisions)'
   const doc = editor.state.doc
   const shown = revisions.slice(0, REVISIONS_CONTEXT_MAX)
-  const lines = shown.map((rev) => {
+  const lines = shown.map((rev, index) => {
     const text = doc.textBetween(rev.from, rev.to, '\n', ' ').replace(/\s+/g, ' ').trim()
     const date = rev.date ? ` on ${rev.date.slice(0, 10)}` : ''
     const excerpt = text ? `: "${clip(text, 200)}"` : ''
-    return `- block ${blockIndexOfPos(doc, rev.from)} | ${REVISION_KIND_LABEL[rev.kind]} by ${rev.author || 'unknown'}${date}${excerpt}`
+    return `- [r${index}] block ${blockIndexOfPos(doc, rev.from)} | ${REVISION_KIND_LABEL[rev.kind]} by ${rev.author || 'unknown'}${date}${excerpt}`
   })
-  const header = `Tracked revisions (${revisions.length} pending; deleted text shows what will disappear on accept):`
+  const header =
+    `Tracked revisions (${revisions.length} pending; deleted text shows what will disappear on accept). `
+    + 'The [rN] ids can be passed to review.accept / review.reject (destructive; requires confirm:true):'
   const overflow =
     revisions.length > shown.length
       ? [`…and ${revisions.length - shown.length} more revision(s) not listed.`]
@@ -904,7 +906,15 @@ function parseTable(el: Element): PmNode | null {
       row.push({ paras: [''], ...(isHeader ? { bold: true, fill: TABLE_HEADER_FILL } : {}) })
     return row
   })
-  const table: TableModel = { rows }
+  const table: TableModel = {
+    rows,
+    // Word's own default for a new table is "AutoFit to Window" (w:tblW pct
+    // 100%): the table fills the current text column instead of being frozen
+    // at the page width of the moment it was generated. A fixed w:tblW dxa
+    // baked in here would overflow later page-setup changes (2-column layout,
+    // narrower margins) and paint over the neighbouring column.
+    autoFit: 'window',
+  }
   return tableModelToPmNode(table)
 }
 

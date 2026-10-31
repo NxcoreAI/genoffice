@@ -25,6 +25,9 @@ export default defineConfig({
         },
       },
     },
+    define: {
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(embedOnly),
+    },
     plugins: [
       externalizeDepsPlugin({ exclude: ['@genoffice/electron-utils', '@genoffice/font-metrics'] }),
     ],

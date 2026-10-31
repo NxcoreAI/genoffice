@@ -9,6 +9,7 @@ import {
   applyTablePreset,
   repeatHeaderState,
   setTableAutoFit,
+  setTableWidthRatio,
   setTableLookOption,
   toggleRepeatHeaderRows,
   updateSelectedTableAttrs,
@@ -104,6 +105,25 @@ describe('editable table properties', () => {
     expect(table.attrs).toMatchObject({ tblAutoFit: 'fixed', widthPct: null })
     expect(table.content![0].content![0].attrs?.colwidth).toEqual([300])
     expect(pmTableToModel(table as PmNode).autoFit).toBe('fixed')
+    editor.destroy()
+  })
+
+  it('narrows the table to a ratio of the text column by scaling the fixed grid', async () => {
+    const editor = await openTable()
+    // 600px content width, 50% target = 300px table
+    expect(setTableWidthRatio(0.5, 600)(editor.state, editor.view.dispatch)).toBe(true)
+    const table = editor.getJSON().content![0] as unknown as PmNode
+    expect(table.attrs).toMatchObject({ tblAutoFit: 'fixed', tblAutoFitEdited: true, widthPx: 300 })
+    const total = (table.attrs!.colWidthsPct as number[]).reduce((sum, v) => sum + v, 0)
+    expect(Math.round(total)).toBe(100)
+    // the grid columns were scaled down too (the saved dxa widths follow them)
+    const firstRowWidths = (table.content![0].content ?? []).flatMap(
+      (cell) => (cell.attrs?.colwidth as number[] | undefined) ?? [],
+    )
+    expect(firstRowWidths.reduce((sum, v) => sum + v, 0)).toBe(300)
+    // ratio is clamped to the sane range
+    expect(setTableWidthRatio(5, 600)(editor.state, editor.view.dispatch)).toBe(true)
+    expect((editor.getJSON().content![0] as unknown as PmNode).attrs?.widthPx).toBe(600)
     editor.destroy()
   })
 
