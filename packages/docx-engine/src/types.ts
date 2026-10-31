@@ -499,6 +499,19 @@ export interface HeaderFooter {
    * set). Absent = legacy single centered line.
    */
   paras?: HfParagraph[]
+  /**
+   * NEW images to embed in this header/footer part (A3 host agent): each is
+   * written as an extra trailing image paragraph plus a media part and a
+   * relationship in the part's OWN rels. widthPx/heightPx are required for the
+   * drawing extent (Babel can't decode pixels engine-side).
+   */
+  images?: HfImage[]
+  /**
+   * Indexes (into the part's parsed image list, see HfImage order) of ORIGINAL
+   * image paragraphs to drop on rebuild. Removal is paragraph-level: a w:p
+   * holding several images is removed as a whole. Display-only for parsed docs.
+   */
+  removeImages?: number[]
 }
 
 /** Placeholder for NUMPAGES (total pages) fields in headers/footers; the renderer substitutes the total page count and saving writes the field back (PAGE uses PAGE_MARK the same way) */

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Editor } from '@tiptap/core'
 import type {
   Block,
+  HfImage,
   NoteInfo,
   SectionInfo,
   SectionSettings,
@@ -14,6 +15,10 @@ import type { DocState, PendingNumbering } from '../src/renderer/doc-state'
 import { editorExtensions } from '../src/renderer/editor/extensions'
 import type { ReviewContext } from '../src/renderer/review-actions'
 import { collectRevisions } from '../src/renderer/editor/revisions'
+import { parseDocx, saveDocx } from '@genoffice/docx-engine'
+import JSZip from 'jszip'
+import { buildDocx, TINY_PNG_BASE64 } from '../../../packages/docx-engine/tests/helpers/build-docx'
+import type { InkAnnotation } from '../src/renderer/editor/ink'
 import {
   MAX_OPERATIONS,
   OPERATIONS_GUIDE,
@@ -130,6 +135,21 @@ interface FakeAppState {
   trackChanges: boolean
   protectionRequests: AgentProtectResult[]
   passwordRequests: Array<string | null>
+  hfParsedHeader: HfImage[]
+  hfParsedFooter: HfImage[]
+  hfPendingHeader: HfImage[]
+  hfPendingFooter: HfImage[]
+  hfRemoveHeader: number[]
+  hfRemoveFooter: number[]
+  inkAnnotations: InkAnnotation[]
+  characterStyleIds: string[]
+  styleUpserts: Record<string, import('@genoffice/docx-engine').StyleUpsert>
+  inkMetrics: {
+    anchorIndex: number
+    anchor: { x: number; y: number }
+    rect: { x: number; y: number; w: number; h: number }
+    columnWidthPx: number
+  } | null
 }
 
 function fakeSection(index: number): SectionInfo {
@@ -193,6 +213,16 @@ function makeFakeApp(
     trackChanges: false,
     protectionRequests: [],
     passwordRequests: [],
+    hfParsedHeader: [],
+    hfParsedFooter: [],
+    hfPendingHeader: [],
+    hfPendingFooter: [],
+    hfRemoveHeader: [],
+    hfRemoveFooter: [],
+    inkAnnotations: [],
+    characterStyleIds: [],
+    styleUpserts: {},
+    inkMetrics: null,
   }
   // minimal DocState for the numbering actions (parsed numbering definitions)
   const fakeDoc = {
@@ -414,6 +444,44 @@ function makeFakeApp(
       state.passwordRequests.push(password)
       return { ok: true }
     },
+    getHeaderFooterImages: () => ({
+      header: [...state.hfParsedHeader, ...state.hfPendingHeader],
+      footer: [...state.hfParsedFooter, ...state.hfPendingFooter],
+      headerRemove: state.hfRemoveHeader,
+      footerRemove: state.hfRemoveFooter,
+    }),
+    addHeaderFooterImage: (kind, image) => {
+      if (kind === 'header') {
+        const index = state.hfParsedHeader.length + state.hfPendingHeader.length
+        state.hfPendingHeader = [...state.hfPendingHeader, image]
+        return { index }
+      }
+      const index = state.hfParsedFooter.length + state.hfPendingFooter.length
+      state.hfPendingFooter = [...state.hfPendingFooter, image]
+      return { index }
+    },
+    removeHeaderFooterImage: (kind, index) => {
+      const parsed = kind === 'header' ? state.hfParsedHeader : state.hfParsedFooter
+      const pending = kind === 'header' ? state.hfPendingHeader : state.hfPendingFooter
+      if (index >= parsed.length) {
+        const pendingIndex = index - parsed.length
+        if (pendingIndex >= pending.length) return false
+        if (kind === 'header') state.hfPendingHeader = pending.filter((_img, i) => i !== pendingIndex)
+        else state.hfPendingFooter = pending.filter((_img, i) => i !== pendingIndex)
+        return true
+      }
+      if (kind === 'header') state.hfRemoveHeader = [...new Set([...state.hfRemoveHeader, index])]
+      else state.hfRemoveFooter = [...new Set([...state.hfRemoveFooter, index])]
+      return true
+    },
+    addInk: (annotation) => {
+      state.inkAnnotations = [...state.inkAnnotations, annotation]
+    },
+    inkMeasureBlock: () => state.inkMetrics,
+    getCharacterStyleIds: () => [...state.characterStyleIds, ...Object.keys(state.styleUpserts)],
+    addStyleUpsert: (upsert) => {
+      state.styleUpserts = { ...state.styleUpserts, [upsert.styleId]: upsert }
+    },
   }
   return { ctx, state }
 }
@@ -466,7 +534,7 @@ describe('operations registry', () => {
     )
     expect(defs.length).toBeGreaterThanOrEqual(11)
     for (const def of defs) {
-      expect(['table', 'page', 'section', 'notes', 'field', 'format', 'object', 'reference', 'review']).toContain(def.group)
+      expect(['table', 'page', 'section', 'notes', 'field', 'format', 'object', 'reference', 'review', 'headerFooter']).toContain(def.group)
       expect(def.inputSchema.type).toBe('object')
       expect(OPERATIONS_GUIDE).toContain(def.name)
     }
@@ -1221,7 +1289,7 @@ describe('B2 registry + isolation', () => {
       expect(OPERATIONS_GUIDE).toContain(name)
     }
     expect(new Set(defs.map((def) => def.group))).toEqual(
-      new Set(['table', 'page', 'section', 'notes', 'field', 'format', 'object', 'reference', 'review']),
+      new Set(['table', 'page', 'section', 'notes', 'field', 'format', 'object', 'reference', 'review', 'headerFooter']),
     )
   })
 
@@ -1701,15 +1769,16 @@ describe('object ops', () => {
     expect(importedZ.results[0].error).toContain('zOrder on imported')
   })
 
-  it('object.image.unsupported documents the host-bytes limitation as a clear error', async () => {
+  it('object.image.unsupported documents the remaining unsupported capability as a clear error', async () => {
     const editor = createEditor([para('first'), imageBlock()])
     const before = snapshot(editor)
-    for (const feature of ['replace', 'crop', 'removeBackground']) {
-      const outcome = await run(editor, [{ op: 'object.image.unsupported', feature }])
-      expect(outcome.ok).toBe(false)
-      expect(outcome.results[0].error).toContain('unsupported')
-      expect(outcome.results[0].error).toContain('host')
-    }
+    // replace/crop/local cutout are implemented now (A1); only AI segmentation remains unsupported
+    const outcome = await run(editor, [
+      { op: 'object.image.unsupported', feature: 'autoBackgroundRemoval' },
+    ])
+    expect(outcome.ok).toBe(false)
+    expect(outcome.results[0].error).toContain('unsupported')
+    expect(outcome.results[0].error).toContain('object.image.removeBackground')
     expect(snapshot(editor)).toBe(before)
   })
 })
@@ -1741,7 +1810,7 @@ describe('B3 registry + isolation', () => {
     }
     const groups = new Set(defs.map((def) => def.group))
     expect(groups).toEqual(
-      new Set(['table', 'page', 'section', 'notes', 'field', 'format', 'object', 'reference', 'review']),
+      new Set(['table', 'page', 'section', 'notes', 'field', 'format', 'object', 'reference', 'review', 'headerFooter']),
     )
   })
 
@@ -2186,6 +2255,7 @@ describe('B4 registry + isolation', () => {
         'object',
         'reference',
         'review',
+        'headerFooter',
       ]),
     )
   })
@@ -2537,7 +2607,10 @@ describe('object.equation.update', () => {
       { op: 'object.equation.update', blockIndex: inlineBlockIndex, latex: 'y = 3', inlineIndex: 0 },
     ])
     expect(updated.ok).toBe(true)
-    expect(JSON.stringify(editor.getJSON().content![inlineBlockIndex])).toContain('"latex":"y = 3"')
+    const inlineJson = JSON.stringify(editor.getJSON().content![inlineBlockIndex])
+    expect(inlineJson).toContain('"latex":"y = 3"')
+    expect(inlineJson).not.toContain('"latex":"x = 1"')
+    expect((inlineJson.match(/docInlineMath/g) ?? []).length).toBe(1)
   })
 
   it('rejects non-equation blocks, out-of-range inline indexes and bad LaTeX', async () => {
@@ -2608,5 +2681,1135 @@ describe('B5 registry', () => {
     // table look + find/replace parity are extensions of existing ops
     expect(OPERATIONS_GUIDE).toContain('look')
     expect(OPERATIONS_GUIDE).toContain('wholeWord')
+  })
+})
+
+// ── A1: picture replace / crop / cutout, imported shape z-order, equation convert ──
+
+/** jsdom never decodes images or implements canvas: stub both for the A1 ops. */
+class A1FakeImage {
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  naturalWidth = 100
+  naturalHeight = 80
+  width = 100
+  height = 80
+  set src(_value: string) {
+    queueMicrotask(() => this.onload?.())
+  }
+}
+
+function installPictureStubs(): { restore: () => void } {
+  const proto = HTMLCanvasElement.prototype as unknown as Record<string, unknown>
+  const savedContext = proto.getContext
+  const savedToDataUrl = proto.toDataURL
+  const savedImage = globalThis.Image
+  const savedImageData = (globalThis as unknown as { ImageData?: unknown }).ImageData
+  class StubImageData {
+    data: Uint8ClampedArray
+    width: number
+    height: number
+    constructor(data: Uint8ClampedArray, width: number, height: number) {
+      this.data = data
+      this.width = width
+      this.height = height
+    }
+  }
+  ;(globalThis as unknown as { ImageData: unknown }).ImageData = StubImageData
+  proto.getContext = function getContextStub(this: HTMLCanvasElement) {
+    return {
+      canvas: this,
+      drawImage: () => {},
+      getImageData: (_x: number, _y: number, w: number, h: number) => ({
+        data: new Uint8ClampedArray(w * h * 4).fill(255),
+        width: w,
+        height: h,
+      }),
+      putImageData: () => {},
+    }
+  }
+  proto.toDataURL = function toDataUrlStub(this: HTMLCanvasElement, type?: string) {
+    return `data:${type ?? 'image/png'};base64,STUB${this.width}x${this.height}`
+  }
+  globalThis.Image = A1FakeImage as unknown as typeof Image
+  return {
+    restore: () => {
+      proto.getContext = savedContext
+      proto.toDataURL = savedToDataUrl
+      globalThis.Image = savedImage
+      ;(globalThis as unknown as { ImageData?: unknown }).ImageData = savedImageData
+    },
+  }
+}
+
+describe('object.image.replace', () => {
+  it('swaps imported picture bytes in place and keeps the display width', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock({ docxIndex: 3, imageWidthPx: 120 })])
+      const outcome = await run(editor, [
+        { op: 'object.image.replace', blockIndex: 1, base64: 'iVBORw0KGgo=', mime: 'image/png' },
+      ])
+      expect(outcome.ok).toBe(true)
+      const image = editor.getJSON().content![1] as unknown as JsonNode
+      expect(image.attrs).toMatchObject({
+        imageWidthPx: 120,
+        imageHeightPx: 96,
+        imageCrop: null,
+        imageFillRect: null,
+        imageReplace: { base64: 'iVBORw0KGgo=', mime: 'image/png' },
+      })
+      expect(String(image.attrs?.imageDataUrl)).toBe('data:image/png;base64,iVBORw0KGgo=')
+      expect(outcome.results[0].record).toMatchObject({ imported: true, mime: 'image/png' })
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('updates genImage for editor-created pictures and accepts a dataUrl input', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outcome = await run(editor, [
+        {
+          op: 'object.image.replace',
+          blockIndex: 1,
+          dataUrl: 'data:image/jpeg;base64,AAAA',
+        },
+      ])
+      expect(outcome.ok).toBe(true)
+      const image = editor.getJSON().content![1] as unknown as JsonNode
+      expect(image.attrs?.imageReplace).toBeNull()
+      expect(image.attrs?.genImage).toMatchObject({ base64: 'AAAA', mime: 'image/jpeg' })
+      expect(outcome.results[0].record).toMatchObject({ imported: false })
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('validates bytes, target block and dryRun', async () => {
+    const editor = createEditor([para('first'), imageBlock()])
+    const before = snapshot(editor)
+    const badMime = await run(editor, [
+      { op: 'object.image.replace', blockIndex: 1, base64: 'AAAA', mime: 'image/webp' },
+    ])
+    expect(badMime.ok).toBe(false)
+    expect(badMime.results[0].error).toContain('mime must be')
+    const badBase64 = await run(editor, [
+      { op: 'object.image.replace', blockIndex: 1, base64: 'not base64!', mime: 'image/png' },
+    ])
+    expect(badBase64.ok).toBe(false)
+    const notImage = await run(editor, [
+      { op: 'object.image.replace', blockIndex: 0, base64: 'AAAA', mime: 'image/png' },
+    ])
+    expect(notImage.ok).toBe(false)
+    expect(notImage.results[0].error).toContain('not an image block')
+    const dry = await run(
+      editor,
+      [{ op: 'object.image.replace', blockIndex: 1, base64: 'AAAA', mime: 'image/png' }],
+      { dryRun: true },
+    )
+    expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+    expect(snapshot(editor)).toBe(before)
+  })
+})
+
+describe('object.image.crop', () => {
+  it('crops pixels against the natural size and applies the replace path', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outcome = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 1, rect: { x: 10, y: 10, w: 50, h: 40 } },
+      ])
+      expect(outcome.ok).toBe(true)
+      const image = editor.getJSON().content![1] as unknown as JsonNode
+      expect(String(image.attrs?.imageDataUrl)).toContain('STUB50x40')
+      expect(outcome.results[0].record).toMatchObject({
+        widthPx: 50,
+        heightPx: 40,
+        rect: { x: 10, y: 10, w: 50, h: 40 },
+      })
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('rejects out-of-bounds rects and non-image blocks', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outside = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 1, rect: { x: 90, y: 0, w: 50, h: 10 } },
+      ])
+      expect(outside.ok).toBe(false)
+      expect(outside.results[0].error).toContain('outside the image bounds')
+      const zero = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 1, rect: { x: 0, y: 0, w: 0, h: 10 } },
+      ])
+      expect(zero.ok).toBe(false)
+      expect(zero.results[0].error).toContain('positive')
+      const notImage = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 0, rect: { x: 0, y: 0, w: 10, h: 10 } },
+      ])
+      expect(notImage.ok).toBe(false)
+    } finally {
+      stubs.restore()
+    }
+  })
+})
+
+describe('object.image.removeBackground', () => {
+  it('runs the local tolerance cutout and replaces the bytes', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outcome = await run(editor, [
+        { op: 'object.image.removeBackground', blockIndex: 1, tolerance: 30 },
+      ])
+      expect(outcome.ok).toBe(true)
+      const image = editor.getJSON().content![1] as unknown as JsonNode
+      expect(String(image.attrs?.imageDataUrl)).toContain('STUB100x80')
+      const record = outcome.results[0].record as { removedPct: number; tolerance: number }
+      expect(record.tolerance).toBe(30)
+      expect(record.removedPct).toBeGreaterThanOrEqual(0)
+
+      const badTolerance = await run(editor, [
+        { op: 'object.image.removeBackground', blockIndex: 1, tolerance: 101 },
+      ])
+      expect(badTolerance.ok).toBe(false)
+      expect(badTolerance.results[0].error).toContain('tolerance must be')
+
+      const badSample = await run(editor, [
+        { op: 'object.image.removeBackground', blockIndex: 1, sample: 'center' },
+      ])
+      expect(badSample.ok).toBe(false)
+      expect(badSample.results[0].error).toContain('sample must be')
+    } finally {
+      stubs.restore()
+    }
+  })
+})
+
+describe('object.shape.zOrder', () => {
+  const ANCHOR_XML = '<w:p><w:r><w:drawing><wp:anchor distT="0" simplePos="0" relativeHeight="251658240" behindDoc="0">x</wp:anchor></w:drawing></w:r></w:p>'
+
+  it('updates the rank of editor-created shapes', async () => {
+    const editor = createEditor([para('first'), shapeBlock()])
+    const outcome = await run(editor, [
+      { op: 'object.shape.zOrder', blockIndex: 1, order: 'front' },
+    ])
+    expect(outcome.ok).toBe(true)
+    const shape = editor.getJSON().content![1] as unknown as JsonNode
+    expect(shape.attrs).toMatchObject({ imageZOrder: 1, imageWrap: 'front' })
+    expect(shape.attrs?.shapeZOrder).toBeNull()
+  })
+
+  it('records a raw relativeHeight for imported shapes and patches only that attribute', async () => {
+    const editor = createEditor([para('first'), shapeBlock({ docxIndex: 3 })])
+    const { ctx } = makeFakeApp(editor)
+    ctx.getBlocks = () =>
+      [
+        {
+          docxIndex: 3,
+          type: 'passthrough',
+          originalXml: ANCHOR_XML,
+        },
+      ] as unknown as Block[]
+
+    const absolute = await run(
+      editor,
+      [{ op: 'object.shape.zOrder', blockIndex: 1, order: 'absolute', relativeHeight: 251658260 }],
+      { app: ctx },
+    )
+    expect(absolute.ok).toBe(true)
+    expect((editor.getJSON().content![1] as unknown as JsonNode).attrs?.shapeZOrder).toBe(251658260)
+    expect(editor.getJSON().content![1].attrs?.imageZOrder ?? null).toBeNull()
+
+    // save path: the helper patches ONLY relativeHeight in the original anchor XML
+    const { patchShapeRelativeHeight, readShapeRelativeHeight } = await import(
+      '../src/renderer/editor/shape-z-order'
+    )
+    const patched = patchShapeRelativeHeight(ANCHOR_XML, 251658260)
+    expect(readShapeRelativeHeight(patched)).toBe(251658260)
+    expect(patched.replace(/relativeHeight="\d+"/, 'relativeHeight="X"')).toBe(
+      ANCHOR_XML.replace(/relativeHeight="\d+"/, 'relativeHeight="X"'),
+    )
+
+    const front = await run(editor, [{ op: 'object.shape.zOrder', blockIndex: 1, order: 'front' }], {
+      app: ctx,
+    })
+    expect(front.ok).toBe(true)
+    expect((editor.getJSON().content![1] as unknown as JsonNode).attrs?.shapeZOrder).toBe(251658241)
+  })
+
+  it('validates order/relativeHeight/target and requires original XML for imported shapes', async () => {
+    const editor = createEditor([para('first'), shapeBlock({ docxIndex: 3 })])
+    const { ctx } = makeFakeApp(editor)
+    ctx.getBlocks = () =>
+      [{ docxIndex: 3, type: 'passthrough', originalXml: ANCHOR_XML }] as unknown as Block[]
+    const needsApp = await run(editor, [
+      { op: 'object.shape.zOrder', blockIndex: 1, order: 'front' },
+    ])
+    expect(needsApp.ok).toBe(false)
+    expect(needsApp.results[0].error).toContain('app context')
+
+    const noRelative = await run(
+      editor,
+      [{ op: 'object.shape.zOrder', blockIndex: 1, order: 'absolute' }],
+      { app: ctx },
+    )
+    expect(noRelative.ok).toBe(false)
+    expect(noRelative.results[0].error).toContain('needs relativeHeight')
+
+    const badOrder = await run(
+      editor,
+      [{ op: 'object.shape.zOrder', blockIndex: 1, order: 'sideways' }],
+      { app: ctx },
+    )
+    expect(badOrder.ok).toBe(false)
+    expect(badOrder.results[0].error).toContain('order must be one of')
+
+    const notShape = await run(editor, [
+      { op: 'object.shape.zOrder', blockIndex: 0, order: 'front' },
+    ])
+    expect(notShape.ok).toBe(false)
+    expect(notShape.results[0].error).toContain('not a shape/text box block')
+
+    const before = snapshot(editor)
+    const dry = await run(
+      editor,
+      [{ op: 'object.shape.zOrder', blockIndex: 1, order: 'front' }],
+      { app: ctx, dryRun: true },
+    )
+    expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+    expect(snapshot(editor)).toBe(before)
+  })
+})
+
+describe('object.equation.convert', () => {
+  it('converts a block equation into an inline equation in the adjacent paragraph', async () => {
+    const editor = createEditor([para('before')])
+    await run(editor, [{ op: 'object.equation.insert', latex: 'a^2' }])
+    const blocks = editor.getJSON().content! as unknown as JsonNode[]
+    const equationIndex = blocks.findIndex((block) => block.attrs?.formulaDisplay)
+    expect(equationIndex).toBeGreaterThanOrEqual(0)
+    const countBefore = blocks.length
+
+    const outcome = await run(editor, [
+      { op: 'object.equation.convert', blockIndex: equationIndex, to: 'inline' },
+    ])
+    expect(outcome.ok).toBe(true)
+    const after = editor.getJSON().content! as unknown as JsonNode[]
+    expect(after.length).toBe(countBefore - 1)
+    expect(after.some((block) => block.attrs?.formulaDisplay)).toBe(false)
+    expect(JSON.stringify(after)).toContain('docInlineMath')
+  })
+
+  it('converts an inline equation into its own block equation', async () => {
+    const editor = createEditor([para('inline here')])
+    await run(editor, [
+      { op: 'object.equation.insert', latex: 'x = 1', inline: true, afterBlockIndex: 0 },
+    ])
+    const blocks = editor.getJSON().content! as unknown as JsonNode[]
+    const inlineBlockIndex = blocks.findIndex((block) => JSON.stringify(block).includes('docInlineMath'))
+    expect(inlineBlockIndex).toBeGreaterThanOrEqual(0)
+
+    const outcome = await run(editor, [
+      { op: 'object.equation.convert', blockIndex: inlineBlockIndex, to: 'block', inlineIndex: 0 },
+    ])
+    expect(outcome.ok).toBe(true)
+    const after = editor.getJSON().content! as unknown as JsonNode[]
+    expect(after.some((block) => block.attrs?.formulaDisplay)).toBe(true)
+    expect(JSON.stringify(after)).not.toContain('docInlineMath')
+  })
+
+  it('validates the target, direction and inlineIndex', async () => {
+    const editor = createEditor([para('plain')])
+    const notEquation = await run(editor, [
+      { op: 'object.equation.convert', blockIndex: 0, to: 'inline' },
+    ])
+    expect(notEquation.ok).toBe(false)
+    expect(notEquation.results[0].error).toContain('not a block equation')
+
+    const noInline = await run(editor, [
+      { op: 'object.equation.convert', blockIndex: 0, to: 'block', inlineIndex: 0 },
+    ])
+    expect(noInline.ok).toBe(false)
+    expect(noInline.results[0].error).toContain('no inline equation')
+
+    const missingIndex = await run(editor, [
+      { op: 'object.equation.convert', blockIndex: 0, to: 'block' },
+    ])
+    expect(missingIndex.ok).toBe(false)
+    expect(missingIndex.results[0].error).toContain('needs inlineIndex')
+
+    const badDirection = await run(editor, [
+      { op: 'object.equation.convert', blockIndex: 0, to: 'floating' },
+    ])
+    expect(badDirection.ok).toBe(false)
+    expect(badDirection.results[0].error).toContain('to must be')
+  })
+})
+
+describe('A1 registry', () => {
+  it('registers the A1 ops in the guide', async () => {
+    const names = describeOperations().map((def) => def.name)
+    for (const name of [
+      'object.image.replace',
+      'object.image.crop',
+      'object.image.removeBackground',
+      'object.shape.zOrder',
+      'object.equation.convert',
+    ]) {
+      expect(names).toContain(name)
+      expect(OPERATIONS_GUIDE).toContain(name)
+    }
+  })
+})
+
+// ── A3: header/footer embedded images + programmatic ink ─────────────────────
+
+const HEADER_PART_XML =
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+  '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ' +
+  'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+  'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" ' +
+  'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+  'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+  '<w:p><w:r><w:t>Header</w:t></w:r></w:p></w:hdr>'
+
+const HEADER_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/header'
+const HEADER_CONTENT_TYPE =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml'
+
+async function buildDocWithHeader(): Promise<Uint8Array> {
+  return buildDocx({
+    bodyXml: '<w:p><w:r><w:t>body</w:t></w:r></w:p>',
+    sectPrExtra: '<w:headerReference w:type="default" r:id="rIdHeader"/>',
+    extraRels: `<Relationship Id="rIdHeader" Type="${HEADER_REL_TYPE}" Target="header1.xml"/>`,
+    extraParts: [{ path: 'word/header1.xml', xml: HEADER_PART_XML, contentType: HEADER_CONTENT_TYPE }],
+  })
+}
+
+describe('header/footer embedded images (save path)', () => {
+  it('writes media + part rels + drawing XML and reparses the image (A3 engine path)', async () => {
+    const parsed = await parseDocx(await buildDocWithHeader())
+    const saveBlocks = parsed.blocks
+      .filter((block) => !block.hidden && block.docxIndex !== null)
+      .map((block) => ({ kind: 'original' as const, docxIndex: block.docxIndex as number }))
+    const image = {
+      dataUrl: `data:image/png;base64,${TINY_PNG_BASE64}`,
+      widthPx: 10,
+      heightPx: 10,
+      align: 'center' as const,
+    }
+    const saved = await saveDocx(parsed, saveBlocks, { header: { text: '', images: [image] } })
+
+    const zip = await JSZip.loadAsync(saved)
+    const headerXml = await zip.file('word/header1.xml')!.async('string')
+    expect(headerXml).toContain('<w:drawing>')
+    expect(headerXml).toContain('r:embed="')
+    const rels = await zip.file('word/_rels/header1.xml.rels')!.async('string')
+    expect(rels).toMatch(/Type="[^"]*\/image"[^>]*Target="media\/[^"]+"/)
+    const mediaFiles = Object.keys(zip.files).filter((name) => /^word\/media\/[^/]+\.png$/.test(name))
+    expect(mediaFiles.length).toBeGreaterThanOrEqual(1)
+
+    // end-to-end: the saved part parses back as one header image
+    const reparsed = await parseDocx(saved)
+    expect(reparsed.headerImages ?? []).toHaveLength(1)
+    expect(reparsed.headerImages?.[0].widthPx).toBe(10)
+  })
+
+  it('removes an original header image paragraph via removeImages', async () => {
+    const firstParsed = await parseDocx(await buildDocWithHeader())
+    const firstBlocks = firstParsed.blocks
+      .filter((block) => !block.hidden && block.docxIndex !== null)
+      .map((block) => ({ kind: 'original' as const, docxIndex: block.docxIndex as number }))
+    const withImage = await saveDocx(firstParsed, firstBlocks, {
+      header: {
+        text: '',
+        images: [{ dataUrl: `data:image/png;base64,${TINY_PNG_BASE64}`, widthPx: 10, heightPx: 10 }],
+      },
+    })
+    const reparsed = await parseDocx(withImage)
+    expect(reparsed.headerImages ?? []).toHaveLength(1)
+
+    const blocks = reparsed.blocks
+      .filter((block) => !block.hidden && block.docxIndex !== null)
+      .map((block) => ({ kind: 'original' as const, docxIndex: block.docxIndex as number }))
+    const removed = await saveDocx(reparsed, blocks, {
+      header: { text: '', removeImages: [0] },
+    })
+    const after = await parseDocx(removed)
+    expect(after.headerImages ?? []).toHaveLength(0)
+    const headerXml = await (await JSZip.loadAsync(removed)).file('word/header1.xml')!.async('string')
+    expect(headerXml).not.toContain('<w:drawing>')
+  })
+})
+
+describe('headerFooter.insertImage / removeImage', () => {
+  it('appends an HfImage with aspect-preserving dimensions and a dirty flag path', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('body')])
+      const { ctx, state } = makeFakeApp(editor)
+      const outcome = await run(
+        editor,
+        [{ op: 'headerFooter.insertImage', kind: 'header', base64: 'AAAA', mime: 'image/png', widthPx: 200 }],
+        { app: ctx },
+      )
+      expect(outcome.ok).toBe(true)
+      expect(state.hfPendingHeader).toHaveLength(1)
+      expect(state.hfPendingHeader[0]).toMatchObject({ widthPx: 200, heightPx: 160, align: 'left' })
+      expect(outcome.results[0].record).toMatchObject({ kind: 'header', index: 0, floating: false })
+
+      const floating = await run(
+        editor,
+        [
+          {
+            op: 'headerFooter.insertImage',
+            kind: 'footer',
+            dataUrl: 'data:image/png;base64,AAAA',
+            floating: true,
+            behind: true,
+            align: 'right',
+          },
+        ],
+        { app: ctx },
+      )
+      expect(floating.ok).toBe(true)
+      expect(state.hfPendingFooter[0]).toMatchObject({ floating: true, behind: true, posH: 'right' })
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('validates bytes/kind/align, refuses read-only docs and stays inert under dryRun', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('body')])
+      const { ctx, state } = makeFakeApp(editor)
+      const badKind = await run(
+        editor,
+        [{ op: 'headerFooter.insertImage', kind: 'side', base64: 'AAAA', mime: 'image/png' }],
+        { app: ctx },
+      )
+      expect(badKind.ok).toBe(false)
+      expect(badKind.results[0].error).toContain('kind must be')
+      const badMime = await run(
+        editor,
+        [{ op: 'headerFooter.insertImage', kind: 'header', base64: 'AAAA', mime: 'image/webp' }],
+        { app: ctx },
+      )
+      expect(badMime.ok).toBe(false)
+      const badAlign = await run(
+        editor,
+        [
+          {
+            op: 'headerFooter.insertImage',
+            kind: 'header',
+            base64: 'AAAA',
+            mime: 'image/png',
+            align: 'justify',
+          },
+        ],
+        { app: ctx },
+      )
+      expect(badAlign.ok).toBe(false)
+
+      const dry = await run(
+        editor,
+        [{ op: 'headerFooter.insertImage', kind: 'header', base64: 'AAAA', mime: 'image/png' }],
+        { app: ctx, dryRun: true },
+      )
+      expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+      expect(state.hfPendingHeader).toHaveLength(0)
+
+      editor.setEditable(false)
+      const readOnly = await run(
+        editor,
+        [{ op: 'headerFooter.insertImage', kind: 'header', base64: 'AAAA', mime: 'image/png' }],
+        { app: ctx },
+      )
+      expect(readOnly.ok).toBe(false)
+      expect(readOnly.results[0].error).toContain('read-only or protected')
+      editor.setEditable(true)
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('removes pending and parsed header images by documentState index', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('body')])
+      const { ctx, state } = makeFakeApp(editor)
+      await run(
+        editor,
+        [{ op: 'headerFooter.insertImage', kind: 'header', base64: 'AAAA', mime: 'image/png' }],
+        { app: ctx },
+      )
+      const removedPending = await run(
+        editor,
+        [{ op: 'headerFooter.removeImage', kind: 'header', index: 0 }],
+        { app: ctx },
+      )
+      expect(removedPending.ok).toBe(true)
+      expect(state.hfPendingHeader).toHaveLength(0)
+
+      // simulate a parsed image coming from the document
+      state.hfParsedHeader = [
+        { dataUrl: 'data:image/png;base64,AAAA', widthPx: 10, heightPx: 10 },
+      ]
+      const removedParsed = await run(
+        editor,
+        [{ op: 'headerFooter.removeImage', kind: 'header', index: 0 }],
+        { app: ctx },
+      )
+      expect(removedParsed.ok).toBe(true)
+      expect(state.hfRemoveHeader).toEqual([0])
+
+      const outOfRange = await run(
+        editor,
+        [{ op: 'headerFooter.removeImage', kind: 'header', index: 5 }],
+        { app: ctx },
+      )
+      expect(outOfRange.ok).toBe(false)
+      expect(outOfRange.results[0].error).toContain('out of range')
+    } finally {
+      stubs.restore()
+    }
+  })
+})
+
+describe('object.ink.add', () => {
+  const anchoredParagraph = (): JsonNode => ({
+    type: 'docParagraph',
+    attrs: { docxIndex: 5 },
+    content: [{ type: 'text', text: 'anchor' }],
+  })
+
+  it('appends an InkAnnotation with page-relative normalized points', async () => {
+    const editor = createEditor([anchoredParagraph()])
+    const { ctx, state } = makeFakeApp(editor)
+    const outcome = await run(
+      editor,
+      [
+        {
+          op: 'object.ink.add',
+          strokes: [
+            { color: 'FF0000', widthPx: 3, points: [{ x: 0, y: 0 }, { x: 0.5, y: 0.25 }] },
+          ],
+        },
+      ],
+      { app: ctx },
+    )
+    expect(outcome.ok).toBe(true)
+    expect(state.inkAnnotations).toHaveLength(1)
+    const annotation = state.inkAnnotations[0]
+    expect(annotation.anchorIndex).toBe(5)
+    expect(annotation.stroke).toMatchObject({ tool: 'pen', color: 'FF0000', width: 3 })
+    // fake section: A4 page 11906×16838 twips, 1440 margins → content 601.73×930.53 px
+    const contentW = (11906 - 2880) / 15
+    const contentH = (16838 - 2880) / 15
+    expect(annotation.stroke!.points[1].x).toBeCloseTo(0.5 * contentW, 1)
+    expect(annotation.stroke!.points[1].y).toBeCloseTo(0.25 * contentH, 1)
+    expect(outcome.results[0].record).toMatchObject({ anchorIndex: 5, strokes: 1 })
+  })
+
+  it('validates strokes/points/colors, refuses read-only docs and stays inert under dryRun', async () => {
+    const editor = createEditor([anchoredParagraph()])
+    const { ctx, state } = makeFakeApp(editor)
+    const tooFewPoints = await run(
+      editor,
+      [{ op: 'object.ink.add', strokes: [{ points: [{ x: 0, y: 0 }] }] }],
+      { app: ctx },
+    )
+    expect(tooFewPoints.ok).toBe(false)
+    expect(tooFewPoints.results[0].error).toContain('at least 2 points')
+
+    const outOfRange = await run(
+      editor,
+      [{ op: 'object.ink.add', strokes: [{ points: [{ x: 1.5, y: 0 }, { x: 0, y: 0 }] }] }],
+      { app: ctx },
+    )
+    expect(outOfRange.ok).toBe(false)
+    expect(outOfRange.results[0].error).toContain('normalized 0..1')
+
+    const badColor = await run(
+      editor,
+      [{ op: 'object.ink.add', strokes: [{ color: 'red', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }] }],
+      { app: ctx },
+    )
+    expect(badColor.ok).toBe(false)
+    expect(badColor.results[0].error).toContain('6-digit hex')
+
+    const tooMany = await run(
+      editor,
+      [
+        {
+          op: 'object.ink.add',
+          strokes: Array.from({ length: 51 }, () => ({ points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] })),
+        },
+      ],
+      { app: ctx },
+    )
+    expect(tooMany.ok).toBe(false)
+    expect(tooMany.results[0].error).toContain('at most 50 strokes')
+
+    const dry = await run(
+      editor,
+      [{ op: 'object.ink.add', strokes: [{ points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }] }],
+      { app: ctx, dryRun: true },
+    )
+    expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+    expect(state.inkAnnotations).toHaveLength(0)
+
+    editor.setEditable(false)
+    const readOnly = await run(
+      editor,
+      [{ op: 'object.ink.add', strokes: [{ points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }] }],
+      { app: ctx },
+    )
+    expect(readOnly.ok).toBe(false)
+    expect(readOnly.results[0].error).toContain('read-only or protected')
+    editor.setEditable(true)
+  })
+
+  it('fails when the anchor paragraph is not a saved block', async () => {
+    const editor = createEditor([para('unsaved')])
+    const { ctx } = makeFakeApp(editor)
+    const outcome = await run(
+      editor,
+      [{ op: 'object.ink.add', strokes: [{ points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }] }],
+      { app: ctx },
+    )
+    expect(outcome.ok).toBe(false)
+    expect(outcome.results[0].error).toContain('not a saved block')
+  })
+})
+
+describe('A3 registry', () => {
+  it('registers the A3 ops in the guide', async () => {
+    const names = describeOperations().map((def) => def.name)
+    for (const name of ['headerFooter.insertImage', 'headerFooter.removeImage', 'object.ink.add']) {
+      expect(names).toContain(name)
+      expect(OPERATIONS_GUIDE).toContain(name)
+    }
+  })
+})
+
+describe('format.createCharacterStyle', () => {
+  it('queues a character style upsert for the next save', async () => {
+    const editor = createEditor([para('body')])
+    const { ctx, state } = makeFakeApp(editor)
+    const outcome = await run(
+      editor,
+      [
+        {
+          op: 'format.createCharacterStyle',
+          name: 'Alert',
+          bold: true,
+          color: '#FF0000',
+          sizeHalfPoints: 24,
+        },
+      ],
+      { app: ctx },
+    )
+    expect(outcome.ok).toBe(true)
+    expect(outcome.results[0].record).toMatchObject({ styleId: 'Alert', name: 'Alert' })
+    expect(state.styleUpserts.Alert).toMatchObject({
+      styleId: 'Alert',
+      type: 'character',
+      name: 'Alert',
+      rPr: { bold: true, color: 'FF0000', sizeHalfPoints: 24 },
+    })
+  })
+
+  it('auto-numbers colliding ids and rejects an explicit duplicate id', async () => {
+    const editor = createEditor([para('body')])
+    const { ctx, state } = makeFakeApp(editor)
+    state.characterStyleIds = ['Alert']
+    const auto = await run(editor, [{ op: 'format.createCharacterStyle', name: 'Alert', italic: true }], {
+      app: ctx,
+    })
+    expect(auto.ok).toBe(true)
+    expect(auto.results[0].record).toMatchObject({ styleId: 'Alert2' })
+
+    const duplicate = await run(
+      editor,
+      [{ op: 'format.createCharacterStyle', name: 'Other', styleId: 'Alert' }],
+      { app: ctx },
+    )
+    expect(duplicate.ok).toBe(false)
+    expect(duplicate.results[0].error).toContain('already exists')
+  })
+
+  it('validates input, stays inert under dryRun and refuses read-only docs', async () => {
+    const editor = createEditor([para('body')])
+    const { ctx, state } = makeFakeApp(editor)
+    const missingName = await run(editor, [{ op: 'format.createCharacterStyle', name: '  ' }], { app: ctx })
+    expect(missingName.ok).toBe(false)
+    expect(missingName.results[0].error).toContain('name is required')
+
+    const badColor = await run(
+      editor,
+      [{ op: 'format.createCharacterStyle', name: 'Bad', color: 'red' }],
+      { app: ctx },
+    )
+    expect(badColor.ok).toBe(false)
+    expect(badColor.results[0].error).toContain('6-digit hex')
+
+    const badSize = await run(
+      editor,
+      [{ op: 'format.createCharacterStyle', name: 'Bad', sizeHalfPoints: 1 }],
+      { app: ctx },
+    )
+    expect(badSize.ok).toBe(false)
+
+    const dry = await run(editor, [{ op: 'format.createCharacterStyle', name: 'Dry', bold: true }], {
+      app: ctx,
+      dryRun: true,
+    })
+    expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+    expect(Object.keys(state.styleUpserts)).toHaveLength(0)
+
+    editor.setEditable(false)
+    const readOnly = await run(editor, [{ op: 'format.createCharacterStyle', name: 'RO' }], { app: ctx })
+    expect(readOnly.ok).toBe(false)
+    expect(readOnly.results[0].error).toContain('read-only or protected')
+    editor.setEditable(true)
+  })
+
+  it('writes the definition into styles.xml on save and reparses it (engine path)', async () => {
+    const parsed = await parseDocx(
+      await buildDocx({ bodyXml: '<w:p><w:r><w:t>body</w:t></w:r></w:p>' }),
+    )
+    const saveBlocks = parsed.blocks
+      .filter((block) => !block.hidden && block.docxIndex !== null)
+      .map((block) => ({ kind: 'original' as const, docxIndex: block.docxIndex as number }))
+    const saved = await saveDocx(parsed, saveBlocks, {
+      styleUpserts: [
+        {
+          styleId: 'AgentAlert',
+          type: 'character',
+          name: 'Alert',
+          rPr: { bold: true, color: 'FF0000', sizeHalfPoints: 24 },
+        },
+      ],
+    })
+    const stylesXml = await (await JSZip.loadAsync(saved)).file('word/styles.xml')!.async('string')
+    expect(stylesXml).toContain('w:styleId="AgentAlert"')
+    expect(stylesXml).toContain('<w:b/>')
+    const reparsed = await parseDocx(saved)
+    expect(reparsed.styles.get('AgentAlert')).toMatchObject({ name: 'Alert', type: 'character' })
+  })
+})
+
+describe('A3 extended registry', () => {
+  it('registers format.createCharacterStyle', async () => {
+    const names = describeOperations().map((def) => def.name)
+    expect(names).toContain('format.createCharacterStyle')
+    expect(OPERATIONS_GUIDE).toContain('format.createCharacterStyle')
+  })
+})
+
+// ── A4: natural-language ergonomics ──────────────────────────────────────────
+
+describe('object.image.crop unit:"fraction" (A4)', () => {
+  it('converts 0..1 fractions of the NATURAL size to a pixel crop', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outcome = await run(
+        editor,
+        [
+          {
+            op: 'object.image.crop',
+            blockIndex: 1,
+            unit: 'fraction',
+            rect: { x: 0.25, y: 0, w: 0.5, h: 0.5 },
+          },
+        ],
+        {},
+      )
+      expect(outcome.ok).toBe(true)
+      const image = editor.getJSON().content![1] as unknown as JsonNode
+      expect(String(image.attrs?.imageDataUrl)).toContain('STUB50x40')
+      expect(outcome.results[0].record).toMatchObject({
+        unit: 'fraction',
+        widthPx: 50,
+        heightPx: 40,
+        rect: { x: 25, y: 0, w: 50, h: 40 },
+      })
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('validates fraction bounds/unit and keeps px as the default', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outside = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 1, unit: 'fraction', rect: { x: 0.6, y: 0, w: 0.5, h: 0.5 } },
+      ])
+      expect(outside.ok).toBe(false)
+      expect(outside.results[0].error).toContain('x+w ≤ 1')
+      const negative = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 1, unit: 'fraction', rect: { x: -0.1, y: 0, w: 0.5, h: 0.5 } },
+      ])
+      expect(negative.ok).toBe(false)
+      const badUnit = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 1, unit: 'percent', rect: { x: 1, y: 1, w: 2, h: 2 } },
+      ])
+      expect(badUnit.ok).toBe(false)
+      expect(badUnit.results[0].error).toContain('unit must be')
+      const pxDefault = await run(editor, [
+        { op: 'object.image.crop', blockIndex: 1, rect: { x: 10, y: 10, w: 20, h: 20 } },
+      ])
+      expect(pxDefault.ok).toBe(true)
+      expect(pxDefault.results[0].record).toMatchObject({ unit: 'px' })
+    } finally {
+      stubs.restore()
+    }
+  })
+})
+
+describe('object.ink.mark (A4)', () => {
+  const anchoredParagraph = (): JsonNode => ({
+    type: 'docParagraph',
+    attrs: { docxIndex: 5 },
+    content: [{ type: 'text', text: 'last paragraph' }],
+  })
+  const metrics = {
+    anchorIndex: 5,
+    anchor: { x: 100, y: 200 },
+    rect: { x: 100, y: 200, w: 400, h: 20 },
+    columnWidthPx: 400,
+  }
+
+  it('computes bottom/top/strike strokes from the block rect', async () => {
+    const editor = createEditor([anchoredParagraph()])
+    const { ctx, state } = makeFakeApp(editor)
+    state.inkMetrics = metrics
+
+    const bottom = await run(
+      editor,
+      [
+        {
+          op: 'object.ink.mark',
+          blockIndex: 0,
+          position: 'bottom',
+          color: 'FF0000',
+          widthPx: 3,
+          from: 0.1,
+          to: 0.9,
+        },
+      ],
+      { app: ctx },
+    )
+    expect(bottom.ok).toBe(true)
+    expect(state.inkAnnotations).toHaveLength(1)
+    const stroke = state.inkAnnotations[0].stroke!
+    expect(state.inkAnnotations[0].anchorIndex).toBe(5)
+    expect(stroke).toMatchObject({ tool: 'pen', color: 'FF0000', width: 3 })
+    // anchor == block here: x = 10%..90% of the 400px column; y = below the 20px block
+    expect(stroke.points[0].x).toBeCloseTo(40, 1)
+    expect(stroke.points[1].x).toBeCloseTo(360, 1)
+    expect(stroke.points[0].y).toBeCloseTo(22, 1)
+
+    const strike = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'strike' }],
+      { app: ctx },
+    )
+    expect(strike.ok).toBe(true)
+    expect(state.inkAnnotations[1].stroke!.points[0].y).toBeCloseTo(10, 1)
+
+    const top = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'top' }],
+      { app: ctx },
+    )
+    expect(top.ok).toBe(true)
+    expect(state.inkAnnotations[2].stroke!.points[0].y).toBeCloseTo(-2, 1)
+    // default span 0.02..0.98
+    expect(state.inkAnnotations[2].stroke!.points[0].x).toBeCloseTo(8, 1)
+    expect(state.inkAnnotations[2].stroke!.points[1].x).toBeCloseTo(392, 1)
+  })
+
+  it('validates position/span/color/width, metrics and read-only, and is inert under dryRun', async () => {
+    const editor = createEditor([anchoredParagraph()])
+    const { ctx, state } = makeFakeApp(editor)
+
+    const noMetrics = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'bottom' }],
+      { app: ctx },
+    )
+    expect(noMetrics.ok).toBe(false)
+    expect(noMetrics.results[0].error).toContain('no rendered position')
+
+    state.inkMetrics = metrics
+    const badPosition = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'left' }],
+      { app: ctx },
+    )
+    expect(badPosition.ok).toBe(false)
+    expect(badPosition.results[0].error).toContain('position must be')
+    const badSpan = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'bottom', from: 0.8, to: 0.2 }],
+      { app: ctx },
+    )
+    expect(badSpan.ok).toBe(false)
+    expect(badSpan.results[0].error).toContain('from must be less than to')
+    const badColor = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'bottom', color: 'red' }],
+      { app: ctx },
+    )
+    expect(badColor.ok).toBe(false)
+    const badWidth = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'bottom', widthPx: 20 }],
+      { app: ctx },
+    )
+    expect(badWidth.ok).toBe(false)
+    expect(badWidth.results[0].error).toContain('widthPx must be 1..12')
+    const badBlock = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 9, position: 'bottom' }],
+      { app: ctx },
+    )
+    expect(badBlock.ok).toBe(false)
+
+    const dry = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'bottom' }],
+      { app: ctx, dryRun: true },
+    )
+    expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+    expect(state.inkAnnotations).toHaveLength(0)
+
+    editor.setEditable(false)
+    const readOnly = await run(
+      editor,
+      [{ op: 'object.ink.mark', blockIndex: 0, position: 'bottom' }],
+      { app: ctx },
+    )
+    expect(readOnly.ok).toBe(false)
+    expect(readOnly.results[0].error).toContain('read-only or protected')
+    editor.setEditable(true)
+  })
+})
+
+describe('headerFooter.replaceImage (A4)', () => {
+  it('replaces the only image by default and inserts when the part has none', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('body')])
+      const { ctx, state } = makeFakeApp(editor)
+      state.hfParsedHeader = [
+        { dataUrl: 'data:image/png;base64,AAAA', widthPx: 10, heightPx: 10, align: 'left' },
+      ]
+      const replaced = await run(
+        editor,
+        [
+          {
+            op: 'headerFooter.replaceImage',
+            kind: 'header',
+            base64: 'BBBB',
+            mime: 'image/png',
+            widthPx: 200,
+          },
+        ],
+        { app: ctx },
+      )
+      expect(replaced.ok).toBe(true)
+      expect(state.hfRemoveHeader).toEqual([0])
+      expect(state.hfPendingHeader).toHaveLength(1)
+      expect(state.hfPendingHeader[0]).toMatchObject({ widthPx: 200, heightPx: 160 })
+      expect(replaced.results[0].record).toMatchObject({ kind: 'header', replaced: 0 })
+
+      const inserted = await run(
+        editor,
+        [{ op: 'headerFooter.replaceImage', kind: 'footer', base64: 'CCCC', mime: 'image/png' }],
+        { app: ctx },
+      )
+      expect(inserted.ok).toBe(true)
+      expect(state.hfPendingFooter).toHaveLength(1)
+      expect(state.hfRemoveFooter).toEqual([])
+      expect(inserted.results[0].record).toMatchObject({ replaced: null })
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('requires an index when several images exist and fails without mutating', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('body')])
+      const { ctx, state } = makeFakeApp(editor)
+      state.hfParsedHeader = [
+        { dataUrl: 'data:image/png;base64,AAAA', widthPx: 10, heightPx: 10 },
+        { dataUrl: 'data:image/png;base64,BBBB', widthPx: 10, heightPx: 10 },
+      ]
+      const ambiguous = await run(
+        editor,
+        [{ op: 'headerFooter.replaceImage', kind: 'header', base64: 'CCCC', mime: 'image/png' }],
+        { app: ctx },
+      )
+      expect(ambiguous.ok).toBe(false)
+      expect(ambiguous.results[0].error).toContain('pass index')
+      expect(state.hfPendingHeader).toHaveLength(0)
+      expect(state.hfRemoveHeader).toEqual([])
+
+      const badIndex = await run(
+        editor,
+        [{ op: 'headerFooter.replaceImage', kind: 'header', index: 5, base64: 'CCCC', mime: 'image/png' }],
+        { app: ctx },
+      )
+      expect(badIndex.ok).toBe(false)
+      expect(badIndex.results[0].error).toContain('out of range')
+      expect(state.hfPendingHeader).toHaveLength(0)
+
+      const badSource = await run(
+        editor,
+        [{ op: 'headerFooter.replaceImage', kind: 'header', index: 0, base64: 'AAAA', mime: 'image/webp' }],
+        { app: ctx },
+      )
+      expect(badSource.ok).toBe(false)
+      expect(state.hfPendingHeader).toHaveLength(0)
+      expect(state.hfRemoveHeader).toEqual([])
+
+      const dry = await run(
+        editor,
+        [{ op: 'headerFooter.replaceImage', kind: 'header', index: 1, base64: 'CCCC', mime: 'image/png' }],
+        { app: ctx, dryRun: true },
+      )
+      expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+      expect(state.hfPendingHeader).toHaveLength(0)
+    } finally {
+      stubs.restore()
+    }
+  })
+})
+
+describe('A4 guide text', () => {
+  it('explains display vs natural size, fraction crops, ink.mark and replaceImage', async () => {
+    expect(OPERATIONS_GUIDE).toContain('SIZES:')
+    expect(OPERATIONS_GUIDE).toContain('sizeBasis:"display"')
+    expect(OPERATIONS_GUIDE).toContain('unit:"fraction"')
+    expect(OPERATIONS_GUIDE).toContain('object.ink.mark')
+    expect(OPERATIONS_GUIDE).toContain('headerFooter.replaceImage')
+    const defs = describeOperations()
+    const crop = defs.find((def) => def.name === 'object.image.crop')!
+    expect(crop.description).toContain('unit:"fraction"')
+    const mark = defs.find((def) => def.name === 'object.ink.mark')!
+    expect(mark.description).toContain('text-column width')
   })
 })

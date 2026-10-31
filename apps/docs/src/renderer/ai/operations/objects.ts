@@ -1,7 +1,21 @@
 import type { Editor } from '@tiptap/core'
+import type { Node as PmNode } from '@tiptap/pm/model'
 import { WORDART_PRESETS, type WordArtPreset } from '@genoffice/ui'
 import { latexToOmml, type TextboxDisplay } from '@genoffice/docx-engine'
 import { equationBlockJson, inlineEquationNodeJson } from '../../editor/equation'
+import {
+  RELATIVE_HEIGHT_BASE,
+  readShapeRelativeHeight,
+  relativeHeightForRank,
+} from '../../editor/shape-z-order'
+import {
+  applyPictureBytesToImageBlock,
+  cropImageDataUrl,
+  imageBlockTargetAt,
+  parseImagePayload,
+  pictureNaturalSize,
+  removeImageBackgroundDataUrl,
+} from '../../editor/picture-ops'
 import {
   insertTextboxAt,
   insertWordArtAt,
@@ -615,9 +629,10 @@ function equationUpdateOp(input: Record<string, unknown>, ctx: OperationContext)
 
   if (inlineIndex !== null) {
     const inlineMath: Array<{ pos: number; size: number }> = []
+    // descendants positions are relative to the block CONTENT start (blockPos + 1)
     node.descendants((child, offset) => {
       if (child.type.name === 'docInlineMath') {
-        inlineMath.push({ pos: blockPos + offset, size: child.nodeSize })
+        inlineMath.push({ pos: blockPos + 1 + offset, size: child.nodeSize })
       }
     })
     if (inlineMath.length === 0) {
@@ -665,7 +680,406 @@ function equationUpdateOp(input: Record<string, unknown>, ctx: OperationContext)
   })
 }
 
-const UNSUPPORTED_IMAGE_FEATURES = ['replace', 'crop', 'removeBackground'] as const
+// ── A1: picture replace / crop / local background removal ──
+
+/** Current in-editor bytes of an image block (parse populates imageDataUrl). */
+function currentImageDataUrl(ctx: OperationContext, blockIndex: number): string | { error: string } {
+  const target = imageBlockTargetAt(ctx.editor.state.doc, blockIndex)
+  if ('error' in target) return target
+  const dataUrl = target.node.attrs?.imageDataUrl
+  if (typeof dataUrl !== 'string' || !dataUrl) {
+    return { error: 'the image bytes are not available in the editor (reopen the document first)' }
+  }
+  return dataUrl
+}
+
+function imageReplaceOp(
+  input: Record<string, unknown>,
+  ctx: OperationContext,
+): Promise<OperationOutcome> | OperationOutcome {
+  const blockIndex = checkBlockIndex(ctx.editor, input.blockIndex)
+  if (typeof blockIndex === 'string') return failure(blockIndex)
+  const target = imageBlockTargetAt(ctx.editor.state.doc, blockIndex)
+  if ('error' in target) return failure(target.error)
+  const parsed = parseImagePayload({
+    dataUrl: typeof input.dataUrl === 'string' ? input.dataUrl : undefined,
+    base64: typeof input.base64 === 'string' ? input.base64 : undefined,
+    mime: typeof input.mime === 'string' ? input.mime : undefined,
+  })
+  if (!parsed.ok) return failure(parsed.error)
+  if (ctx.dryRun) {
+    return planned(
+      `would replace the picture bytes of block ${blockIndex} (${parsed.mime})`
+        + (target.imported ? ' in place (imported image, drawing XML preserved)' : ' (editor-created image)'),
+      { blockIndex, mime: parsed.mime, imported: target.imported },
+    )
+  }
+  return applyPictureBytesToImageBlock(ctx.editor, blockIndex, parsed.dataUrl).then((result) =>
+    result.ok
+      ? success(
+          `Replaced the picture in block ${blockIndex} (${parsed.mime}`
+            + `${result.imported ? ', bytes swapped in place' : ', pending new image'}); `
+            + `display size ${result.widthPx}×${result.heightPx}px.`,
+          'replace picture',
+          {
+            blockIndex,
+            mime: parsed.mime,
+            imported: result.imported === true,
+            widthPx: result.widthPx,
+            heightPx: result.heightPx,
+          },
+        )
+      : failure(result.error ?? 'picture replace failed'),
+  )
+}
+
+function imageCropOp(
+  input: Record<string, unknown>,
+  ctx: OperationContext,
+): Promise<OperationOutcome> | OperationOutcome {
+  const blockIndex = checkBlockIndex(ctx.editor, input.blockIndex)
+  if (typeof blockIndex === 'string') return failure(blockIndex)
+  const target = imageBlockTargetAt(ctx.editor.state.doc, blockIndex)
+  if ('error' in target) return failure(target.error)
+  if (!input.rect || typeof input.rect !== 'object') {
+    return failure('rect must be { x, y, w, h } — natural image pixels, or 0..1 fractions with unit:"fraction"')
+  }
+  const unit = input.unit === undefined ? 'px' : String(input.unit)
+  if (unit !== 'px' && unit !== 'fraction') {
+    return failure('unit must be "px" (default) or "fraction" (0..1 of the image natural size)')
+  }
+  const dataUrl = currentImageDataUrl(ctx, blockIndex)
+  if (typeof dataUrl === 'object') return failure(dataUrl.error)
+  return (async () => {
+    const natural = await pictureNaturalSize(dataUrl)
+    if (!natural) return failure('the current picture could not be decoded')
+    let pxRect: Record<string, unknown> = input.rect as Record<string, unknown>
+    if (unit === 'fraction') {
+      const raw = input.rect as Record<string, unknown>
+      const fractions = ['x', 'y', 'w', 'h'].map((key) => raw[key])
+      if (fractions.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
+        return failure('fraction rect.x/y/w/h must be finite numbers 0..1')
+      }
+      const [fx, fy, fw, fh] = fractions as number[]
+      if (fx < 0 || fy < 0 || fw <= 0 || fh <= 0 || fx + fw > 1 + 1e-9 || fy + fh > 1 + 1e-9) {
+        return failure('fraction rect must satisfy 0 ≤ x,y and x+w ≤ 1, y+h ≤ 1 with positive w/h')
+      }
+      pxRect = {
+        x: Math.round(fx * natural.width),
+        y: Math.round(fy * natural.height),
+        w: Math.max(1, Math.round(fw * natural.width)),
+        h: Math.max(1, Math.round(fh * natural.height)),
+      }
+    }
+    const cropped = await cropImageDataUrl(dataUrl, pxRect)
+    if (!cropped.ok || !cropped.dataUrl) return failure(cropped.error ?? 'crop failed')
+    if (ctx.dryRun) {
+      return planned(
+        `would crop block ${blockIndex} to ${cropped.rect?.w}×${cropped.rect?.h}px at (${cropped.rect?.x}, ${cropped.rect?.y}) `
+          + `of the ${natural.width}×${natural.height}px image (unit: ${unit})`,
+        { blockIndex, unit, widthPx: cropped.widthPx, heightPx: cropped.heightPx },
+      )
+    }
+    const applied = await applyPictureBytesToImageBlock(ctx.editor, blockIndex, cropped.dataUrl)
+    if (!applied.ok) return failure(applied.error ?? 'crop apply failed')
+    return success(
+      `Cropped the picture in block ${blockIndex} to ${cropped.rect?.w}×${cropped.rect?.h}px; `
+        + `display size ${applied.widthPx}×${applied.heightPx}px.`,
+      'crop picture',
+      {
+        blockIndex,
+        unit,
+        widthPx: cropped.widthPx,
+        heightPx: cropped.heightPx,
+        rect: cropped.rect,
+      },
+    )
+  })()
+}
+
+function imageRemoveBackgroundOp(
+  input: Record<string, unknown>,
+  ctx: OperationContext,
+): Promise<OperationOutcome> | OperationOutcome {
+  const blockIndex = checkBlockIndex(ctx.editor, input.blockIndex)
+  if (typeof blockIndex === 'string') return failure(blockIndex)
+  const target = imageBlockTargetAt(ctx.editor.state.doc, blockIndex)
+  if ('error' in target) return failure(target.error)
+  let tolerance = 25
+  if (input.tolerance !== undefined) {
+    const parsed = intOf(input.tolerance)
+    if (parsed === null || parsed < 0 || parsed > 100) {
+      return failure('tolerance must be an integer 0..100')
+    }
+    tolerance = parsed
+  }
+  if (input.sample !== undefined && String(input.sample) !== 'corners') {
+    return failure('sample must be "corners" (the background colors are sampled from the image border ring)')
+  }
+  const dataUrl = currentImageDataUrl(ctx, blockIndex)
+  if (typeof dataUrl === 'object') return failure(dataUrl.error)
+  if (ctx.dryRun) {
+    return planned(
+      `would remove the background of block ${blockIndex} with tolerance ${tolerance} (local cutout)`,
+      { blockIndex, tolerance },
+    )
+  }
+  return (async () => {
+    const result = await removeImageBackgroundDataUrl(dataUrl, tolerance)
+    if (!result.ok || !result.dataUrl) return failure(result.error ?? 'background removal failed')
+    const applied = await applyPictureBytesToImageBlock(ctx.editor, blockIndex, result.dataUrl)
+    if (!applied.ok) return failure(applied.error ?? 'background-removed picture apply failed')
+    return success(
+      `Removed the background of block ${blockIndex} (${result.removedPct ?? 0}% of pixels cleared, `
+        + `tolerance ${tolerance}); display size ${applied.widthPx}×${applied.heightPx}px.`,
+      'remove background',
+      {
+        blockIndex,
+        tolerance,
+        removedPct: result.removedPct ?? 0,
+        widthPx: applied.widthPx,
+        heightPx: applied.heightPx,
+      },
+    )
+  })()
+}
+
+// ── A1: shape stacking order (imported shapes patch their original anchor) ──
+
+const SHAPE_Z_ORDERS = ['front', 'back', 'forward', 'backward', 'absolute'] as const
+const MAX_RELATIVE_HEIGHT = 4294967295
+
+function floatingRanks(ctx: OperationContext): { min: number; max: number } {
+  const app = ctx.app
+  const blocks = app?.getBlocks() ?? []
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  ctx.editor.state.doc.forEach((node) => {
+    if (node.type.name !== 'docProtected') return
+    const boxes = node.attrs?.textboxes as TextboxDisplay[] | null
+    if (!boxes || boxes.length === 0) return
+    const docxIndex = node.attrs?.docxIndex as number | null | undefined
+    let rank: number | null = null
+    if (docxIndex !== null && docxIndex !== undefined) {
+      const original = blocks.find((block) => block.docxIndex === docxIndex)
+      if (original?.originalXml) {
+        const raw = readShapeRelativeHeight(original.originalXml)
+        if (raw !== null) rank = raw - RELATIVE_HEIGHT_BASE
+      }
+    } else if (node.attrs?.shapeZOrder != null) {
+      rank = Number(node.attrs.shapeZOrder) - RELATIVE_HEIGHT_BASE
+    } else {
+      rank = Number(node.attrs?.imageZOrder ?? 0)
+    }
+    if (rank === null || !Number.isFinite(rank)) return
+    min = Math.min(min, rank)
+    max = Math.max(max, rank)
+  })
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 0 }
+  return { min, max }
+}
+
+function shapeZOrderOp(
+  input: Record<string, unknown>,
+  ctx: OperationContext,
+): OperationOutcome {
+  const blockIndex = checkBlockIndex(ctx.editor, input.blockIndex)
+  if (typeof blockIndex === 'string') return failure(blockIndex)
+  const doc = ctx.editor.state.doc
+  const node = doc.child(blockIndex)
+  const boxes = node.attrs?.textboxes as TextboxDisplay[] | null
+  if (node.type.name !== 'docProtected' || !Array.isArray(boxes) || boxes.length === 0) {
+    return failure(`block ${blockIndex} is not a shape/text box block`)
+  }
+  const order = String(input.order ?? '')
+  if (!(SHAPE_Z_ORDERS as readonly string[]).includes(order)) {
+    return failure(`order must be one of ${SHAPE_Z_ORDERS.join('/')}`)
+  }
+  const imported = node.attrs?.docxIndex !== null && node.attrs?.docxIndex !== undefined
+  const app = ctx.app
+  // validate the absolute target first — it needs no current anchor lookup
+  let absoluteRaw: number | null = null
+  if (order === 'absolute') {
+    if (input.relativeHeight === undefined) {
+      return failure('order "absolute" needs relativeHeight (the raw wp:anchor relativeHeight value)')
+    }
+    const parsed = intOf(input.relativeHeight)
+    if (parsed === null || parsed < 0 || parsed > MAX_RELATIVE_HEIGHT) {
+      return failure(`relativeHeight must be an integer 0..${MAX_RELATIVE_HEIGHT}`)
+    }
+    absoluteRaw = parsed
+  }
+  let currentRaw = 0
+  if (imported) {
+    if (!app) return failure('object.shape.zOrder on imported shapes needs the app context (original XML)')
+    const docxIndex = Number(node.attrs.docxIndex)
+    const original = app.getBlocks().find((block) => block.docxIndex === docxIndex)
+    if (!original?.originalXml) {
+      return failure('the imported shape has no original anchor XML; z-order cannot be patched')
+    }
+    const raw = readShapeRelativeHeight(original.originalXml)
+    if (raw === null) {
+      return failure('the imported shape has no wp:anchor relativeHeight (inline or VML shape); z-order is unsupported')
+    }
+    currentRaw = raw
+  } else {
+    currentRaw = relativeHeightForRank(Number(node.attrs?.imageZOrder ?? 0))
+  }
+  const ranks = floatingRanks(ctx)
+  let targetRaw: number
+  if (absoluteRaw !== null) {
+    targetRaw = absoluteRaw
+  } else if (order === 'front') {
+    targetRaw = relativeHeightForRank(ranks.max + 1)
+  } else if (order === 'back') {
+    targetRaw = Math.max(0, relativeHeightForRank(ranks.min - 1))
+  } else if (order === 'forward') {
+    targetRaw = Math.min(MAX_RELATIVE_HEIGHT, currentRaw + 1)
+  } else {
+    targetRaw = Math.max(0, currentRaw - 1)
+  }
+  const where = `${order}${order === 'absolute' ? ` (relativeHeight ${targetRaw})` : ''}`
+  if (ctx.dryRun) {
+    return planned(`would move shape block ${blockIndex} to ${where}`, {
+      blockIndex,
+      imported,
+      relativeHeight: targetRaw,
+    })
+  }
+  const patch: Record<string, unknown> = imported
+    ? // imported anchors keep their bytes; the save path patches relativeHeight only
+      { shapeZOrder: targetRaw }
+    : {
+        imageZOrder: targetRaw - RELATIVE_HEIGHT_BASE,
+        imageWrap:
+          node.attrs?.imageWrap === 'front' || node.attrs?.imageWrap === 'behind'
+            ? node.attrs.imageWrap
+            : 'front',
+      }
+  const before = ctx.editor.state.doc
+  ctx.editor.view.dispatch(
+    ctx.editor.state.tr.setNodeMarkup(blockStartPos(doc, blockIndex), undefined, {
+      ...node.attrs,
+      ...patch,
+    }),
+  )
+  if (ctx.editor.state.doc === before) {
+    return failure(`the shape is already at ${where}; no stacking change was needed`)
+  }
+  return success(
+    `Moved the shape at block ${blockIndex} to ${where}${imported ? ' (patched onto the original anchor on save)' : ''}.`,
+    'shape z-order',
+    { blockIndex, order, imported, relativeHeight: targetRaw },
+  )
+}
+
+// ── A1: equation block ↔ inline conversion ──
+
+const EQUATION_CONVERT_TARGETS = ['inline', 'block'] as const
+
+function inlineMathNodesAt(doc: PmNode, blockIndex: number): Array<{ pos: number; size: number; latex: string }> {
+  const out: Array<{ pos: number; size: number; latex: string }> = []
+  let base = 0
+  for (let i = 0; i < blockIndex; i++) base += doc.child(i).nodeSize
+  doc.child(blockIndex).descendants((node, offset) => {
+    if (node.type.name !== 'docInlineMath') return
+    // descendants positions are relative to the block CONTENT start
+    out.push({ pos: base + 1 + offset, size: node.nodeSize, latex: String(node.attrs?.latex ?? '') })
+  })
+  return out
+}
+
+function equationConvertOp(
+  input: Record<string, unknown>,
+  ctx: OperationContext,
+): OperationOutcome {
+  const blockIndex = checkBlockIndex(ctx.editor, input.blockIndex)
+  if (typeof blockIndex === 'string') return failure(blockIndex)
+  const to = String(input.to ?? '')
+  if (!(EQUATION_CONVERT_TARGETS as readonly string[]).includes(to)) {
+    return failure('to must be "inline" or "block"')
+  }
+  const editor = ctx.editor
+  const doc = editor.state.doc
+  const node = doc.child(blockIndex)
+  const blockPos = blockStartPos(doc, blockIndex)
+
+  if (to === 'inline') {
+    if (node.type.name !== 'docProtected' || !node.attrs?.formulaDisplay) {
+      return failure(`block ${blockIndex} is not a block equation; nothing to convert`)
+    }
+    const display = node.attrs.formulaDisplay as { latex?: string }
+    const latex = String(display.latex ?? '').trim()
+    if (!latex) return failure('the block equation has no LaTeX source; reopen/re-edit it first')
+    if (ctx.dryRun) {
+      return planned(`would convert the block equation at block ${blockIndex} into an inline equation in an adjacent paragraph`)
+    }
+    const inlineJson = inlineEquationNodeJson(latex)
+    const inlineNode = editor.schema.nodeFromJSON(inlineJson)
+    const prev = blockIndex > 0 ? doc.child(blockIndex - 1) : null
+    const next = blockIndex + 1 < doc.childCount ? doc.child(blockIndex + 1) : null
+    let tr = editor.state.tr
+    const textTypes = new Set(['docParagraph', 'docHeading', 'docListItem'])
+    if (prev && textTypes.has(prev.type.name as string)) {
+      // append inside the paragraph above, then drop the equation block
+      tr = tr.delete(blockPos, blockPos + node.nodeSize)
+      tr = tr.insert(blockPos - 1, inlineNode)
+    } else if (next && textTypes.has(next.type.name as string)) {
+      tr = tr.delete(blockPos, blockPos + node.nodeSize)
+      tr = tr.insert(blockPos + 1, inlineNode)
+    } else {
+      const paragraph = editor.schema.nodeFromJSON({
+        type: 'docParagraph',
+        attrs: { docxIndex: null },
+        content: [inlineJson],
+      })
+      tr = tr.replaceWith(blockPos, blockPos + node.nodeSize, paragraph)
+    }
+    editor.view.dispatch(tr)
+    return success(
+      `Converted the block equation at block ${blockIndex} into an inline equation in an adjacent paragraph.`,
+      'convert equation',
+      { blockIndex, to: 'inline' },
+    )
+  }
+
+  // to 'block': an inline equation in this block becomes its own equation block
+  const inlineIndex = input.inlineIndex === undefined ? null : intOf(input.inlineIndex)
+  if (inlineIndex === null || inlineIndex < 0) {
+    return failure('converting to a block equation needs inlineIndex (0-based inline equation in the block)')
+  }
+  const inlineMath = inlineMathNodesAt(doc, blockIndex)
+  if (inlineMath.length === 0) {
+    return failure(`block ${blockIndex} contains no inline equation; nothing to convert`)
+  }
+  if (inlineIndex >= inlineMath.length) {
+    return failure(`inlineIndex ${inlineIndex} is out of range; block ${blockIndex} has ${inlineMath.length} inline equation(s)`)
+  }
+  const target = inlineMath[inlineIndex]
+  const latex = target.latex.trim()
+  if (!latex) return failure('the inline equation has no LaTeX source; reopen/re-edit it first')
+  if (ctx.dryRun) {
+    return planned(`would convert inline equation ${inlineIndex} in block ${blockIndex} into its own block equation`)
+  }
+  const blockJson = equationBlockJson(latex)
+  const blockNode = editor.schema.nodeFromJSON(blockJson)
+  let tr = editor.state.tr
+  // place the new block right after the containing block, then remove the inline node
+  const afterBlock = blockPos + node.nodeSize
+  tr = tr.insert(afterBlock, blockNode)
+  tr = tr.delete(target.pos, target.pos + target.size)
+  editor.view.dispatch(tr)
+  return success(
+    `Converted inline equation ${inlineIndex} in block ${blockIndex} into its own block equation.`,
+    'convert equation',
+    { blockIndex, to: 'block', inlineIndex },
+  )
+}
+
+// After A1, replace/crop/local background removal are implemented. This op now
+// only enumerates the genuinely unsupported image capability so the model can
+// explain it instead of faking a change.
+const UNSUPPORTED_IMAGE_FEATURES = ['autoBackgroundRemoval'] as const
 
 function imageUnsupportedOp(
   input: Record<string, unknown>,
@@ -676,10 +1090,9 @@ function imageUnsupportedOp(
     return failure(`feature must be one of ${UNSUPPORTED_IMAGE_FEATURES.join('/')}`)
   }
   return failure(
-    `object.image.${feature} is unsupported: it needs the host to supply/process the picture bytes `
-    + '(replacement image data, crop geometry applied to the file, or background removal). '
-    + 'Insert a host-provided image with insert_image_base64, or re-insert the prepared image and '
-    + 'remove the old block with apply_commands deleteBlocks.',
+    'automatic (AI/model-based) subject segmentation is unsupported; the editor only offers the local '
+    + 'tolerance cutout — use object.image.removeBackground { blockIndex, tolerance? } instead. '
+    + 'Replacing bytes is object.image.replace; cropping is object.image.crop.',
   )
 }
 
@@ -858,8 +1271,8 @@ export const objectOperations: OperationDef[] = [
     name: 'object.image.unsupported',
     group: 'object',
     description:
-      'object.image.unsupported { feature } — ALWAYS FAILS by design: replace/crop/removeBackground need host-supplied '
-      + 'picture bytes. Documented here so the model can explain the limitation instead of faking a change.',
+      'object.image.unsupported { feature } — ALWAYS FAILS by design: enumerates the remaining unsupported image '
+      + 'capability (autoBackgroundRemoval = AI subject segmentation; replace/crop/local cutout have dedicated ops).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -868,5 +1281,117 @@ export const objectOperations: OperationDef[] = [
       required: ['feature'],
     },
     handler: imageUnsupportedOp,
+  },
+  {
+    name: 'object.image.replace',
+    group: 'object',
+    description:
+      'object.image.replace { blockIndex, base64?, mime?, dataUrl? } — replace a picture block\'s bytes. The gateway '
+      + 'resolves path/url to base64+mime and forwards {base64, mime}; a ready dataUrl is also accepted. Imported '
+      + 'pictures swap bytes in place (drawing XML preserved), editor-created ones update their pending image; '
+      + 'display width is kept, height follows the new aspect ratio',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockIndex: { type: 'integer', minimum: 0, description: 'index of the image block' },
+        base64: { type: 'string', description: 'standard base64 bytes (no data: prefix); gateway-resolved' },
+        mime: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/gif'] },
+        dataUrl: { type: 'string', description: 'alternative to base64+mime: a data:image/...;base64,… URL' },
+      },
+      required: ['blockIndex'],
+    },
+    handler: imageReplaceOp,
+  },
+  {
+    name: 'object.image.crop',
+    group: 'object',
+    description:
+      'object.image.crop { blockIndex, rect: { x, y, w, h }, unit?: px|fraction } — destructively crop a picture '
+      + 'block (bake the crop into new bytes, keeping the display width). rect is against the image NATURAL size: '
+      + 'natural PIXELS by default, or 0..1 FRACTIONS with unit:"fraction". documentState.images exposes DISPLAY '
+      + 'widthPx/heightPx only — for relative requests ("middle half", "top third") prefer unit:"fraction"',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockIndex: { type: 'integer', minimum: 0 },
+        rect: {
+          type: 'object',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            w: { type: 'number' },
+            h: { type: 'number' },
+          },
+          required: ['x', 'y', 'w', 'h'],
+        },
+        unit: {
+          type: 'string',
+          enum: ['px', 'fraction'],
+          description: 'px = natural image pixels (default); fraction = 0..1 of the natural size',
+        },
+      },
+      required: ['blockIndex', 'rect'],
+    },
+    handler: imageCropOp,
+  },
+  {
+    name: 'object.image.removeBackground',
+    group: 'object',
+    description:
+      'object.image.removeBackground { blockIndex, tolerance?, sample? } — LOCAL tolerance cutout (edge flood fill from '
+      + 'the border color; no AI/external service): tolerance 0..100 (default 25), sample "corners" = border sampling; '
+      + 'bakes transparent alpha into new PNG bytes',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockIndex: { type: 'integer', minimum: 0 },
+        tolerance: { type: 'integer', minimum: 0, maximum: 100 },
+        sample: { type: 'string', enum: ['corners'] },
+      },
+      required: ['blockIndex'],
+    },
+    handler: imageRemoveBackgroundOp,
+  },
+  {
+    name: 'object.shape.zOrder',
+    group: 'object',
+    description:
+      'object.shape.zOrder { blockIndex, order: front|back|forward|backward|absolute, relativeHeight? } — change the '
+      + 'stacking order of a shape/text box: editor-created shapes update their anchor rank, imported shapes record a '
+      + 'raw wp:anchor relativeHeight that the save path patches onto the original XML (order "absolute" needs '
+      + 'relativeHeight, the raw Word value 251658240 + rank)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockIndex: { type: 'integer', minimum: 0, description: 'index of the shape/text-box block' },
+        order: { type: 'string', enum: SHAPE_Z_ORDERS },
+        relativeHeight: {
+          type: 'integer',
+          minimum: 0,
+          maximum: MAX_RELATIVE_HEIGHT,
+          description: 'only for order "absolute": the raw wp:anchor relativeHeight',
+        },
+      },
+      required: ['blockIndex', 'order'],
+    },
+    handler: shapeZOrderOp,
+  },
+  {
+    name: 'object.equation.convert',
+    group: 'object',
+    description:
+      'object.equation.convert { blockIndex, to: inline|block, inlineIndex? } — convert an existing BLOCK equation into '
+      + 'an inline equation in an adjacent paragraph (to:"inline"), or the Nth inline equation inside a block into its '
+      + 'own block equation (to:"block", needs inlineIndex); never duplicates the equation',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockIndex: { type: 'integer', minimum: 0 },
+        to: { type: 'string', enum: EQUATION_CONVERT_TARGETS },
+        inlineIndex: { type: 'integer', minimum: 0, description: 'required when to:"block"' },
+      },
+      required: ['blockIndex', 'to'],
+    },
+    handler: equationConvertOp,
   },
 ]

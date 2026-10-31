@@ -2300,6 +2300,9 @@ export const DocProtected = Node.create({
        * relativeHeight; higher paints in front. Null = base level.
        */
       imageZOrder: { default: null as number | null },
+    /** imported shape/textbox stacking: raw wp:anchor@relativeHeight (251658240 + rank);
+     *  patched onto the original anchor bytes on save instead of rebuilding them */
+    shapeZOrder: { default: null as number | null },
       /**
        * Free-position offset (EMU) of a floating image with wp:posOffset.
        * Used for drag-to-reposition. Null when the image uses named alignment

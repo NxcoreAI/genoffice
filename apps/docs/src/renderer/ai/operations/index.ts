@@ -10,6 +10,8 @@ import { formatOperations } from './format'
 import { objectOperations } from './objects'
 import { referenceOperations } from './references'
 import { reviewOperations } from './review'
+import { headerFooterOperations } from './headerFooter'
+import { inkOperations } from './ink'
 import type {
   AgentDocumentContext,
   AppliedOperation,
@@ -38,6 +40,8 @@ export { formatOperations } from './format'
 export { objectOperations } from './objects'
 export { referenceOperations } from './references'
 export { reviewOperations } from './review'
+export { headerFooterOperations } from './headerFooter'
+export { inkOperations } from './ink'
 
 /** Hard cap on ops per apply_operations call (matches the host's tool-call cap). */
 export const MAX_OPERATIONS = 50
@@ -52,6 +56,8 @@ const OPERATIONS: OperationDef[] = [
   ...objectOperations,
   ...referenceOperations,
   ...reviewOperations,
+  ...headerFooterOperations,
+  ...inkOperations,
 ]
 const byName = new Map(OPERATIONS.map((def) => [def.name, def]))
 
@@ -94,6 +100,10 @@ function buildOperationsGuide(): string {
     '- Table cells are addressed by 0-based row/col grid coordinates as displayed; a merged cell covers its whole span and is addressed by its top-left row/col.',
     '- sections are 0-based document indexes (1 of N); note ids for notes.update/notes.delete are the footnoteIds/endnoteIds in the document state.',
     '- widths: CSS px (96dpi; 15 twips = 1px). heights/indents/margins: twips (1 cm = 567, 1 inch = 1440). colors: 6-digit hex without "#".',
+    '- Image sources (object.image.replace / headerFooter.insertImage / headerFooter.replaceImage): pass fileId (file-library image the user uploaded/generated), an absolute local path, or a public url — the gateway resolves the bytes; never inline base64.',
+    '- IMAGE SIZES: documentState.images and documentState.headerFooter.images widthPx/heightPx are DISPLAY size (sizeBasis:"display"); the NATURAL pixel size is not exposed. object.image.crop rect is natural px by default — for relative requests ("middle half", "top third") pass unit:"fraction" with 0..1 values of the natural size instead of guessing pixels.',
+    '- INK: object.ink.mark draws a line at a block edge/through the middle from the block\'s rendered rect (no coordinates needed); object.ink.add takes points normalized 0..1 to the page content box.',
+    '- HEADER/FOOTER pictures: swap an existing picture in one call with headerFooter.replaceImage (index from documentState.headerFooter.images; defaults to the only image; inserts when the part has none).',
     '- Before editing, read the block list / document state to confirm the table block, section count and note ids; prefer apply_commands for text/paragraph formatting. Page/section/notes/fields ops write App state and are persisted by the silent save after the batch.',
   ]
   for (const [group, defs] of groups) {
@@ -124,8 +134,18 @@ export const APPLY_OPERATIONS_DESCRIPTION =
   + '(fill/outline/text/size/z-order). References: bookmarks, cross-references, captions, bibliography '
   + 'sources/citations/bibliography, index entries + index field, find & replace. Review: tracked-changes '
   + 'toggle, accept/reject revisions (destructive; confirm:true), document protection and open-password '
-  + 'encryption (destructive; confirm:true, passwords never echoed). Picture replace/crop/background-removal '
-  + 'is NOT supported. '
+  + 'encryption (destructive; confirm:true, passwords never echoed). Object bytes: replace a picture'
+  + '\'s bytes (gateway-resolved base64+mime), destructive pixel crop, local tolerance-cutout background '
+  + 'removal, shape/text-box stacking order (imported shapes patch the original anchor on save), and '
+  + 'equation block↔inline conversion; header/footer embedded pictures (gateway-resolved bytes; the engine now '
+  + 'writes media/rels for header/footer parts) and programmatic freehand ink strokes. AI subject segmentation '
+  + 'remains unsupported. '
+  + 'SIZES: documentState.images / headerFooter.images report DISPLAY px (sizeBasis:"display"); the image NATURAL '
+  + 'pixel size is not exposed. For relative crop requests ("middle half", "top third") pass '
+  + 'object.image.crop { rect:{x,y,w,h}, unit:"fraction" } with 0..1 fractions instead of guessing pixels. '
+  + 'For ink over a paragraph ("draw a red line under the last paragraph") use object.ink.mark — no page '
+  + 'coordinates needed; object.ink.add takes page-content-normalized points. For swapping a header/footer '
+  + 'picture use headerFooter.replaceImage in one call. '
   + 'Input: { ops: [{ op, ...input }], dryRun? }. Ops run in order; a failing op is reported by index and '
   + 'later ops still run. Blocks are addressed by block index, table cells by 0-based row/col, sections by '
   + 'section index. Read the "operations guide" in the document description for each op payload.'

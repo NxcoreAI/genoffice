@@ -2,6 +2,7 @@ import type { Editor } from '@tiptap/core'
 import type {
   Block,
   DocProtection,
+  HfImage,
   SectionInfo,
   SectionSettings,
   SourceInfo,
@@ -12,6 +13,7 @@ import type {
 import type { AiHeaderFooterAccess } from '../tools'
 import type { ReviewContext } from '../../review-actions'
 import type { NumberingContext } from '../../numbering-actions'
+import type { InkAnnotation } from '../../editor/ink'
 
 /**
  * Structured operation layer for the host agent (`apply_operations`).
@@ -90,6 +92,35 @@ export interface AgentDocumentContext {
   setTrackChanges: (on: boolean) => void
   /** App's Protect dialog apply path (write/open protection, dirty flags, unlock state) */
   applyProtection: (result: AgentProtectResult) => Promise<void>
+  // ── A3: header/footer images + ink ──
+  /** parsed header/footer images + pending additions + pending removals (indexes) */
+  getHeaderFooterImages: () => {
+    header: HfImage[]
+    footer: HfImage[]
+    headerRemove: number[]
+    footerRemove: number[]
+  }
+  /** append a NEW image to the header/footer state (marks it dirty); returns its documentState index */
+  addHeaderFooterImage: (kind: 'header' | 'footer', image: HfImage) => { index: number }
+  /** remove an image by documentState index (parsed → recorded removal, pending → dropped); false when out of range */
+  removeHeaderFooterImage: (kind: 'header' | 'footer', index: number) => boolean
+  /** append a freehand ink annotation (review-actions addInk: state + dirty flag) */
+  addInk: (annotation: InkAnnotation) => void
+  /** DOM metrics for a top-level block (100% zoom, overlay-relative): needed by object.ink.mark */
+  inkMeasureBlock: (blockIndex: number) => {
+    anchorIndex: number
+    /** anchor paragraph top-left relative to the ink overlay, 100% zoom */
+    anchor: { x: number; y: number }
+    /** block paragraph rect relative to the ink overlay, 100% zoom */
+    rect: { x: number; y: number; w: number; h: number }
+    /** rendered text-column width in px (100% zoom) */
+    columnWidthPx: number
+  } | null
+  // ── A3: character-style creation (styles.xml write-back via pending styleUpserts) ──
+  /** parsed character/paragraph style ids + pending upsert ids (collision check) */
+  getCharacterStyleIds: () => string[]
+  /** queue a style definition for the next save (surgical styles.xml upsert) */
+  addStyleUpsert: (upsert: import('@genoffice/docx-engine').StyleUpsert) => void
   /** App's docs:set-password path (open password intent; applied on the next save) */
   setOpenPassword: (password: string | null) => Promise<{ ok: boolean; error?: string }>
   /** TOC heading page lookup (kept for page/layout ops that need measured pages) */

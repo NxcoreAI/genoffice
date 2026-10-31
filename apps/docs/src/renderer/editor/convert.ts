@@ -46,6 +46,7 @@ import { charScaleEm, maxWordWidthPx, textHasComplexScript } from '../line-metri
 import { firstStrongDir } from './direction'
 import { inlineMathML } from './equation'
 import { isStraightLineKind } from './shape-svg'
+import { patchShapeRelativeHeight, readShapeRelativeHeight } from './shape-z-order'
 
 /** minimal ProseMirror JSON shapes */
 export interface PmMark {
@@ -1465,6 +1466,17 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
           textboxOffsetY !== undefined &&
           (textboxOffsetX !== original.imageOffsetXEmu ||
             textboxOffsetY !== original.imageOffsetYEmu)
+        // imported shapes keep their original anchor bytes; an agent reorder is
+        // recorded as a raw relativeHeight on the node and patched in below
+        const shapeZOrderRequested =
+          node.attrs?.shapeZOrder !== null && node.attrs?.shapeZOrder !== undefined
+            ? Number(node.attrs.shapeZOrder)
+            : undefined
+        const shapeZOrderChanged =
+          !!original.originalXml &&
+          shapeZOrderRequested !== undefined &&
+          Number.isFinite(shapeZOrderRequested) &&
+          readShapeRelativeHeight(original.originalXml) !== shapeZOrderRequested
         const fieldText = fieldTextPatch(node, original)
         const formulaTokens = formulaTokensPatch(node, original)
         // chart data edits live in the chart's own part; the body block stays original
@@ -1550,7 +1562,11 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
           changedCount++
           pushBlock({ kind: 'xml', xml: patchTableCellTexts(original.originalXml, tableTexts) })
         } else if (
-          (textboxTexts || textboxSizes || textboxStyles || textboxPositionChanged) &&
+          (textboxTexts ||
+            textboxSizes ||
+            textboxStyles ||
+            textboxPositionChanged ||
+            shapeZOrderChanged) &&
           original.originalXml
         ) {
           changedCount++
@@ -1562,6 +1578,10 @@ export function pmDocToSavePlan(doc: PmNode, originalBlocks: Block[]): SavePlan 
             const wrap =
               (node.attrs?.imageWrap as ImageWrap | null) ?? original.imageWrap ?? 'square-left'
             xml = applyImageWrap(xml, wrap, { x: textboxOffsetX!, y: textboxOffsetY! })
+          }
+          if (shapeZOrderChanged && shapeZOrderRequested !== undefined) {
+            // targeted patch: only wp:anchor@relativeHeight changes
+            xml = patchShapeRelativeHeight(xml, shapeZOrderRequested)
           }
           pushBlock({ kind: 'xml', xml })
         } else if (fieldText && original.originalXml) {

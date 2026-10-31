@@ -681,7 +681,11 @@ function describeDocumentState(refs: {
   editor: Editor | null
   doc: DocState | null
   sections: SectionInfo[]
+  section: SectionSettings | null
   hf: AiHfState | null
+  header: HeaderFooter | null
+  footer: HeaderFooter | null
+  styleUpserts: Record<string, StyleUpsert>
   commentCount: number
 }): Record<string, unknown> {
   const parsed = refs.doc?.parsed ?? null
@@ -694,8 +698,50 @@ function describeDocumentState(refs: {
     }
   }
   let tables = 0
-  refs.editor?.state.doc.forEach((node) => {
+  // compact addressing lists for object ops: pictures (replace/crop/remove-bg) and
+  // equations (update/convert); capped so the describe payload stays small
+  const images: Array<Record<string, unknown>> = []
+  const equations: Array<Record<string, unknown>> = []
+  refs.editor?.state.doc.forEach((node, _offset, index) => {
     if (node.type.name === 'docTable') tables++
+    if (node.type.name === 'docProtected' && node.attrs?.blockType === 'image') {
+      if (images.length < 100) {
+        images.push({
+          blockIndex: index,
+          // DISPLAY size only: the natural pixel size is not persisted/decodable here.
+          // object.image.crop rect uses natural px (or unit:'fraction' 0..1).
+          sizeBasis: 'display',
+          widthPx: node.attrs.imageWidthPx ?? null,
+          heightPx: node.attrs.imageHeightPx ?? null,
+          imported: node.attrs.docxIndex !== null && node.attrs.docxIndex !== undefined,
+          hasDataUrl: typeof node.attrs.imageDataUrl === 'string' && node.attrs.imageDataUrl.length > 0,
+        })
+      }
+      return
+    }
+    if (node.type.name === 'docProtected' && node.attrs?.formulaDisplay) {
+      if (equations.length < 100) {
+        const display = node.attrs.formulaDisplay as { latex?: string }
+        equations.push({
+          blockIndex: index,
+          kind: 'block',
+          latex: String(display.latex ?? '').slice(0, 60),
+        })
+      }
+      return
+    }
+    const inline: string[] = []
+    node.descendants((child) => {
+      if (child.type.name === 'docInlineMath') inline.push(String(child.attrs?.latex ?? ''))
+    })
+    if (inline.length > 0 && equations.length < 100) {
+      equations.push({
+        blockIndex: index,
+        kind: 'inline',
+        count: inline.length,
+        latex: inline[0].slice(0, 60),
+      })
+    }
   })
   const hf = refs.hf
   const hfParts = [
@@ -714,6 +760,54 @@ function describeDocumentState(refs: {
       partsWithContent: hfParts,
       differentFirstPage: hf?.titlePg === true,
       evenOddPages: hf?.evenOddHf === true,
+      // A3: addressable header/footer images (parsed → pending additions), plus
+      // the removal list the next save applies
+      images: [
+        ...(parsed?.headerImages ?? []).map((image, index) => ({
+          part: 'header',
+          index,
+          sizeBasis: 'display',
+          widthPx: image.widthPx ?? null,
+          heightPx: image.heightPx ?? null,
+          floating: image.floating === true,
+          behind: image.behind === true,
+          pending: false,
+        })),
+        ...(refs.header?.images ?? []).map((image, i) => ({
+          part: 'header',
+          index: (parsed?.headerImages?.length ?? 0) + i,
+          sizeBasis: 'display',
+          widthPx: image.widthPx ?? null,
+          heightPx: image.heightPx ?? null,
+          floating: image.floating === true,
+          behind: image.behind === true,
+          pending: true,
+        })),
+        ...(parsed?.footerImages ?? []).map((image, index) => ({
+          part: 'footer',
+          index,
+          sizeBasis: 'display',
+          widthPx: image.widthPx ?? null,
+          heightPx: image.heightPx ?? null,
+          floating: image.floating === true,
+          behind: image.behind === true,
+          pending: false,
+        })),
+        ...(refs.footer?.images ?? []).map((image, i) => ({
+          part: 'footer',
+          index: (parsed?.footerImages?.length ?? 0) + i,
+          sizeBasis: 'display',
+          widthPx: image.widthPx ?? null,
+          heightPx: image.heightPx ?? null,
+          floating: image.floating === true,
+          behind: image.behind === true,
+          pending: true,
+        })),
+      ],
+      removeImages: {
+        header: refs.header?.removeImages ?? [],
+        footer: refs.footer?.removeImages ?? [],
+      },
     },
     notes: {
       footnotes: parsed?.footnotes.length ?? 0,
@@ -731,17 +825,37 @@ function describeDocumentState(refs: {
     },
     fields,
     tables,
+    // page box for object.ink.add coordinate conversion (normalized 0..1 → px)
+    page: refs.section
+      ? {
+          widthTwips: refs.section.pageWidth,
+          heightTwips: refs.section.pageHeight,
+          contentWidthPx: Math.round(
+            (refs.section.pageWidth - refs.section.marginLeft - refs.section.marginRight) / 15,
+          ),
+          contentHeightPx: Math.round(
+            (refs.section.pageHeight - refs.section.marginTop - refs.section.marginBottom) / 15,
+          ),
+        }
+      : null,
+    images,
+    equations,
     // document character-style ids addressable by format.applyCharacterStyle.styleId
     // (same gallery filter as the ribbon: no Hyperlink/FollowedHyperlink/DefaultParagraphFont,
     // no semiHidden or linked "… Char" shells); capped so the describe payload stays compact
-    characterStyles: [...(parsed?.styles ?? new Map())]
-      .filter(([id, info]) => {
-        if (info.type !== 'character') return false
-        if (id === 'Hyperlink' || id === 'FollowedHyperlink' || id === 'DefaultParagraphFont') return false
-        return !info.semiHidden && !info.linkedCharShell
-      })
-      .slice(0, 50)
-      .map(([id, info]) => ({ id, name: info.name })),
+    characterStyles: [
+      ...[...(parsed?.styles ?? new Map())]
+        .filter(([id, info]) => {
+          if (info.type !== 'character') return false
+          if (id === 'Hyperlink' || id === 'FollowedHyperlink' || id === 'DefaultParagraphFont') return false
+          return !info.semiHidden && !info.linkedCharShell
+        })
+        .map(([id, info]) => ({ id, name: info.name })),
+      // A3: pending created character styles (saved with the next write)
+      ...Object.values(refs.styleUpserts)
+        .filter((upsert) => upsert.type === 'character')
+        .map((upsert) => ({ id: upsert.styleId, name: upsert.name })),
+    ].slice(0, 50),
     revisions: refs.editor ? collectRevisions(refs.editor.state.doc).length : 0,
     comments: refs.commentCount,
   }
@@ -3693,6 +3807,127 @@ export function App() {
     },
     [],
   )
+  // A3 header/footer image + ink bridge (state lives in App; ops only add/remove)
+  const agentGetHeaderFooterImages = () => {
+    const parsed = fileCtxRef.current.doc?.parsed
+    return {
+      header: [...(parsed?.headerImages ?? []), ...(fileCtxRef.current.header?.images ?? [])],
+      footer: [...(parsed?.footerImages ?? []), ...(fileCtxRef.current.footer?.images ?? [])],
+      headerRemove: fileCtxRef.current.header?.removeImages ?? [],
+      footerRemove: fileCtxRef.current.footer?.removeImages ?? [],
+    }
+  }
+  const agentAddHeaderFooterImage = useCallback(
+    (kind: 'header' | 'footer', image: HfImage) => {
+      const parsed = fileCtxRef.current.doc?.parsed
+      const parsedCount = (kind === 'header' ? parsed?.headerImages : parsed?.footerImages)?.length ?? 0
+      const pendingBefore =
+        (kind === 'header' ? fileCtxRef.current.header?.images : fileCtxRef.current.footer?.images)?.length ?? 0
+      flushSync(() => {
+        if (kind === 'header') {
+          setHeader((prev) => ({ ...(prev ?? { text: '' }), images: [...(prev?.images ?? []), image] }))
+          setHeaderDirty(true)
+        } else {
+          setFooter((prev) => ({ ...(prev ?? { text: '' }), images: [...(prev?.images ?? []), image] }))
+          setFooterDirty(true)
+        }
+      })
+      return { index: parsedCount + pendingBefore }
+    },
+    [],
+  )
+  const agentRemoveHeaderFooterImage = useCallback((kind: 'header' | 'footer', index: number) => {
+    const parsed = fileCtxRef.current.doc?.parsed
+    const parsedCount = (kind === 'header' ? parsed?.headerImages : parsed?.footerImages)?.length ?? 0
+    if (index >= parsedCount) {
+      const pendingIndex = index - parsedCount
+      let removed = false
+      flushSync(() => {
+        if (kind === 'header') {
+          setHeader((prev) => {
+            const images = prev?.images ?? []
+            if (pendingIndex >= images.length) return prev
+            removed = true
+            return { ...(prev ?? { text: '' }), images: images.filter((_img, i) => i !== pendingIndex) }
+          })
+          if (removed) setHeaderDirty(true)
+        } else {
+          setFooter((prev) => {
+            const images = prev?.images ?? []
+            if (pendingIndex >= images.length) return prev
+            removed = true
+            return { ...(prev ?? { text: '' }), images: images.filter((_img, i) => i !== pendingIndex) }
+          })
+          if (removed) setFooterDirty(true)
+        }
+      })
+      return removed
+    }
+    flushSync(() => {
+      if (kind === 'header') {
+        setHeader((prev) => ({
+          ...(prev ?? { text: '' }),
+          removeImages: [...new Set([...(prev?.removeImages ?? []), index])].sort((a, b) => a - b),
+        }))
+        setHeaderDirty(true)
+      } else {
+        setFooter((prev) => ({
+          ...(prev ?? { text: '' }),
+          removeImages: [...new Set([...(prev?.removeImages ?? []), index])].sort((a, b) => a - b),
+        }))
+        setFooterDirty(true)
+      }
+    })
+    return true
+  }, [])
+  const agentAddInk = useCallback((annotation: InkAnnotation) => {
+    flushSync(() => addInk(annotation))
+  }, [addInk])
+  const agentInkMeasureBlock = useCallback((blockIndex: number) => {
+    const ed = editorRef.current
+    const doc = ed?.state.doc
+    if (!ed || !doc || blockIndex < 0 || blockIndex >= doc.childCount) return null
+    const node = doc.child(blockIndex)
+    const docxIndex = node.attrs?.docxIndex
+    if (docxIndex === null || docxIndex === undefined) return null
+    const overlay = document.querySelector('.ink-overlay') as HTMLElement | null
+    if (!overlay) return null
+    let blockPos = 0
+    for (let i = 0; i < blockIndex; i++) blockPos += doc.child(i).nodeSize
+    const blockEl = ed.view.nodeDOM(blockPos) as HTMLElement | null
+    if (!blockEl) return null
+    // same measurement InkOverlay uses: paragraphs are anchored by data-idx at 100% zoom
+    const anchorEl = (overlay.parentElement?.querySelector(
+      `.ProseMirror > [data-idx="${Number(docxIndex)}"]`,
+    ) ?? blockEl) as HTMLElement
+    const base = overlay.getBoundingClientRect()
+    const rect = blockEl.getBoundingClientRect()
+    const anchorRect = anchorEl.getBoundingClientRect()
+    const zoomFactor = zoomLiveRef.current / 100
+    return {
+      anchorIndex: Number(docxIndex),
+      anchor: {
+        x: (anchorRect.left - base.left) / zoomFactor,
+        y: (anchorRect.top - base.top) / zoomFactor,
+      },
+      rect: {
+        x: (rect.left - base.left) / zoomFactor,
+        y: (rect.top - base.top) / zoomFactor,
+        w: rect.width / zoomFactor,
+        h: rect.height / zoomFactor,
+      },
+      columnWidthPx: rect.width / zoomFactor,
+    }
+  }, [])
+  const agentGetCharacterStyleIds = () => [
+    ...(fileCtxRef.current.doc?.parsed.styles ? [...fileCtxRef.current.doc.parsed.styles.keys()] : []),
+    ...Object.keys(fileCtxRef.current.styleUpserts),
+  ]
+  const agentAddStyleUpsert = (upsert: import('@genoffice/docx-engine').StyleUpsert) => {
+    flushSync(() => {
+      setStyleUpserts((prev) => ({ ...prev, [upsert.styleId]: upsert }))
+    })
+  }
   const agentDocRefs = useRef({
     editor,
     doc,
@@ -3741,6 +3976,14 @@ export function App() {
     setTrackChanges,
     applyProtection: (result: ProtectDialogResult) => applyProtectDialog(result),
     setOpenPassword: agentSetOpenPassword,
+    // A3 header/footer image + ink bridge
+    getHeaderFooterImages: agentGetHeaderFooterImages,
+    addHeaderFooterImage: agentAddHeaderFooterImage,
+    removeHeaderFooterImage: agentRemoveHeaderFooterImage,
+    addInk: agentAddInk,
+    inkMeasureBlock: agentInkMeasureBlock,
+    getCharacterStyleIds: agentGetCharacterStyleIds,
+    addStyleUpsert: agentAddStyleUpsert,
   })
   agentDocRefs.current = {
     editor,
@@ -3790,6 +4033,14 @@ export function App() {
     setTrackChanges,
     applyProtection: (result) => applyProtectDialog(result),
     setOpenPassword: agentSetOpenPassword,
+    // A3 header/footer image + ink bridge
+    getHeaderFooterImages: agentGetHeaderFooterImages,
+    addHeaderFooterImage: agentAddHeaderFooterImage,
+    removeHeaderFooterImage: agentRemoveHeaderFooterImage,
+    addInk: agentAddInk,
+    inkMeasureBlock: agentInkMeasureBlock,
+    getCharacterStyleIds: agentGetCharacterStyleIds,
+    addStyleUpsert: agentAddStyleUpsert,
   }
   useEffect(() => {
     const ALLOWED_TOOLS = new Set([
@@ -4036,7 +4287,11 @@ export function App() {
               editor: liveEditor,
               doc: agentDocRefs.current.doc,
               sections: agentDocRefs.current.sections,
+              section: agentDocRefs.current.section,
               hf: agentHfRef.current?.read() ?? null,
+              header: fileCtxRef.current.header,
+              footer: fileCtxRef.current.footer,
+              styleUpserts: fileCtxRef.current.styleUpserts,
               commentCount: agentCommentsRef.current?.list().length ?? 0,
             }),
           },

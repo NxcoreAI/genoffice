@@ -41,6 +41,7 @@ import { setInactiveSelectionShown } from '../editor/inactive-selection'
 import { stepParagraphIndent } from '../editor/indent'
 import { MULTILEVEL_LIBRARY } from '../editor/multilevel-presets'
 import { CHAR_STYLE_PRESETS, DEFAULT_PRESET_ACCENT } from '../editor/character-styles'
+import { applyPictureBytesAtPos } from '../editor/picture-ops'
 import { formatNumber } from '../editor/numbering'
 import type { InkTool } from '../editor/ink'
 import type { RibbonFormatState } from './ribbon-format-state'
@@ -886,43 +887,12 @@ function RibbonInner({
 
   /**
    * Replace the selected image's bytes (shared by Replace Picture / remove background / crop).
-   * Original images (docxIndex set) swap bytes in place via the imageReplace patch: the
-   * drawing XML survives, so wrap/position/docxIndex — and with them the Position gallery —
-   * keep working. Images not yet saved (genImage) just update their pending payload.
-   * Display size keeps the current width; height adapts to the new image's aspect ratio.
+   * The actual attribute patch lives in editor/picture-ops.ts so the host agent's
+   * object.image.* operations use the exact same replace path.
    */
   const applyPictureBytes = async (dataUrl: string) => {
     if (!canEdit) return
-    const m = /^data:(image\/(?:png|jpeg|gif));base64,(.*)$/s.exec(dataUrl)
-    if (!m) return
-    const attrs = editor.getAttributes('docProtected')
-    if (attrs?.blockType !== 'image') return
-    try {
-      const natural = await imageSizeOf(dataUrl)
-      const currentW = Number(attrs.imageWidthPx) || Math.min(natural.width, 620)
-      const w = Math.max(1, Math.round(currentW))
-      const h = Math.max(1, Math.round((currentW * natural.height) / natural.width))
-      const isOriginal = attrs.docxIndex !== null && attrs.docxIndex !== undefined
-      editor
-        .chain()
-        .focus()
-        .updateAttributes('docProtected', {
-          imageDataUrl: dataUrl,
-          imageWidthPx: w,
-          imageHeightPx: h,
-          // The new bytes are the full picture (crop/cutout bake destructively) and
-          // the replace pipeline strips a:srcRect on save — drop a Word-authored
-          // crop/fill window or it would keep clipping the new image until reload
-          imageCrop: null,
-          imageFillRect: null,
-          ...(isOriginal
-            ? { imageReplace: { base64: m[2], mime: m[1] } }
-            : { genImage: { base64: m[2], mime: m[1], widthPx: w, heightPx: h } }),
-        })
-        .run()
-    } catch {
-      /* image decode failed: keep the original untouched */
-    }
+    await applyPictureBytesAtPos(editor, editor.state.selection.from, dataUrl)
   }
 
   const replacePicture = async () => {

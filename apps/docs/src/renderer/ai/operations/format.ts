@@ -624,6 +624,78 @@ const TARGET_SCHEMA = {
   },
 } as const
 
+/** A3: create a document character style (written back to styles.xml on save). */
+function createCharacterStyleOp(input: Record<string, unknown>, ctx: OperationContext): OperationOutcome {
+  if (!ctx.editor.isEditable) {
+    return failure('the document is read-only or protected; style definitions cannot be modified')
+  }
+  const app = ctx.app
+  if (!app) return failure('format.createCharacterStyle needs the app context (host call path)')
+  const name = String(input.name ?? '').trim()
+  if (!name) return failure('name is required (the style display name)')
+  if (name.length > 64) return failure('name must be at most 64 characters')
+  const hex = input.color === undefined ? undefined : String(input.color).replace(/^#/, '').toUpperCase()
+  if (hex !== undefined && !/^[0-9A-F]{6}$/.test(hex)) {
+    return failure('color must be a 6-digit hex value without #')
+  }
+  let sizeHalfPoints: number | undefined
+  if (input.sizeHalfPoints !== undefined) {
+    const parsed = intOf(input.sizeHalfPoints)
+    if (parsed === null || parsed < 2 || parsed > 400) {
+      return failure('sizeHalfPoints must be an integer 2..400 (point size × 2)')
+    }
+    sizeHalfPoints = parsed
+  }
+  const font = input.font === undefined ? undefined : String(input.font).trim()
+  if (font !== undefined && (font.length === 0 || font.length > 128)) {
+    return failure('font must be a non-empty font name (max 128 chars)')
+  }
+  const used = new Set(app.getCharacterStyleIds())
+  let base = String(input.styleId ?? name).replace(/[^A-Za-z0-9]/g, '')
+  if (!base) base = 'AgentCharStyle'
+  if (/^[0-9]/.test(base)) base = `Style${base}`
+  if (used.has(base) && input.styleId !== undefined) {
+    return failure(`styleId "${base}" already exists; pass a unique styleId (or omit it to auto-number)`)
+  }
+  let styleId = base
+  for (let n = 2; used.has(styleId); n++) styleId = `${base}${n}`
+  const rPr: NonNullable<import('@genoffice/docx-engine').StyleUpsert['rPr']> = {}
+  if (input.bold !== undefined) {
+    if (typeof input.bold !== 'boolean') return failure('bold must be a boolean')
+    if (input.bold) rPr.bold = true
+  }
+  if (input.italic !== undefined) {
+    if (typeof input.italic !== 'boolean') return failure('italic must be a boolean')
+    if (input.italic) rPr.italic = true
+  }
+  if (input.underline !== undefined) {
+    if (typeof input.underline !== 'boolean') return failure('underline must be a boolean')
+    if (input.underline) rPr.underline = true
+  }
+  if (input.strike !== undefined) {
+    if (typeof input.strike !== 'boolean') return failure('strike must be a boolean')
+    if (input.strike) rPr.strike = true
+  }
+  if (hex !== undefined) rPr.color = hex
+  if (font !== undefined) rPr.font = font
+  if (sizeHalfPoints !== undefined) rPr.sizeHalfPoints = sizeHalfPoints
+  const upsert: import('@genoffice/docx-engine').StyleUpsert = {
+    styleId,
+    type: 'character',
+    name,
+    ...(Object.keys(rPr).length > 0 ? { rPr } : {}),
+  }
+  if (ctx.dryRun) {
+    return planned(`would create character style "${name}" (styleId ${styleId})`, { styleId, name })
+  }
+  app.addStyleUpsert(upsert)
+  return success(
+    `Created character style "${name}" (styleId ${styleId}); it is applied by styleId and saved with the document.`,
+    'create character style',
+    { styleId, name, rPr },
+  )
+}
+
 export const formatOperations: OperationDef[] = [
   {
     name: 'format.changeCase',
@@ -837,5 +909,29 @@ export const formatOperations: OperationDef[] = [
       required: ['target', 'kind'],
     },
     handler: applyListStyleOp,
+  },
+  {
+    name: 'format.createCharacterStyle',
+    group: 'format',
+    description:
+      'format.createCharacterStyle { name, styleId?, bold?, italic?, underline?, strike?, color?, font?, sizeHalfPoints? } '
+      + '— define a reusable character style in styles.xml (styleId auto-derived from the name unless given; apply it '
+      + 'with format.applyCharacterStyle { styleId })',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'style display name' },
+        styleId: { type: 'string', description: 'optional explicit id (must be unique)' },
+        bold: { type: 'boolean' },
+        italic: { type: 'boolean' },
+        underline: { type: 'boolean' },
+        strike: { type: 'boolean' },
+        color: { type: 'string', description: '6-digit hex without #' },
+        font: { type: 'string', description: 'Latin/EA font name' },
+        sizeHalfPoints: { type: 'integer', minimum: 2, maximum: 400, description: 'point size × 2' },
+      },
+      required: ['name'],
+    },
+    handler: createCharacterStyleOp,
   },
 ]

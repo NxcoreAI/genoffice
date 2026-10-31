@@ -11,6 +11,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { removeBackground, sampleBackgroundColors, type PixelImage, type RGB } from '../cutout'
+import { cropImageDataUrl, removeImageBackgroundDataUrl } from '../editor/picture-ops'
 import { useI18n, type StringKey } from '../i18n/locale'
 
 /** Longest side of the preview canvas (px) */
@@ -144,19 +145,15 @@ export function CutoutDialog({ dataUrl, onApply, onCancel }: CutoutProps) {
   }, [onCancel])
 
   const apply = () => {
-    const full = fullRef.current
-    if (!full || applying) return
+    if (applying) return
     setApplying(true)
-    // let the "processing…" state render before the heavy recompute
-    window.setTimeout(() => {
-      try {
-        const result = removeBackground(full, tolerance, bgColorsRef.current)
-        const c = document.createElement('canvas')
-        c.width = full.width
-        c.height = full.height
-        c.getContext('2d')!.putImageData(new ImageData(result.data, full.width, full.height), 0, 0)
-        onApply(c.toDataURL('image/png'))
-      } catch {
+    // let the "processing…" state render before the heavy recompute; the shared
+    // helper is the same full-resolution sampling + flood fill the agent op uses
+    window.setTimeout(async () => {
+      const result = await removeImageBackgroundDataUrl(dataUrl, tolerance)
+      if (result.ok && result.dataUrl) {
+        onApply(result.dataUrl)
+      } else {
         setApplying(false)
         setError('ribbonImageProcessFail')
       }
@@ -316,26 +313,21 @@ export function CropDialog({ dataUrl, onApply, onCancel }: CropProps) {
     }
   }, [dataUrl, updateView])
 
-  const apply = useCallback(() => {
+  const apply = useCallback(async () => {
     const img = imgRef.current
     if (!img) return
     const w = img.naturalWidth
     const h = img.naturalHeight
-    const sx = Math.round(crop.l * w)
-    const sy = Math.round(crop.t * h)
-    const sw = Math.max(1, Math.round((crop.r - crop.l) * w))
-    const sh = Math.max(1, Math.round((crop.b - crop.t) * h))
-    try {
-      const c = document.createElement('canvas')
-      c.width = sw
-      c.height = sh
-      c.getContext('2d')!.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
-      // jpeg has no alpha channel; keep jpeg to avoid size bloat. Others (png/gif) all output png to preserve transparency
-      const isJpeg = /^data:image\/jpeg/.test(dataUrl)
-      onApply(isJpeg ? c.toDataURL('image/jpeg', 0.92) : c.toDataURL('image/png'))
-    } catch {
-      setError('ribbonImageProcessFail')
+    const rect = {
+      x: Math.round(crop.l * w),
+      y: Math.round(crop.t * h),
+      w: Math.max(1, Math.round((crop.r - crop.l) * w)),
+      h: Math.max(1, Math.round((crop.b - crop.t) * h)),
     }
+    // the shared helper owns the pixel math/output format so the agent op matches
+    const result = await cropImageDataUrl(dataUrl, rect)
+    if (result.ok && result.dataUrl) onApply(result.dataUrl)
+    else setError('ribbonImageProcessFail')
   }, [crop, dataUrl, onApply])
 
   // Esc cancels / Enter applies
