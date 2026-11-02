@@ -759,7 +759,17 @@ export function App(): React.JSX.Element {
       univerRef,
       lazyWorkbookRef,
       setMessage,
-      openLazyWorkbook,
+      /**
+       * 保存成功后工作簿会被重新打开、编辑日志清空。这里必须同时把"未保存计数"
+       * 归零——主进程的脏闸门（sheetsPendingEditCount > 0 → unsaved）靠这个计数
+       * 判断，不清就会一直认为文件有未保存修改：agent 每改完一批、下一次调用就被
+       * 自己拒掉，只能靠用户手动保存解锁（"每次都留个尾巴"就是这么来的）。
+       */
+      openLazyWorkbook: (opened) => {
+        openLazyWorkbook(opened)
+        const next = lazyWorkbookRef.current
+        setPendingEdits(next ? journalSize(next.editJournal) : 0)
+      },
       stashViewRestore: (view) => {
         viewRestoreRef.current = view
       },
