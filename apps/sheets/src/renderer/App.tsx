@@ -307,6 +307,12 @@ import { installRichTextBidiFix } from './rich-text-bidi-fix'
 import { installRtlTextDirectionFix } from './rtl-text-fix'
 import { installRtlGridMirror } from './rtl-grid-mirror'
 import { installReadonlyVeto } from './readonly-veto'
+import type { DeletedRange } from './structural-shift-guard'
+import {
+  installStructuralShiftVeto,
+  structuralShiftBlock,
+} from './structural-shift-runtime'
+import { showToast } from './toast-bus'
 import { installMultiRowAutofit } from './autofit-multi-row'
 import { installCopyMaterialize } from './copy-materialize'
 import { applyUniverLocale } from './univer-locales'
@@ -1486,6 +1492,14 @@ export function App(): React.JSX.Element {
         .get(IConfigService)
         .setConfig('sheets-ui.config', { disableEdit: true })
       installReadonlyVeto(runtime, true)
+    } else {
+      // 删行/删列前预检公式引用：被引用的行/列删掉后写盘会被 gateway 拒绝，
+      // 而那时代码已进编辑日志，整份工作簿会卡在「永远保存失败」。这里在命令
+      // 真正执行前否决，内存与日志都不动。
+      installStructuralShiftVeto(runtime, (message) => {
+        setMessage(message)
+        showToast(message, 'error')
+      })
     }
     // find-bar reveals share scrollToCell's broken freeze offset (r135)
     const findRevealDispose = installFindRevealFix(runtime)
@@ -2743,25 +2757,38 @@ export function App(): React.JSX.Element {
 
   /** Waits for every plan submitted during one AI run, then persists all
    * successful writes in one save. A canceled/failed Save As leaves both the
-   * journal and inline undo available. */
-  async function autoSaveCompletedAiRun(): Promise<void> {
+   * journal and inline undo available.
+   *
+   * `force` is for the HOST agent channel (EverRoom bridge): there the user has
+   * no save affordance of their own, and a journal left pending makes the very
+   * next agent call fail the desktop dirty gate (`unsaved`) — the agent then has
+   * to ask the user to press ⌘S, which is exactly the loop this closes. */
+  async function autoSaveCompletedAiRun(options?: { readonly force?: boolean }): Promise<boolean> {
     const applies = aiApplyPromisesRef.current
     aiApplyPromisesRef.current = []
-    if (applies.length === 0) return
+    if (applies.length === 0) return true
     const results = await Promise.all(applies)
-    if (!results.some(Boolean)) return
+    if (!results.some(Boolean)) return true
     const state = lazyWorkbookRef.current
-    if (!state || journalSize(state.editJournal) === 0) return
+    if (!state || journalSize(state.editJournal) === 0) return true
     // AutoSave off = the user decides when the file is written: the
     // run's edits stay pending in the journal, so the offered Undo / ⌘Z keeps
     // working (saving would reopen the session and reset the undo stack).
-    if (!autoSaveRef.current) {
+    // The host agent channel overrides this (see `force` above).
+    if (!options?.force && !autoSaveRef.current) {
       setMessage(t('appAiChangesNotSaved'))
-      return
+      return false
     }
     // AutoSave-driven write after an AI run: silent like the interval autosave.
     await handleSave('save', true)
     const after = lazyWorkbookRef.current
+    // handleSave 把失败吞进状态栏（静默保存连 toast 都没有），成功与否的唯一证据
+    // 是日志有没有被排空。宿主通道必须据此回真话，否则"没存上"会被当成存上了。
+    const drained = after === null || journalSize(after.editJournal) === 0
+    if (!drained) {
+      console.error('[sheets] AI edits were applied but the silent save left the journal dirty')
+      return false
+    }
     if (after && journalSize(after.editJournal) === 0) {
       // Saving reopens the sidecar session and resets Univer's undo stack.
       patchLastAssistant(({ autoApplied: _autoApplied, ...entry }) => entry)
@@ -2779,6 +2806,7 @@ export function App(): React.JSX.Element {
         }
       }
     }
+    return true
   }
 
   /**
@@ -2901,6 +2929,40 @@ export function App(): React.JSX.Element {
       setMessage(reason)
       return Promise.resolve({ ok: false, reason })
     }
+  }
+
+  /**
+   * 计划里的删行/删列先做公式引用预检。写盘阶段（gateway shiftFormulaText）
+   * 遇到「引用整个落在被删区间」会 abort，而那时改动已进编辑日志，日志再也
+   * 写不出去 —— 所以必须在改内存之前拦住，并且整批拦（不能只拦前几条）。
+   */
+  function structuralShiftBlockForPlan(
+    state: LazyWorkbookState,
+    changes: readonly { readonly op: { readonly op: string } }[],
+  ): string | null {
+    const runtime = univerRef.current
+    if (!runtime) return null
+    for (const change of changes) {
+      const op = change.op as {
+        readonly op: string
+        readonly sheetId?: string
+        readonly row?: number
+        readonly column?: string
+        readonly count?: number
+      }
+      const sheetId = typeof op.sheetId === 'string' ? op.sheetId : undefined
+      if (!sheetId) continue
+      const axis = op.op === 'delete_rows' ? 'row' : op.op === 'delete_cols' ? 'column' : null
+      if (!axis) continue
+      const count = Math.max(1, op.count ?? 1)
+      const range: DeletedRange =
+        axis === 'row'
+          ? { axis, index: Math.max(0, (op.row ?? 1) - 1), count }
+          : { axis, index: Math.max(0, columnIndex(op.column ?? 'A')), count }
+      const block = structuralShiftBlock(runtime, state.file.sheets, { sheetId }, range)
+      if (block) return block
+    }
+    return null
   }
 
   async function handleLazyApply(state: LazyWorkbookState): Promise<ApplyOutcome> {
@@ -3036,6 +3098,10 @@ export function App(): React.JSX.Element {
       ) {
         throw new Error(t('appWorkbookStructureLocked'))
       }
+      // 同一批里的删行/删列也先过公式引用预检：写盘阶段的 abort 会把日志写死，
+      // 所以这里整批先查，命中就整批拒绝（零改动、零日志），错误回给 agent。
+      const shiftBlock = structuralShiftBlockForPlan(state, stored.plan.structuralChanges)
+      if (shiftBlock) throw new Error(shiftBlock)
       for (const structural of stored.plan.structuralChanges) {
         const op = structural.op
         // BeforeCommandExecute gates cancel commands silently; re-check them
@@ -4619,7 +4685,10 @@ export function App(): React.JSX.Element {
         let saved = true
         if (mutated) {
           try {
-            await autoSaveCompletedAiRun()
+            // 强制 drain：宿主通道下用户的"保存"是一次跨窗口操作，留着脏日志
+            // 只会让下一次调用被脏闸门拒绝（用户看到的是"请先按 ⌘S"）。
+            // 返回值是「日志真的被排空了吗」——静默保存失败必须回真话。
+            saved = await autoSaveCompletedAiRun({ force: true })
           } catch {
             saved = false
           }
@@ -4627,7 +4696,14 @@ export function App(): React.JSX.Element {
         reply({
           ok: true,
           results,
-          ...(mutated && !saved ? { error: 'applied but the silent save failed' } : {}),
+          ...(mutated && !saved
+            ? {
+                error:
+                  'applied but NOT saved: the workbook still has pending edits, so the next call ' +
+                  'will be rejected as unsaved. Report this to the user with the status-bar message; ' +
+                  'do not claim the changes were persisted.',
+              }
+            : {}),
         })
       })()
     })

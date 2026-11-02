@@ -502,7 +502,7 @@ export const appStrings = defineStrings({
     appNoteNextTitle: '跳到下一条批注',
     appShowCommentsTitle: '固定/取消固定所选单元格的批注气泡',
     appStructuralShiftBlocked:
-      '此工作表上有图表或表格锚定在受影响的行/列上,无法平移,结构改动没有保存。请撤销该改动(⌘Z)后重新保存。',
+      '这次结构改动会让公式、图表或表格的引用失效,所以没有保存。请撤销该改动(⌘Z),先调整相关公式(或移开锚定的图表/表格)后再删。',
     appAiChangesNotSaved: '已应用 AI 更改(未保存)。可用 ⌘Z 撤销;用 ⌘S 保存到文件。',
     // Floating objects / chart editing
     appChartUpdated: '图表已更新。',
@@ -575,7 +575,8 @@ export const appStrings = defineStrings({
     // Title bar / status
     appAutoSave: '自动保存',
     appAutoSaveTitle: '自动保存仅适用于云文件',
-    appAutoSaveTip: '自动保存(每 30 秒及窗口失焦时)',
+    appAutoSaveTip:
+      '每 30 秒及窗口失焦时自动保存。AI / Agent 的改动始终自动保存，不受此开关影响。',
     appExportPdfTitle: '导出为 PDF',
     appSaveTitle: '保存（⌘S）',
     appSaveAs: '另存为',
@@ -1805,7 +1806,7 @@ export const appStrings = defineStrings({
     appNoteNextTitle: 'Jump to the next comment',
     appShowCommentsTitle: "Pin/unpin the selected cell's comment bubble",
     appStructuralShiftBlocked:
-      "A chart or table on this sheet is anchored to the affected rows/columns, so they can't shift; the structural change was not saved. Undo it (Cmd+Z) and save again.",
+      'This structural change would break a formula, chart, or table reference, so it was not saved. Undo it (Cmd+Z), then adjust the formula (or move the anchored chart/table) before deleting again.',
     appAiChangesNotSaved:
       'AI changes applied (not saved). Undo with Cmd+Z; save to the file with Cmd+S.',
     appChartUpdated: 'Chart updated.',
@@ -1877,7 +1878,8 @@ export const appStrings = defineStrings({
     appTabChartDesign: 'Chart Design',
     appAutoSave: 'AutoSave',
     appAutoSaveTitle: 'AutoSave is available for cloud files only',
-    appAutoSaveTip: 'AutoSave (every 30 seconds and when the window loses focus)',
+    appAutoSaveTip:
+      'Saves every 30 seconds and when the window loses focus. AI / agent edits are always saved automatically — this switch does not affect them.',
     appExportPdfTitle: 'Export as PDF',
     appSaveTitle: 'Save (⌘S)',
     appSaveAs: 'Save As',
@@ -3223,7 +3225,8 @@ export const appStrings = defineStrings({
     // Title bar / status
     appAutoSave: '自動保存',
     appAutoSaveTitle: '自動保存はクラウドファイルでのみ使用できます',
-    appAutoSaveTip: '自動保存(30 秒ごと、およびウィンドウのフォーカスが外れたとき)',
+    appAutoSaveTip:
+      '30 秒ごと、およびウィンドウのフォーカスが外れたときに自動保存します。AI / エージェントによる変更は常に自動保存され、このスイッチの影響を受けません。',
     appExportPdfTitle: 'PDF としてエクスポート',
     appSaveTitle: '保存（⌘S）',
     appSaveAs: '名前を付けて保存',
@@ -4551,7 +4554,8 @@ export const appStrings = defineStrings({
     // Title bar / status
     appAutoSave: '자동 저장',
     appAutoSaveTitle: '자동 저장은 클라우드 파일에서만 사용할 수 있습니다',
-    appAutoSaveTip: '자동 저장(30초마다, 창 포커스가 해제될 때)',
+    appAutoSaveTip:
+      '30초마다, 창 포커스가 해제될 때 자동 저장합니다. AI / 에이전트의 변경은 항상 자동 저장되며 이 스위치의 영향을 받지 않습니다.',
     appExportPdfTitle: 'PDF로 내보내기',
     appSaveTitle: '저장(⌘S)',
     appSaveAs: '다른 이름으로 저장',
@@ -24263,7 +24267,8 @@ export const appStrings = defineStrings({
     appTabChartDesign: '圖表設計',
     appAutoSave: '自動儲存',
     appAutoSaveTitle: '自動儲存僅適用於雲端檔案',
-    appAutoSaveTip: '自動儲存(每 30 秒及視窗失去焦點時)',
+    appAutoSaveTip:
+      '每 30 秒及視窗失去焦點時自動儲存。AI / Agent 的變更一律自動儲存，不受此開關影響。',
     appExportPdfTitle: '匯出為 PDF',
     appSaveTitle: '儲存（⌘S）',
     appSaveAs: '另存新檔',

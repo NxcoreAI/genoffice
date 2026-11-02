@@ -1256,6 +1256,16 @@ function shiftReferenceToken(token: string, shift: Shift, axis: Axis): string | 
   )
 }
 
+/// 预检用：删掉这段行/列之后，这个引用是否仍然站得住。
+/// false = 引用整个落在被删区间里 —— 写盘时 shiftFormulaText 会 abort（Excel 会
+/// 写成 #REF!）。渲染层在改内存之前用它拦住注定写不出去的改动，避免删除已经进
+/// 了编辑日志、整份工作簿却再也保存不了。判定复用 shiftReferenceToken，不复制
+/// 一份规则，预检与写盘结论永远一致。
+export function referenceSurvivesOp(token: string, op: RowColumnOp): boolean {
+  if (op.kind !== 'remove-rows' && op.kind !== 'remove-cols') return true
+  return shiftReferenceToken(token, toShift(op), axisOf(op)) !== null
+}
+
 export function qualifierMatches(qualifier: string, sheetName: string): boolean {
   const unquoted = qualifier.startsWith("'")
     ? qualifier.slice(1, -1).replaceAll("''", "'")
