@@ -578,7 +578,8 @@ export function buildWorkbookContext(deps: SheetsSkillDeps): string {
     `Active sheet: ${info.sheetName} (id=${info.sheetId}${active ? dims(active) : ''})`,
     info.mode === 'demo'
       ? `Mode: demo workbook, current revision=${info.revision}`
-      : 'Mode: imported real xlsx file (some regions may still be streaming in)',
+      : 'Mode: imported real xlsx file (large sheets stream in on demand; re-reading returns the same ' +
+        'snapshot, so read a specific range with read_range instead of calling this again)',
   ]
   if (active?.rows && active.columns) {
     lines.push(

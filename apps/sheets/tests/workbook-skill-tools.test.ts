@@ -140,7 +140,10 @@ describe('buildWorkbookContext', () => {
     })
     const text = buildWorkbookContext(deps)
     expect(text).toContain('Budget')
-    expect(text).toContain('streaming in')
+    // 措辞改为"按需流式加载 + 重读得到同一份快照，请用 read_range 指定区域"：
+    // 旧文案（some regions may still be streaming in）会让模型以为数据没读全而反复重读。
+    expect(text).toContain('stream in on demand')
+    expect(text).toContain('re-reading returns the same')
     expect(text).toContain('Currently loaded viewport: A80:E160 (not the worksheet data extent)')
   })
 })

@@ -4665,6 +4665,12 @@ export function App(): React.JSX.Element {
   // journal silently drained via handleSave so the host's fileSaved hook fires
   // its version backfill. ──
   useEffect(() => {
+    // describe 的回复曾经每次都带上全部指南正文（约 69KB，占整个返回的 84%）。
+    // 宿主 agent 连读三次就灌进 250KB 上下文，把输出额度挤爆过。这里做两件事：
+    // 1) 同一次打开的工作簿内容没变时只回"未变化"，不再重发工具表与指南；
+    // 2) 指南只随首次 describe 发送一次，之后需要哪份就调 load_guide。
+    let deliveredFingerprint: string | null = null
+    let guidesDelivered = false
     const offRequest = window.desktopApi?.onAgentToolRequest?.((request) => {
       const reply = (payload: unknown) =>
         window.desktopApi?.reportAgentToolReply?.(request.requestId, payload)
@@ -4672,20 +4678,47 @@ export function App(): React.JSX.Element {
         // Read-only workbooks stay readable by the host agent: describe only
         // returns workbook context/vocabulary/guides. Only editing is refused
         // (the reading path must not be gated on READONLY_EMBED).
+        const context = buildWorkbookContext(sheetsSkillDeps())
+        const current = lazyWorkbookRef.current
+        const fingerprint = `${context}|${current ? journalSize(current.editJournal) : -1}`
+        if (deliveredFingerprint === fingerprint) {
+          reply({
+            ok: true,
+            describe: {
+              context,
+              unchanged: true,
+              note:
+                '工作簿自上次读取后没有变化，内容与上一次返回完全相同（已省略工具表与指南）。' +
+                '不要重复读取：要具体数据请用 read_range / aggregate_range 指定区域。',
+            },
+          })
+          return
+        }
+        deliveredFingerprint = fingerprint
+        const guides = Object.fromEntries(
+          Object.entries(GUIDE_CATALOG).map(([name, entry]) => [name, entry.content]),
+        )
         reply({
           ok: true,
           describe: {
-            context: buildWorkbookContext(sheetsSkillDeps()),
+            context,
             tools: WORKBOOK_TOOLS.map(({ name, description, inputSchema }) => ({
               name,
               description,
               inputSchema,
             })),
-            guides: Object.fromEntries(
-              Object.entries(GUIDE_CATALOG).map(([name, entry]) => [name, entry.content]),
-            ),
+            guides: guidesDelivered ? {} : guides,
+            ...(guidesDelivered
+              ? {
+                  guidesOmitted: true,
+                  guidesHint:
+                    '指南正文已随本会话首次读取发送过，这里不再重复。需要重看某份就调用 ' +
+                    `load_guide {guides:[名称]}；可用：${Object.keys(guides).join(', ')}。`,
+                }
+              : {}),
           },
         })
+        guidesDelivered = true
         return
       }
       // Read-only sessions must never be mutated. The desktop already rejects
