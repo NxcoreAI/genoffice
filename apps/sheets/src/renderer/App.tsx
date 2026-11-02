@@ -39,6 +39,7 @@ import {
   installFindRevealFix,
   installWrapMeasureLifecycle,
 } from './univer-sync'
+import { rasterizeSvgDataUrl } from './rasterize-svg'
 import {
   installJournalSuppressionUndoFilter,
   installLoadAutoHeightGate,
@@ -2987,20 +2988,21 @@ export function App(): React.JSX.Element {
     // loop, so a slow disk read can never interleave with edits.
     const imageData = new Map<
       string,
-      { dataUrl: string; mediaType: string; width: number; height: number }
+      { dataUrl: string; mediaType: string; width: number; height: number; svgDataUrl?: string }
     >()
     try {
       for (const structural of stored.plan.structuralChanges) {
         if (structural.op.op !== 'add_image' || imageData.has(structural.op.path)) continue
         let dataUrl: string
         let mediaType: string
+        let svgDataUrl: string | undefined
         if (/^https?:\/\//i.test(structural.op.path)) {
           const fetched = await window.desktopApi.fetchImage(structural.op.path)
           if (!fetched) throw new Error(t('appCannotReadImage'))
           // Trust the bytes, not the Content-Type header the handler echoed
           const sniffed = sniffImageMime(fetched.base64)
           if (!sniffed) {
-            throw new Error('The downloaded image is not PNG/JPEG/GIF — pick another image URL.')
+            throw new Error('The downloaded image is not PNG/JPEG/GIF/SVG — pick another image URL.')
           }
           dataUrl = `data:${sniffed};base64,${fetched.base64}`
           mediaType = sniffed
@@ -3009,8 +3011,21 @@ export function App(): React.JSX.Element {
           dataUrl = `data:${image.mediaType};base64,${image.base64}`
           mediaType = image.mediaType
         }
+        // SVG 必须带位图回退（老版本 Excel / 预览 / PDF 导出只读回退），
+        // 所以在渲染进程先光栅化成 PNG，再把矢量本体一起交给写入层。
+        if (mediaType === 'image/svg+xml') {
+          const raster = await rasterizeSvgDataUrl(dataUrl)
+          svgDataUrl = dataUrl
+          dataUrl = raster.pngDataUrl
+          mediaType = 'image/png'
+        }
         const size = await measureImage(dataUrl)
-        imageData.set(structural.op.path, { dataUrl, mediaType, ...size })
+        imageData.set(structural.op.path, {
+          dataUrl,
+          mediaType,
+          ...size,
+          ...(svgDataUrl === undefined ? {} : { svgDataUrl }),
+        })
       }
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : t('appCannotReadImage')

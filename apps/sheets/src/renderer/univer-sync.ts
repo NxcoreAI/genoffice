@@ -5332,7 +5332,9 @@ export function columnLetter(index: number): string {
 /// bytes from the Content-Type header (JPEG fallback), so a WebP or other
 /// unsupported payload could otherwise land in the xlsx as a mislabeled media
 /// part that Excel cannot display.
-export function sniffImageMime(base64: string): 'image/png' | 'image/jpeg' | 'image/gif' | null {
+export function sniffImageMime(
+  base64: string,
+): 'image/png' | 'image/jpeg' | 'image/gif' | 'image/svg+xml' | null {
   let bytes: Uint8Array
   try {
     bytes = Uint8Array.from(atob(base64.slice(0, 16)), (char) => char.charCodeAt(0))
@@ -5345,6 +5347,15 @@ export function sniffImageMime(base64: string): 'image/png' | 'image/jpeg' | 'im
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
   if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
     return 'image/gif'
+  }
+  // SVG 没有魔数：开头是 XML 文本，看前 4KB 里有没有 <svg。
+  try {
+    const head = atob(base64.slice(0, 5500)).replace(/^\uFEFF/, '')
+    if (/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) {
+      return 'image/svg+xml'
+    }
+  } catch {
+    // ignore
   }
   return null
 }

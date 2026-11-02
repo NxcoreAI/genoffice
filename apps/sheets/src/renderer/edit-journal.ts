@@ -806,10 +806,12 @@ export function toSaveVisualAdds(journal: EditJournal): WorkbookVisualAdd[] {
       )
       const base64 = visual.mediaDataUrl?.split(',')[1]
       if (!mediaType || !base64) continue
+      // SVG 图片：mediaDataUrl 存的是 PNG 回退，svgDataUrl 是矢量本体，两份一起写。
+      const svgBase64 = visual.svgDataUrl?.split(',')[1]
       additions.push({
         sheetId: visual.sheetId,
         anchor: visual.anchor,
-        image: { mediaType, base64 },
+        image: { mediaType, base64, ...(svgBase64 ? { svgBase64 } : {}) },
       })
       continue
     }

@@ -468,6 +468,8 @@ const visualObjectSchema = z
     /// Renderer-only: preview bytes for images added this session (not yet in
     /// the package); the sidecar never emits this.
     mediaDataUrl: z.string().optional(),
+    /// Renderer-only: SVG 原图（插入 SVG 时 mediaDataUrl 是它的 PNG 回退）。
+    svgDataUrl: z.string().optional(),
     name: z.string().optional(),
     shapeType: z.string().optional(),
     /// a:custGeom pathLst as one SVG path string in its own path coordinate
@@ -1505,9 +1507,12 @@ export const workbookVisualAddSchema = z
       .optional(),
     image: z
       .object({
+        /// 位图回退（SVG 图片也写一份 PNG 回退：老版本 Excel / 预览 / PDF 导出只读它）。
         mediaType: z.enum(['image/png', 'image/jpeg', 'image/gif']),
         /// ~20MB decoded
         base64: z.string().min(1).max(28_000_000),
+        /// 可选 SVG 本体，与 base64 一起构成 svgBlip + 回退两份 media。
+        svgBase64: z.string().min(1).max(28_000_000).optional(),
       })
       .strict()
       .optional(),
@@ -1989,7 +1994,8 @@ export const localImageRequestSchema = z
 
 export const localImageResultSchema = z
   .object({
-    mediaType: z.enum(['image/png', 'image/jpeg', 'image/gif']),
+    /// SVG 原图：插入时会先光栅化成 PNG 回退，再连矢量本体一起写入。
+    mediaType: z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml']),
     /// ~20MB decoded, mirroring the picker-based insert limit.
     base64: z.string().min(1).max(28_000_000),
   })

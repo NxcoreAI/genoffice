@@ -201,6 +201,41 @@ describe('visual additions: pictures', () => {
     expect(drawingRels).toContain('Target="../media/image1.png"')
   })
 
+  it('writes the SVG body plus a PNG fallback and wires svgBlip', async () => {
+    const SVG_BASE64 = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
+      'utf8',
+    ).toString('base64')
+    const plan = await planWith([
+      {
+        sheetName: 'Data',
+        anchor: ANCHOR,
+        // 位图回退 + 矢量本体：Excel 的 svg 图片必须两份都写。
+        image: { mediaType: 'image/png', base64: PNG_BASE64, svgBase64: SVG_BASE64 },
+      },
+    ])
+
+    expect(plan.addedBinary.get('xl/media/image1.png')).toBeDefined()
+    const svgPath = [...plan.addedBinary.keys()].find((path) => path.endsWith('.svg'))
+    expect(svgPath).toBeDefined()
+    expect(Buffer.from(plan.addedBinary.get(svgPath!)!).toString('utf8')).toContain('<svg')
+
+    const contentTypes = plan.replaced.get('[Content_Types].xml')
+    expect(contentTypes).toContain('Extension="svg"')
+    expect(contentTypes).toContain('ContentType="image/svg+xml"')
+
+    const drawingXml = plan.added.get('xl/drawings/drawing1.xml')
+    // 位图回退是主 blip，矢量挂在 extLst 的 svgBlip 上
+    expect(drawingXml).toContain('<a:blip')
+    expect(drawingXml).toContain('{96DAC541-7B7A-43D3-8B79-37D633B846F1}')
+    expect(drawingXml).toContain('asvg:svgBlip')
+    expect(drawingXml).toContain('r:embed="rId2"')
+
+    const drawingRels = plan.added.get('xl/drawings/_rels/drawing1.xml.rels')
+    expect(drawingRels).toContain('Target="../media/image1.png"')
+    expect(drawingRels).toContain(`Target="../media/${svgPath!.split('/').pop()!}"`)
+  })
+
   it('does not duplicate an existing Default extension declaration', async () => {
     const plan = await planWith([
       { sheetName: 'Data', anchor: ANCHOR, image: { mediaType: 'image/png', base64: PNG_BASE64 } },

@@ -165,7 +165,7 @@ const tMain = createI18n({
     errImgAbsPath: '图片路径必须是绝对路径。',
     errImgNotFound: '找不到图片文件: {path}',
     errImgTooLarge20: '图片超过 20MB,不支持插入。',
-    errImgBadType: '该文件不是 PNG/JPEG/GIF 图片。',
+    errImgBadType: '该文件不是 PNG/JPEG/GIF/SVG 图片。',
     errDiskChanged: '工作簿在打开后被磁盘上的改动覆盖——请改用另存为。',
     autosaveFoundTitle: '发现自动恢复版本',
     autosaveFoundBody:
@@ -221,7 +221,7 @@ const tMain = createI18n({
     errImgAbsPath: 'Image path must be absolute.',
     errImgNotFound: 'Image file not found: {path}',
     errImgTooLarge20: 'Image exceeds 20MB and cannot be inserted.',
-    errImgBadType: 'The file is not a PNG/JPEG/GIF image.',
+    errImgBadType: 'The file is not a PNG/JPEG/GIF/SVG image.',
     errDiskChanged: 'The workbook changed on disk after it was opened — use Save As instead.',
     autosaveFoundTitle: 'Recovered version found',
     autosaveFoundBody:
@@ -2522,7 +2522,9 @@ export function registerSheetsIpc(): void {
     return workbookMediaResultSchema.parse(result)
   })
 
-  function sniffImageType(bytes: Buffer): 'image/png' | 'image/jpeg' | 'image/gif' | null {
+  function sniffImageType(
+    bytes: Buffer,
+  ): 'image/png' | 'image/jpeg' | 'image/gif' | 'image/svg+xml' | null {
     if (
       bytes.length >= 8 &&
       bytes[0] === 0x89 &&
@@ -2535,6 +2537,11 @@ export function registerSheetsIpc(): void {
       return 'image/jpeg'
     }
     if (bytes.length >= 6 && bytes.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif'
+    // SVG 是 XML 文本、没有魔数：看开头有没有 <svg（允许 xml 声明/BOM/注释在前）。
+    const head = bytes.subarray(0, 4096).toString('utf8').replace(/^\uFEFF/, '')
+    if (/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) {
+      return 'image/svg+xml'
+    }
     return null
   }
 
