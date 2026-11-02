@@ -471,6 +471,10 @@ export const WORKBOOK_TOOLS: AgentToolDef[] = [
       'add_conditional_format/clear_conditional_formats/set_data_validation/set_note/' +
       'remove_duplicates/text_to_columns/consolidate/subtotal/create_names_from_selection/' +
       'add_defined_name/delete_defined_name). ' +
+      'Output budget: emit at most ~30 operations per call — a single call whose JSON runs to thousands of ' +
+      'tokens can be truncated by the model output limit and the whole batch is lost. Split a big reformat ' +
+      'into several propose_operations calls (each one applied immediately), and verify with one read_range / ' +
+      'aggregate_range sample instead of re-reading every cell you touched. ' +
       'Limits: structural operations (row/column insert-delete, sheet add/delete/duplicate/move/hide, remove_duplicates, subtotal) cannot share a batch with other classes; at most 2000 expanded cell changes — ' +
       'except the range-level bulk ops fill_range / copy_range / convert_to_values / clear_range / find_replace / format_range, which handle up to 200,000 cells in one op ' +
       '(use fill_range to fill a formula or pattern down a whole column instead of huge set_range batches, ' +
