@@ -115,6 +115,8 @@ export async function handleSave(
   } catch (error: unknown) {
     const failed = error instanceof Error ? error.message : t('appFilterSnapshotFailed')
     ctx.setMessage(failed)
+    // 静默保存没有 toast：这条日志是它唯一的痕迹（宿主 agent 通道走静默保存）。
+    console.error('[sheets] save failed (filter snapshot)', { mode, quiet, message: failed })
     if (mode !== 'recovery' && !quiet) showToast(failed, 'error')
     return
   }
@@ -293,6 +295,7 @@ export async function handleSave(
     const message = stripIpcErrorWrapper(error instanceof Error ? error.message : '')
     const failed = message || t('appSaveFailed')
     ctx.setMessage(failed)
+    console.error('[sheets] save failed (staging)', { mode, quiet, message: failed })
     if (!quiet) showToast(failed, 'error')
     return
   }
@@ -475,6 +478,8 @@ export async function handleSave(
     const message = stripIpcErrorWrapper(error instanceof Error ? error.message : '')
     const failed = localizeSaveError(message) ?? (message || t('appSaveFailed'))
     ctx.setMessage(failed)
+    // 未匹配本地化的原文也要留下来：这里是排查"为什么没落盘"的第一现场。
+    console.error('[sheets] save failed', { mode, quiet, message, localized: failed !== message })
     if (!quiet) showToast(failed, 'error')
   }
 }
@@ -490,6 +495,9 @@ export function stripIpcErrorWrapper(message: string): string {
 /// stable substring; unmatched messages surface verbatim (English) as before.
 const SAVE_ERROR_PATTERNS = [
   ['cannot shift here', 'appStructuralShiftBlocked'],
+  // 删行/删列时公式引用了被删区域：结构操作已记进日志，写盘被 gateway 拒绝。
+  // 文案必须告诉用户「撤销这次改动再保存」，否则他会一直点保存。
+  ['A formula references the deleted range', 'appStructuralShiftBlocked'],
   ['extended (x14) data validation', 'appSaveErrX14Dv'],
   ['Multi-select list rules', 'appSaveErrMultiSelectList'],
   ['extended conditional formatting (x14)', 'appSaveErrX14Cf'],

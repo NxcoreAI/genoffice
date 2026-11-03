@@ -526,7 +526,13 @@ export async function saveDocx(
       '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>' +
       '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
     return image.wrap
-      ? applyImageWrap(xml, image.wrap, image.posOffsetEmu, marginAlign, image.zOrder)
+      ? applyImageWrap(
+          xml,
+          image.wrap,
+          image.posOffsetEmu,
+          image.posAlign ?? marginAlign,
+          image.zOrder,
+        )
       : xml
   }
 

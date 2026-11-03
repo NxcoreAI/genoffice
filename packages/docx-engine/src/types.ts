@@ -944,6 +944,12 @@ export interface NewImage {
    */
   posOffsetEmu?: { x: number; y: number; relativeTo?: 'page' }
   /**
+   * preset anchor alignment (only with `wrap`): written as `<wp:align>` against
+   * the margin box — Word's Position ▸ 9-cell presets for a floating picture.
+   * Ignored when `posOffsetEmu` is set (numeric offsets win).
+   */
+  posAlign?: { h: 'left' | 'center' | 'right'; v: 'top' | 'center' | 'bottom' }
+  /**
    * stacking rank among anchored drawings (only with `wrap`): written as
    * relativeHeight base + zOrder, so overlapping behindDoc anchors keep a
    * deterministic paint order (higher = in front). Absent = base value.

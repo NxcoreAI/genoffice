@@ -134,8 +134,10 @@ export function LayoutTab({
   const isFloatingBox =
     Array.isArray(protAttrs?.textboxes) && (protAttrs.textboxes as unknown[]).length > 0
   const canWrap = hasDoc && (isImage || isFloatingBox)
-  // position presets go through imagePatchOf (original-document images only); newly inserted objects work after saving
-  const canPosition = hasDoc && isImage && protAttrs?.docxIndex != null
+  // Position presets work for any selected picture: document images patch their
+  // anchor, newly inserted ones carry imagePosH/V into the rebuilt drawing
+  // (NewImage.posAlign → <wp:align>).
+  const canPosition = hasDoc && (isImage || isFloatingBox)
   const currentWrap = (protAttrs?.imageWrap as string | null) ?? null
 
   const applyWrap = (value: string | null) => {

@@ -538,7 +538,7 @@ export function insertAiImageVisual(
   runtime: UniverRuntime,
   state: LazyWorkbookState,
   op: AddImageOperation,
-  image: { dataUrl: string; mediaType: string; width: number; height: number },
+  image: { dataUrl: string; mediaType: string; width: number; height: number; svgDataUrl?: string | undefined },
 ): void {
   const workbook = runtime.univerAPI.getActiveWorkbook()
   if (!workbook?.getSheetBySheetId(op.sheetId)) throw new Error(`Unknown sheet: ${op.sheetId}`)
@@ -564,6 +564,7 @@ export function insertAiImageVisual(
     },
     mediaType: image.mediaType,
     mediaDataUrl: image.dataUrl,
+    ...(image.svgDataUrl === undefined ? {} : { svgDataUrl: image.svgDataUrl }),
     name: op.path.split('/').pop() ?? 'image',
   }
   pushVisualAddUndo(ctx, runtime, state, visual)

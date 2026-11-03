@@ -97,6 +97,35 @@ describe('inserting new images', () => {
     expect(last.imageDataUrl).toMatch(/^data:image\/png;base64,/)
   })
 
+  it('writes the 9-cell position preset for a newly inserted picture', async () => {
+    const bytes = await buildKitchenSinkDocx()
+    const doc = await parseDocx(bytes)
+    const visible = doc.blocks.filter((b) => !b.hidden).map((b) => b.docxIndex!)
+    const saved = await saveDocx(doc, [
+      ...originals(visible),
+      {
+        kind: 'image',
+        image: {
+          base64: TINY_PNG_BASE64,
+          mime: 'image/png',
+          widthPx: 120,
+          heightPx: 80,
+          wrap: 'square-left',
+          posAlign: { h: 'left', v: 'center' },
+        },
+      },
+    ])
+    const xml = await docXmlOf(saved)
+    expect(xml).toContain('<wp:positionH relativeFrom="margin"><wp:align>left</wp:align></wp:positionH>')
+    expect(xml).toContain('<wp:positionV relativeFrom="margin"><wp:align>center</wp:align></wp:positionV>')
+    expect(xml).toContain('<wp:wrapSquare wrapText="bothSides"/>')
+    const reparsed = await parseDocx(saved)
+    const last = reparsed.blocks.filter((b) => !b.hidden).at(-1)!
+    expect(last.type).toBe('image')
+    expect(last.imageWrap).toBe('square-left')
+    expect(last.imagePosH).toBe('left')
+  })
+
   it('records rotation bounding-box overflow in effectExtent for new images', async () => {
     const bytes = await buildKitchenSinkDocx()
     const doc = await parseDocx(bytes)

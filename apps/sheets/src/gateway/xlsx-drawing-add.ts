@@ -70,8 +70,11 @@ export interface ShapeAdd {
 }
 
 export interface ImageAdd {
+  /// 位图回退。Excel 的 SVG 图片也写一份 PNG：老版本 Excel / 预览 / PDF 导出只认它。
   readonly mediaType: 'image/png' | 'image/jpeg' | 'image/gif'
   readonly base64: string
+  /// 可选 SVG 本体（矢量原图），与 base64 一起构成 svgBlip + 回退。
+  readonly svgBase64?: string | undefined
 }
 
 export interface VisualAddition {
@@ -145,8 +148,22 @@ export async function applyVisualAdditions(
         relativeTarget(drawing.path, mediaPath),
       )
       touchedEntries.add(relsPathFor(drawing.path))
+      // SVG：矢量本体单独一份 media + 一条关系，drawing 里用 asvg:svgBlip 指过去。
+      let svgRelId: string | undefined
+      if (image.svgBase64) {
+        const svgPath = await allocatePartPath(pkg, 'xl/media/image', '.svg')
+        pkg.addBinary(svgPath, Uint8Array.from(Buffer.from(image.svgBase64, 'base64')))
+        touchedEntries.add(svgPath)
+        await registerContentTypeDefault(pkg, 'svg', 'image/svg+xml', touchedEntries)
+        svgRelId = await appendRelationship(
+          pkg,
+          relsPathFor(drawing.path),
+          IMAGE_REL_TYPE,
+          relativeTarget(drawing.path, svgPath),
+        )
+      }
       await appendAnchor(pkg, drawing.path, addition.anchor, (shapeId) =>
-        pictureXml(shapeId, imageRelId),
+        pictureXml(shapeId, imageRelId, svgRelId),
       )
     } else {
       throw new VisualAddError('A visual addition carries exactly one of chart, shape, or image.')
@@ -287,7 +304,21 @@ function chartFrameXml(shapeId: number, chartRelId: string): string {
   )
 }
 
-function pictureXml(shapeId: number, imageRelId: string): string {
+/// MS-ODRAWXML svgBlip extension URI：Excel 用它把矢量本体挂在位图回退上。
+const SVG_BLIP_EXT_URI = '{96DAC541-7B7A-43D3-8B79-37D633B846F1}'
+const SVG_BLIP_NS = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main'
+
+function pictureXml(shapeId: number, imageRelId: string, svgRelId?: string): string {
+  const blip = svgRelId
+    ? '<a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' +
+      ` r:embed="${escapeXmlAttribute(imageRelId)}">` +
+      `<a:extLst><a:ext uri="${SVG_BLIP_EXT_URI}">` +
+      `<asvg:svgBlip xmlns:asvg="${SVG_BLIP_NS}"` +
+      ` r:embed="${escapeXmlAttribute(svgRelId)}"/>` +
+      '</a:ext></a:extLst>' +
+      '</a:blip>'
+    : '<a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' +
+      ` r:embed="${escapeXmlAttribute(imageRelId)}"/>`
   return (
     '<xdr:pic>' +
     '<xdr:nvPicPr>' +
@@ -295,8 +326,7 @@ function pictureXml(shapeId: number, imageRelId: string): string {
     '<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>' +
     '</xdr:nvPicPr>' +
     '<xdr:blipFill>' +
-    '<a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' +
-    ` r:embed="${escapeXmlAttribute(imageRelId)}"/>` +
+    blip +
     '<a:stretch><a:fillRect/></a:stretch>' +
     '</xdr:blipFill>' +
     '<xdr:spPr>' +

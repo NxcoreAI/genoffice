@@ -223,6 +223,13 @@ export function removeInks(ctx: ReviewContext, ids: string[]): void {
   ctx.dirtyRef.current = true
 }
 
+/** 局部擦除：把拆分后的整份标注列表写回（一笔被橡皮擦断后变成多段）。 */
+export function replaceInks(ctx: ReviewContext, next: InkAnnotation[]): void {
+  ctx.setInkAnnotations(next)
+  ctx.setInksDirty(true)
+  ctx.dirtyRef.current = true
+}
+
 export function clearInks(ctx: ReviewContext): void {
   ctx.setInkAnnotations([])
   ctx.setInksDirty(true)
