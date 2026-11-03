@@ -11,6 +11,12 @@ interface Props {
   range: string
   onSend: (instruction: string) => void
   onDismiss: () => void
+  /**
+   * Host-driven mode (EverRoom embed): when provided, the popover also offers
+   * "add to queue" so several selection notes can be sent to the host agent as
+   * one batch.
+   */
+  onAddToQueue?: (instruction: string) => void
 }
 
 const WIDTH = 340
@@ -20,7 +26,7 @@ const EST_HEIGHT = 166
 const MAX_INSTRUCTION = 2000
 
 /** Grid-selection Ask AI trigger and its send-now popover. */
-export function AiSelectionAsk({ anchor, range, onSend, onDismiss }: Props): React.JSX.Element {
+export function AiSelectionAsk({ anchor, range, onSend, onDismiss, onAddToQueue }: Props): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
@@ -158,6 +164,20 @@ export function AiSelectionAsk({ anchor, range, onSend, onDismiss }: Props): Rea
         <button className="ai-ask-cancel" onClick={onDismiss}>
           {t('aiCancel')}
         </button>
+        {onAddToQueue ? (
+          <button
+            className="ai-ask-cancel"
+            disabled={!canSubmit}
+            data-tip={t('aiAskQueue')}
+            onClick={() => {
+              if (!canSubmit) return
+              onAddToQueue(text.trim())
+              onDismiss()
+            }}
+          >
+            {t('aiAskQueue')}
+          </button>
+        ) : null}
         <button className="ai-ask-confirm" disabled={!canSubmit} onClick={submit}>
           {t('aiSend')}
         </button>

@@ -4889,6 +4889,30 @@ export function App(): React.JSX.Element {
     }
   })()
 
+  /**
+   * EverRoom embed: selection notes go to the host agent. The host addresses
+   * sheets by sheetId (not name), so the payload carries the active sheet id
+   * plus the A1 range and the sheet name for the human-readable message.
+   */
+  const handleAiSelectionAskHost = (op: { instruction: string; range: string; mode: 'now' | 'queue' }) => {
+    const active = univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    void window.desktopApi
+      ?.agentAsk?.({
+        instruction: op.instruction,
+        range: op.range,
+        ...(active?.getSheetId() ? { sheetId: active.getSheetId() } : {}),
+        ...(active?.getSheetName() ? { sheetName: active.getSheetName() } : {}),
+        ...(op.mode === 'queue' ? { mode: 'queue' as const } : {}),
+      })
+      .then((result) => {
+        if (!result || result.ok) return
+        // Prototype copy: the raw host-side code (NO_HOST_AGENT / 未找到实例 …)
+        // is more actionable than a generic line while the entry is new.
+        setMessage(String(result.error))
+      })
+      .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))
+  }
+
   const aiScopeChip = resolveScopeChip(aiRunScope, aiScope, aiScopeDismissed)
 
   return (
@@ -4954,6 +4978,7 @@ export function App(): React.JSX.Element {
         aiScopeLocked={aiScopeChip.locked}
         aiSelectionAskAnchor={aiSelectionAskAnchor}
         onAiSelectionAskDismiss={() => setAiSelectionAskAnchor(null)}
+        onAiSelectionAskHost={handleAiSelectionAskHost}
         onAiScopeDismiss={() => {
           setAiScopeDismissed(true)
           setAiSelectionAskAnchor(null)

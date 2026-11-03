@@ -447,6 +447,8 @@ export interface DocsAgentAskOp {
   excerpt?: string
   /** ProseMirror node name of the first selected block (diagnostics / table hints). */
   blockType?: string
+  /** 'queue' = add to the host's batch instead of sending right away (default 'now'). */
+  mode?: 'now' | 'queue'
 }
 
 export type DocsAgentAskResult = { ok: true } | { ok: false; error: string }

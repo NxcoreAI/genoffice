@@ -45,6 +45,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc 停止',
     aiHintIdleTitle: 'Enter 发送 · Shift+Enter 换行',
     aiSend: '发送',
+    aiAskQueue: '加入队列',
     aiStop: '停止',
     aiInstructionAria: 'AI 指令',
     aiFileTooltip: 'SHA-256 {sha}\n保存只重写被编辑的条目，其余内容原样保留。',
@@ -145,6 +146,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc to stop',
     aiHintIdleTitle: 'Enter to send · Shift+Enter for newline',
     aiSend: 'Send',
+    aiAskQueue: 'Add to queue',
     aiStop: 'Stop',
     aiInstructionAria: 'AI instruction',
     aiFileTooltip:
@@ -249,6 +251,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc で停止',
     aiHintIdleTitle: 'Enter で送信 · Shift+Enter で改行',
     aiSend: '送信',
+    aiAskQueue: 'キューに追加',
     aiStop: '停止',
     aiInstructionAria: 'AI への指示',
     aiFileTooltip:
@@ -353,6 +356,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc로 중지',
     aiHintIdleTitle: 'Enter로 보내기 · Shift+Enter로 줄 바꿈',
     aiSend: '보내기',
+    aiAskQueue: '대기열에 추가',
     aiStop: '중지',
     aiInstructionAria: 'AI 지시',
     aiFileTooltip: 'SHA-256 {sha}\n저장 시 편집된 항목만 다시 쓰고 나머지는 그대로 유지합니다.',
@@ -458,6 +462,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Échap pour arrêter',
     aiHintIdleTitle: 'Entrée pour envoyer · Maj+Entrée pour un saut de ligne',
     aiSend: 'Envoyer',
+    aiAskQueue: 'Ajouter à la file',
     aiStop: 'Arrêter',
     aiInstructionAria: 'Instruction IA',
     aiFileTooltip:
@@ -564,6 +569,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc zum Stoppen',
     aiHintIdleTitle: 'Eingabetaste zum Senden · Umschalt+Eingabetaste für Zeilenumbruch',
     aiSend: 'Senden',
+    aiAskQueue: 'Zur Warteschlange hinzufügen',
     aiStop: 'Stopp',
     aiInstructionAria: 'KI-Anweisung',
     aiFileTooltip:
@@ -670,6 +676,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc para detener',
     aiHintIdleTitle: 'Entrar para enviar · Mayús+Entrar para nueva línea',
     aiSend: 'Enviar',
+    aiAskQueue: 'Añadir a la cola',
     aiStop: 'Detener',
     aiInstructionAria: 'Instrucción de IA',
     aiFileTooltip:
@@ -774,6 +781,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'กด Esc เพื่อหยุด',
     aiHintIdleTitle: 'Enter เพื่อส่ง · Shift+Enter เพื่อขึ้นบรรทัดใหม่',
     aiSend: 'ส่ง',
+    aiAskQueue: 'เพิ่มในคิว',
     aiStop: 'หยุด',
     aiInstructionAria: 'คำสั่ง AI',
     aiFileTooltip:
@@ -879,6 +887,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc untuk berhenti',
     aiHintIdleTitle: 'Enter untuk mengirim · Shift+Enter untuk baris baru',
     aiSend: 'Kirim',
+    aiAskQueue: 'Tambahkan ke antrean',
     aiStop: 'Hentikan',
     aiInstructionAria: 'Instruksi AI',
     aiFileTooltip:
@@ -984,6 +993,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc — остановить',
     aiHintIdleTitle: 'Enter — отправить · Shift+Enter — новая строка',
     aiSend: 'Отправить',
+    aiAskQueue: 'Добавить в очередь',
     aiStop: 'Остановить',
     aiInstructionAria: 'Инструкция для ИИ',
     aiFileTooltip:
@@ -1088,6 +1098,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc للإيقاف',
     aiHintIdleTitle: 'Enter للإرسال · Shift+Enter لسطر جديد',
     aiSend: 'إرسال',
+    aiAskQueue: 'إضافة إلى قائمة الانتظار',
     aiStop: 'إيقاف',
     aiInstructionAria: 'تعليمات الذكاء الاصطناعي',
     aiFileTooltip:
@@ -1193,6 +1204,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc para parar',
     aiHintIdleTitle: 'Enter para enviar · Shift+Enter para nova linha',
     aiSend: 'Enviar',
+    aiAskQueue: 'Adicionar à fila',
     aiStop: 'Parar',
     aiInstructionAria: 'Instrução de IA',
     aiFileTooltip:
@@ -1299,6 +1311,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc per interrompere',
     aiHintIdleTitle: 'Invio per inviare · Maiusc+Invio per andare a capo',
     aiSend: 'Invia',
+    aiAskQueue: 'Aggiungi alla coda',
     aiStop: 'Interrompi',
     aiInstructionAria: "Istruzione per l'IA",
     aiFileTooltip:
@@ -1404,6 +1417,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc, aby zatrzymać',
     aiHintIdleTitle: 'Enter, aby wysłać · Shift+Enter — nowy wiersz',
     aiSend: 'Wyślij',
+    aiAskQueue: 'Dodaj do kolejki',
     aiStop: 'Zatrzymaj',
     aiInstructionAria: 'Instrukcja dla AI',
     aiFileTooltip:
@@ -1510,6 +1524,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc om te stoppen',
     aiHintIdleTitle: 'Enter om te verzenden · Shift+Enter voor een nieuwe regel',
     aiSend: 'Verzenden',
+    aiAskQueue: 'Toevoegen aan wachtrij',
     aiStop: 'Stoppen',
     aiInstructionAria: 'AI-instructie',
     aiFileTooltip:
@@ -1616,6 +1631,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc untuk henti',
     aiHintIdleTitle: 'Enter untuk hantar · Shift+Enter untuk baris baharu',
     aiSend: 'Hantar',
+    aiAskQueue: 'Tambah ke baris gilir',
     aiStop: 'Henti',
     aiInstructionAria: 'Arahan AI',
     aiFileTooltip:
@@ -1720,6 +1736,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc לעצירה',
     aiHintIdleTitle: 'Enter לשליחה · Shift+Enter לשורה חדשה',
     aiSend: 'שליחה',
+    aiAskQueue: 'הוסף לתור',
     aiStop: 'עצירה',
     aiInstructionAria: 'הוראה ל-AI',
     aiFileTooltip: 'SHA-256 {sha}\nבשמירה נכתבים מחדש רק הפריטים שנערכו; כל השאר נשמר כפי שהוא.',
@@ -1821,6 +1838,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'रोकने के लिए Esc',
     aiHintIdleTitle: 'भेजने के लिए Enter · नई पंक्ति के लिए Shift+Enter',
     aiSend: 'भेजें',
+    aiAskQueue: 'कतार में जोड़ें',
     aiStop: 'रोकें',
     aiInstructionAria: 'AI निर्देश',
     aiFileTooltip:
@@ -1925,6 +1943,7 @@ export const aiStrings = defineStrings({
     aiHintBusy: 'Esc 停止',
     aiHintIdleTitle: 'Enter 傳送 · Shift+Enter 換行',
     aiSend: '傳送',
+    aiAskQueue: 'कतार में जोड़ें',
     aiStop: '停止',
     aiInstructionAria: 'AI 指令',
     aiFileTooltip: 'SHA-256 {sha}\n儲存只重寫被編輯的項目，其餘內容原樣保留。',

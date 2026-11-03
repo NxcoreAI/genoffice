@@ -45,6 +45,8 @@ interface Props {
    * the host agent immediately and an outside click discards it.
    */
   hostMode?: boolean
+  /** Host mode only: collect the note into the host's batch instead of sending now. */
+  onHostQueue?: (text: string) => void
 }
 
 type OpenState = { mode: 'new' } | { mode: 'edit'; qid: string }
@@ -106,6 +108,7 @@ export function AiAskPopover({
   onQueueUpdate,
   onQueueRemove,
   hostMode = false,
+  onHostQueue,
 }: Props): React.JSX.Element | null {
   const { t } = useI18n()
   const [trigger, setTrigger] = useState<{ left: number; top: number } | null>(null)
@@ -377,16 +380,30 @@ export function AiAskPopover({
               </button>
             </>
           ) : hostMode ? (
-            <button
-              className="ai-ask-confirm"
-              disabled={!canSubmit}
-              onClick={() => {
-                onSendNow(text.trim())
-                close()
-              }}
-            >
-              {t('aiAskSendNow')}
-            </button>
+            <>
+              {onHostQueue ? (
+                <button
+                  className="ai-ask-cancel"
+                  disabled={!canSubmit}
+                  onClick={() => {
+                    onHostQueue(text.trim())
+                    close()
+                  }}
+                >
+                  {t('aiAskQueue')}
+                </button>
+              ) : null}
+              <button
+                className="ai-ask-confirm"
+                disabled={!canSubmit}
+                onClick={() => {
+                  onSendNow(text.trim())
+                  close()
+                }}
+              >
+                {t('aiAskSendNow')}
+              </button>
+            </>
           ) : (
             <>
               <button

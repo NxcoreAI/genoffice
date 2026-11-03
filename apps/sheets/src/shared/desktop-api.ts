@@ -2577,7 +2577,31 @@ export interface DesktopApi {
   readAttachmentImage(path: string): Promise<AttachmentImageResult>
   /// Absolute path of a File dropped onto the window (Electron webUtils)
   getPathForFile(file: File): string
+  /**
+   * EverRoom embed only: the grid-selection "ask" popover relays the
+   * instruction to the host agent (the embed build has no AI backend of its
+   * own). The host resolves workbook/workspace from this view's webContents id,
+   * so no ids beyond the selection travel from the renderer.
+   */
+  agentAsk(op: SheetsAgentAskOp): Promise<SheetsAgentAskResult>
 }
+
+/** How the host should treat the ask: send it now, or add it to a batch. */
+export type SheetsAgentAskMode = 'now' | 'queue'
+
+/** Selection-scoped instruction relayed from the sheets embed to the host agent. */
+export interface SheetsAgentAskOp {
+  instruction: string
+  /** Active worksheet id — sheets_agent_edit addresses sheets by id, not by name. */
+  sheetId?: string
+  /** Active worksheet name (display + cross-check only). */
+  sheetName?: string
+  /** A1 range of the selection (empty = the active cell). */
+  range?: string
+  mode?: SheetsAgentAskMode
+}
+
+export type SheetsAgentAskResult = { ok: true } | { ok: false; error: string }
 
 export type MenuAction = 'open' | 'save' | 'save-as' | 'export-pdf' | 'export-csv' | 'undo' | 'redo'
 

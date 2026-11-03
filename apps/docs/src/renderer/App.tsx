@@ -5624,7 +5624,7 @@ export function App() {
    * address blocks by index, never by page/line) plus a text excerpt the agent
    * can cross-check after its own re-read.
    */
-  const submitHostAgentAsk = (instruction: string) => {
+  const submitHostAgentAsk = (instruction: string, mode: 'now' | 'queue' = 'now') => {
     const text = instruction.trim()
     if (!text || !editor) return
     const { from, to } = editor.state.selection
@@ -5643,6 +5643,7 @@ export function App() {
         kind: askSelectionKind(editor),
         ...(excerpt ? { excerpt } : {}),
         ...(firstBlock ? { blockType: firstBlock.type.name } : {}),
+        ...(mode === 'queue' ? { mode: 'queue' as const } : {}),
       })
       .then((result) => {
         if (result.ok) return
@@ -5838,7 +5839,8 @@ export function App() {
                 editor={editor}
                 queueFull
                 getItem={() => undefined}
-                onSendNow={submitHostAgentAsk}
+                onSendNow={(text) => submitHostAgentAsk(text, 'now')}
+                onHostQueue={(text) => submitHostAgentAsk(text, 'queue')}
                 onQueueAdd={() => undefined}
                 onQueueUpdate={() => undefined}
                 onQueueRemove={() => undefined}

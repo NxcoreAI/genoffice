@@ -89,6 +89,8 @@ import type {
   AttachmentImageResult,
   AttachmentMeta,
   AttachmentReadResult,
+  SheetsAgentAskOp,
+  SheetsAgentAskResult,
   WorkbookFile,
 } from '../shared/desktop-api'
 import {
@@ -1535,6 +1537,39 @@ function sanitizeAutoRenameBase(raw: string): string | null {
 }
 
 /** shell hook: a tab opened a workbook (dialog or queued path) — used for tab titles/dedupe */
+/**
+ * EverRoom embed only: the grid-selection "ask" popover relays the user's
+ * instruction here. The host resolves workbook/workspace from the calling
+ * view's webContents id and injects the request into its agent conversation.
+ */
+let sheetsAgentAskHook:
+  | ((wcId: number, op: SheetsAgentAskOp) => Promise<SheetsAgentAskResult>)
+  | null = null
+
+export function setSheetsAgentAskHook(
+  hook: ((wcId: number, op: SheetsAgentAskOp) => Promise<SheetsAgentAskResult>) | null,
+): void {
+  sheetsAgentAskHook = hook
+}
+
+/** Normalize an untrusted renderer payload into a bounded op. */
+function normalizeSheetsAgentAskOp(raw: unknown): SheetsAgentAskOp | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Record<string, unknown>
+  const instruction = typeof value.instruction === 'string' ? value.instruction.trim() : ''
+  if (!instruction) return null
+  const sheetId = typeof value.sheetId === 'string' ? value.sheetId.trim().slice(0, 64) : ''
+  const sheetName = typeof value.sheetName === 'string' ? value.sheetName.trim().slice(0, 120) : ''
+  const range = typeof value.range === 'string' ? value.range.trim().slice(0, 64) : ''
+  return {
+    instruction: instruction.slice(0, 2000),
+    ...(sheetId ? { sheetId } : {}),
+    ...(sheetName ? { sheetName } : {}),
+    ...(range ? { range } : {}),
+    ...(value.mode === 'queue' ? { mode: 'queue' as const } : {}),
+  }
+}
+
 let workbookOpenedHook: ((wc: WebContents, path: string) => void) | null = null
 export function setSheetsWorkbookOpenedHook(
   fn: ((wc: WebContents, path: string) => void) | null,
@@ -2296,6 +2331,19 @@ export function registerSheetsIpc(): void {
 
   // Host agent executor replies (EverRoom embed; harmless in standalone)
   registerSheetsAgentIpc()
+
+  // Grid-selection「AI 修改」→ 宿主 Agent（宿主按 webContents id 反查文件与空间）。
+  ipcMain.handle('sheets:agent-ask', async (event, raw?: unknown): Promise<SheetsAgentAskResult> => {
+    const op = normalizeSheetsAgentAskOp(raw)
+    if (!op) return { ok: false, error: 'EMPTY_INSTRUCTION' }
+    if (!sheetsAgentAskHook) return { ok: false, error: 'NO_HOST_AGENT' }
+    return sheetsAgentAskHook(event.sender.id, op).catch(
+      (error: unknown): SheetsAgentAskResult => ({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  })
 
   // Registered here (not in registerSheetsAiIpc, skipped in shell mode):
   // slides' ai:generate-image only exists once a slides view opens, so sheets

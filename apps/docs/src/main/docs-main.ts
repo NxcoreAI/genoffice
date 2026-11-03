@@ -2922,6 +2922,7 @@ function normalizeAgentAskOp(raw: unknown): DocsAgentAskOp | null {
     kind,
     ...(excerpt ? { excerpt } : {}),
     ...(blockType ? { blockType } : {}),
+    ...(value.mode === 'queue' ? { mode: 'queue' as const } : {}),
   }
 }
 

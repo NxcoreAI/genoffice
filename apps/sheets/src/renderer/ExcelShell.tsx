@@ -186,6 +186,13 @@ interface ExcelShellProps {
   /// Drag endpoint and viewport bounds used to place the localized trigger.
   readonly aiSelectionAskAnchor: SelectionAskAnchor | null
   readonly onAiSelectionAskDismiss: () => void
+  /// EverRoom embed: hand the selection note to the host agent instead of the
+  /// (compiled-out) in-app copilot. mode 'queue' = collect into a batch.
+  readonly onAiSelectionAskHost?: (op: {
+    instruction: string
+    range: string
+    mode: 'now' | 'queue'
+  }) => void
   readonly onAiScopeDismiss: () => void
   /// Citation link in an AI answer: jumps the grid to the cited cell/range.
   readonly onAiCitation: (href: string) => void
@@ -343,6 +350,7 @@ export function ExcelShell({
   aiScopeLocked,
   aiSelectionAskAnchor,
   onAiSelectionAskDismiss,
+  onAiSelectionAskHost,
   onAiScopeDismiss,
   onAiCitation,
   onCommand,
@@ -645,15 +653,26 @@ export function ExcelShell({
           <section className="workbook-area">
             <div id="univer-container" className="spreadsheet" />
           </section>
-          {!__GENOFFICE_EMBED_ONLY__ && aiSelectionAskAnchor && aiScopeRange && !aiBusy && (
+          {aiSelectionAskAnchor && aiScopeRange && (__GENOFFICE_EMBED_ONLY__ || !aiBusy) && (
             <AiSelectionAsk
               anchor={aiSelectionAskAnchor}
               range={aiScopeRange}
               onDismiss={onAiSelectionAskDismiss}
               onSend={(instruction) => {
+                // Embed builds have no copilot: the host agent owns the edit.
+                if (__GENOFFICE_EMBED_ONLY__) {
+                  onAiSelectionAskHost?.({ instruction, range: aiScopeRange, mode: 'now' })
+                  return
+                }
                 setIsCopilotOpen(true)
                 onSend(instruction)
               }}
+              {...(__GENOFFICE_EMBED_ONLY__ && onAiSelectionAskHost
+                ? {
+                    onAddToQueue: (instruction: string) =>
+                      onAiSelectionAskHost({ instruction, range: aiScopeRange, mode: 'queue' }),
+                  }
+                : {})}
             />
           )}
 

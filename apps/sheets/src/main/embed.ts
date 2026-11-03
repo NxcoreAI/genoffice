@@ -9,6 +9,7 @@ export {
   registerSheetsIpc,
   requestSheetsClose,
   setActiveSheetsWebContents,
+  setSheetsAgentAskHook,
   setSheetsFileSavedHook,
   setSheetsShellWindow,
   sheetsPendingEditCount,

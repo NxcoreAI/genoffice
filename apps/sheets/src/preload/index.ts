@@ -581,6 +581,7 @@ const desktopApi: DesktopApi = {
   getPathForFile(file) {
     return webUtils.getPathForFile(file)
   },
+  agentAsk: (op) => ipcRenderer.invoke('sheets:agent-ask', op),
 }
 
 function parseAttachmentAddResult(input: unknown): AttachmentAddResult {
