@@ -77,7 +77,7 @@ import { AnimationPane } from './components/AnimationPane'
 import { AnimPreviewOverlay } from './components/AnimatedSlide'
 import { EquationDialog, HeaderFooterDialog, LinkDialog } from './components/InsertDialogs'
 import { CutoutDialog } from './components/CutoutDialog'
-import type { WordArtPreset } from '@genoffice/ui'
+import { EditorModeBar, type WordArtPreset } from '@genoffice/ui'
 import type { ChartPresetDef, IconDef, SmartArtDef } from './insert-presets'
 import { GensparkMark, IconAiBeautify, IconAiFactCheck, IconAiImage } from './components/icons'
 import { ToastHost } from './components/toast'
@@ -406,6 +406,26 @@ export function App() {
   const [showAi, setShowAi] = useState(
     () => !everroomEmbed && localStorage.getItem('ai-slides-show-ai') !== '0',
   )
+  // Two-state operation panel: AI edit mode hides the ribbon and the status bar so
+  // the slide canvas fills the window (only the shared floating bar stays). The
+  // toggle that flips it is the first item of the ribbon tab row, so the state is
+  // persisted here next to the other UI prefs. Embed builds never read it: they
+  // have no ribbon and therefore no switch (same rule as `showAi`).
+  const [aiMode, setAiMode] = useState(
+    () => !everroomEmbed && localStorage.getItem('ai-slides-ai-mode') === '1',
+  )
+  /** Writes are explicit rather than an effect so an embed build's mount can never
+   *  clobber the standalone pref. Both the toggle and the bar's restore use these. */
+  const toggleAiMode = useCallback(() => {
+    setAiMode((v) => {
+      localStorage.setItem('ai-slides-ai-mode', v ? '0' : '1')
+      return !v
+    })
+  }, [])
+  const exitAiMode = useCallback(() => {
+    localStorage.setItem('ai-slides-ai-mode', '0')
+    setAiMode(false)
+  }, [])
   const [showFormat, setShowFormat] = useState(false)
   const [showBgFormat, setShowBgFormat] = useState(false)
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
@@ -2800,8 +2820,31 @@ export function App() {
   const _fileName = slide ? path?.split('/').pop() || t('appUntitledPresentation') : undefined
 
   return (
-    <div className="app">
+    <div className={aiMode ? 'app ai-mode' : 'app'}>
       <ToastHost />
+      {/* AI edit mode: ribbon and status bar are hidden, so the shared floating bar
+          is the only chrome left (restore / save / undo / redo / AI Beautify). */}
+      {aiMode && (
+        <EditorModeBar
+          labels={{
+            restore: t('editorModeNormalTip'),
+            save: t('ribbonSaveTip'),
+            undo: t('ribbonUndo'),
+            redo: t('ribbonRedo'),
+            ai: t('aiBeautifyBtn'),
+          }}
+          canSave={dirty}
+          canUndo={!!slide && (histState.canUndo || !!editing || !!editingCell)}
+          canRedo={!!slide && (histState.canRedo || !!editing || !!editingCell)}
+          showAi={!everroomEmbed}
+          aiDisabled={!slide || deckEmpty}
+          onRestore={exitAiMode}
+          onSave={() => void save()}
+          onUndo={() => void undo()}
+          onRedo={() => void redo()}
+          onAi={() => pushAiPreset(t('aiBeautifyPrompt'), true, undefined, undefined, true)}
+        />
+      )}
       {/* Read-only embed: the reading view is the whole UI — no editing ribbon */}
       {!embedReadonly && (
       <Ribbon
@@ -2813,6 +2856,8 @@ export function App() {
         editing={!!editing || !!editingCell}
         autoSave={autoSave}
         onAutoSaveChange={setAutoSave}
+        aiMode={aiMode}
+        onToggleAiMode={toggleAiMode}
         onOpen={() => void openDialog()}
         onSave={() => void save()}
         onUndo={() => void undo()}

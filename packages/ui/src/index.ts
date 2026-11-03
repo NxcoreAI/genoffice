@@ -35,3 +35,11 @@ export {
   type ShapeGalleryGroup,
   type ShapeGalleryShape,
 } from './shape-gallery'
+
+export {
+  EditorModeBar,
+  EditorModeToggle,
+  type EditorModeBarLabels,
+  type EditorModeBarProps,
+  type EditorModeToggleProps,
+} from './editor-mode'

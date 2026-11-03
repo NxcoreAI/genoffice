@@ -8866,3 +8866,14 @@ body.show-curtain::after {
   flex: 1;
   min-width: 0;
 }
+
+/* ---- AI edit mode (operation panel hidden, slide canvas remains) ----
+   Two-state panel: the front-of-panel toggle hides the ribbon and the status
+   bar, so the stage keeps the whole window. What is left is the canvas plus the
+   shared floating bar (restore / save / undo / redo / AI Beautify) — see
+   packages/ui/src/editor-mode.css. The thumbnail pane, format panes and the AI
+   dock stay visible: they are editing surfaces, not panel chrome. */
+.app.ai-mode .ribbon,
+.app.ai-mode .status-bar {
+  display: none !important;
+}

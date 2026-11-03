@@ -107,7 +107,7 @@ import {
 } from './color-runs'
 import type { CharStyle } from './color-runs'
 import { platformShortcuts } from '@genoffice/i18n'
-import { Dropdown, useDismissablePopover } from '@genoffice/ui'
+import { Dropdown, EditorModeBar, EditorModeToggle, useDismissablePopover } from '@genoffice/ui'
 import { useI18n } from './i18n/locale'
 import { useAutosave } from './useAutosave'
 import type {
@@ -341,6 +341,13 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('genoffice-pdf-show-ai', aiCollapsed ? '0' : '1')
   }, [aiCollapsed])
+  // Two-state operation panel: false = normal edit mode (full ribbon + status bar),
+  // true = AI edit mode (panel hidden, only the floating bar stays). Persisted like
+  // the AI dock flag above so the chosen mode survives a relaunch.
+  const [aiMode, setAiMode] = useState(() => localStorage.getItem('genoffice-pdf-ai-mode') === '1')
+  useEffect(() => {
+    localStorage.setItem('genoffice-pdf-ai-mode', aiMode ? '1' : '0')
+  }, [aiMode])
   /** One-shot prompt pushed by the ribbon AI buttons; the panel auto-runs it (docs preset pattern) */
   const [aiPreset, setAiPreset] = useState<{ text: string; nonce: number } | null>(null)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
@@ -5670,9 +5677,44 @@ export default function App() {
   )
 
   return (
-    <div className="app">
+    <div className={`app${aiMode ? ' ai-mode' : ''}`}>
+      {/* AI edit mode: the panel is collapsed, only save / undo / redo / AI 总结 stay */}
+      {aiMode && (
+        <EditorModeBar
+          labels={{
+            restore: t('editorModeNormalTip'),
+            save: t('save'),
+            undo: t('undo'),
+            redo: t('redo'),
+            ai: t('aiSummarizeBtn'),
+          }}
+          // Same conditions the QAT buttons use, so the bar never offers a dead action
+          canSave={dirty && saveState !== 'saving'}
+          canUndo={undoStack.length > 0}
+          canRedo={redoStack.length > 0}
+          // No host-agent channel in the EverRoom embed: the AI surface is absent there
+          showAi={!everroomEmbed}
+          // The ribbon AI 总结 button carries no disabled state, so neither does the bar
+          aiDisabled={false}
+          onRestore={() => setAiMode(false)}
+          onSave={() => void save()}
+          onUndo={undo}
+          onRedo={redo}
+          onAi={() =>
+            runAiPreset(t(aiSelection ? 'aiQuickSummarySelPrompt' : 'aiQuickSummaryPrompt'))
+          }
+        />
+      )}
       <div className="ribbon">
         <div className="ribbon-tabs">
+          {/* Panel head switch: normal edit mode ⇄ AI edit mode */}
+          <EditorModeToggle
+            hidden={aiMode}
+            label={t(aiMode ? 'editorModeNormalTip' : 'editorModeAiTip')}
+            className="qa-btn"
+            onClick={() => setAiMode((value) => !value)}
+          />
+          <span className="qa-sep" aria-hidden="true" />
           <button
             className="qa-btn"
             data-tip={`${t('save')} (${platformShortcuts('⌘S')})`}

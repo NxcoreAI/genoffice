@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 import { imageSizeOf, insertShapeAt, MAX_IMAGE_WIDTH_PX } from './components/ribbon-tabs'
-import { SHAPE_GALLERY_GROUPS } from '@genoffice/ui'
+import { EditorModeBar, EditorModeToggle, SHAPE_GALLERY_GROUPS } from '@genoffice/ui'
 import { nextCommentId } from './editor/comments'
 import { TRACK_IGNORE } from './editor/revisions'
 import { updateTocField } from './components/ribbon-references-tab'
@@ -162,7 +162,7 @@ import { useShallowStable, useStableCallbacks } from './use-stable'
 import { FindPanel } from './components/FindPanel'
 import { Ribbon } from './components/Ribbon'
 import { computeFormatState } from './components/ribbon-format-state'
-import { IconChromeToggle, IconRedo, IconSave, IconUndo } from './components/icons'
+import { IconRedo, IconSave, IconUndo } from './components/icons'
 import { ToastHost } from './components/toast'
 import {
   AI_REWRITE_ACK_KEY,
@@ -1052,11 +1052,13 @@ export function App() {
   const [settings, setSettings] = useState<AiSettings>(DEFAULT_SETTINGS)
   const [showAi, setShowAi] = useState(() => !everroomEmbed && localStorage.getItem('aidocs.showAi') !== '0')
   /**
-   * EverRoom embed clean-canvas mode: hide the editor's operation area
-   * (Ribbon / status bar / ruler / nav pane / header-footer chips) and leave the
-   * document page. The host agent performs the operations, so hiding the chrome
-   * must not reduce functionality. Defaults to hidden in the embed; persisted
-   * per user; restorable via the floating pill, ⌘⇧F, or the host toggle IPC.
+   * Two-state operation panel, driven by the switch at the panel's head:
+   * - false = normal edit mode: full ribbon / status bar / ruler / nav pane.
+   * - true  = AI edit mode: those areas collapse and only the document plus the
+   *   shared floating bar (save / undo / redo / AI 排版) remain, so the agent
+   *   can carry the heavy work while manual formatting stays one click away.
+   * Defaults to AI mode in the EverRoom embed; persisted per user; switched back
+   * from the floating bar, ⌘⇧F, or the host toggle IPC.
    */
   const [chromeHidden, setChromeHidden] = useState(() => {
     const stored = localStorage.getItem('aidocs.chromeHidden')
@@ -5522,6 +5524,14 @@ export function App() {
   const quickActions = useMemo(
     () => (
       <>
+        {/* Panel head switch: normal edit mode ⇄ AI edit mode */}
+        <EditorModeToggle
+          hidden={chromeHidden}
+          label={t(chromeHidden ? 'editorModeNormalTip' : 'editorModeAiTip')}
+          className="qa-btn"
+          onClick={() => setChromeHidden((value) => !value)}
+        />
+        <span className="qa-sep" aria-hidden="true" />
         <button
           className="qa-btn"
           data-tip={t('appSaveShortcutTip')}
@@ -5558,20 +5568,10 @@ export function App() {
             onChange={(e) => setAutoSave(e.target.checked)}
           />
         </label>
-        <span className="qa-sep" aria-hidden="true" />
-        {/* EverRoom clean canvas: collapse the operation area from the toolbar. */}
-        <button
-          className="qa-btn qa-chrome-toggle"
-          data-tip={t('appHideToolbar')}
-          aria-label={t('appHideToolbar')}
-          onClick={() => setChromeHidden(true)}
-        >
-          <IconChromeToggle size={16} />
-        </button>
       </>
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang, histState],
+    [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang, histState, chromeHidden],
   )
 
   if (!editor) return null
@@ -5662,6 +5662,20 @@ export function App() {
       })
   }
 
+  /**
+   * AI 排版 entry for the AI-mode bar. Standalone builds open the AI panel and
+   * run the tidy-format prompt; the EverRoom embed has no in-editor AI backend,
+   * so the instruction is relayed to the host agent over the existing ask channel.
+   */
+  const runAiTidy = () => {
+    if (everroomEmbed) {
+      submitHostAgentAsk(t('aiTidyPrompt'))
+      return
+    }
+    setShowAi(true)
+    setAiPreset({ text: t('aiTidyPrompt'), nonce: Date.now(), autoRun: true })
+  }
+
   const docZoomStyle = {
     zoom: zoom / 100,
     '--page-w': canvasBox ? `${paperW}px` : undefined,
@@ -5688,16 +5702,27 @@ export function App() {
       className={`app ${readMode ? 'read-mode' : ''}${revisionDisplay !== 'all' ? ` rev-display-${revisionDisplay}` : ''}${revisionDisplay === 'all' && viewMode === 'print' ? ' rev-balloon' : ''}${chromeHidden ? ' chrome-hidden' : ''}`}
     >
       <ToastHost />
+      {/* AI edit mode: the panel is collapsed, only save / undo / redo / AI 排版 stay */}
       {chromeHidden && (
-        <button
-          className="chrome-restore"
-          data-tip={t('appShowToolbar')}
-          aria-label={t('appShowToolbar')}
-          onClick={() => setChromeHidden(false)}
-        >
-          <IconChromeToggle size={14} />
-          <span className="chrome-restore-label">{t('appShowToolbar')}</span>
-        </button>
+        <EditorModeBar
+          labels={{
+            restore: t('editorModeNormalTip'),
+            save: t('appSaveShortcutTip'),
+            undo: t('appUndo'),
+            redo: t('appRedo'),
+            ai: t('aiTidyBtn'),
+          }}
+          canSave={hasDoc && hasUnsavedChanges}
+          canUndo={hasDoc && histState.canUndo}
+          canRedo={hasDoc && histState.canRedo}
+          showAi
+          aiDisabled={!hasDoc || wordCount === 0}
+          onRestore={() => setChromeHidden(false)}
+          onSave={() => void save(false)}
+          onUndo={() => editor?.chain().focus().undo().run()}
+          onRedo={() => editor?.chain().focus().redo().run()}
+          onAi={runAiTidy}
+        />
       )}
       {docCss && <style>{docCss}</style>}
       {doc && liveDocCjk != null && (
