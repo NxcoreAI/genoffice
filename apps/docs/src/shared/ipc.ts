@@ -430,7 +430,32 @@ export interface DesktopApi {
    * the renderer only describes the selection.
    */
   agentAsk(op: DocsAgentAskOp): Promise<DocsAgentAskResult>
+  /**
+   * EverRoom embed only: the host's annotation queue (doc-level, file-scoped)
+   * is pushed down so the document can show the anchored original text plus
+   * the user's note, and offer the same send/remove actions.
+   */
+  onAskQueue(handler: (items: DocsAskQueueItem[]) => void): () => void
+  /** EverRoom embed only: ask the host to send the whole queue / drop one item. */
+  askQueueAction(action: DocsAskQueueAction): void
 }
+
+/** One host-side annotation for this document: the anchored original text + the user's note. */
+export interface DocsAskQueueItem {
+  id: string
+  /** 我的批注（用户在浮层里敲的话） */
+  instruction: string
+  /** 原文摘录（选中时的文本快照） */
+  excerpt?: string
+  /** 选区覆盖的顶层块索引区间（截稿时的定位；文档改动后可能漂移） */
+  fromBlockIndex: number
+  toBlockIndex: number
+  kind: DocsAgentAskKind
+}
+
+export type DocsAskQueueAction =
+  | { kind: 'send-all' }
+  | { kind: 'remove'; draftId: string }
 
 /** Selection kind the popover was opened for (mirrors AiAskPopover's SelectionKind). */
 export type DocsAgentAskKind = 'text' | 'image' | 'chart' | 'table'

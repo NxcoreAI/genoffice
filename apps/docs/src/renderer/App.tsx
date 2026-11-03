@@ -44,7 +44,7 @@ import {
   type ThemeColors,
   type ThemeFonts,
 } from '@genoffice/docx-engine'
-import type { AiDocContent, AiSettings, OpenDocxResult } from '../shared/ipc'
+import type { AiDocContent, AiSettings, DocsAskQueueItem, OpenDocxResult } from '../shared/ipc'
 import { AI_PROVIDERS } from '../shared/ipc'
 import type { AiCommentsAccess, AiHeaderFooterAccess } from './ai/tools'
 import {
@@ -73,6 +73,7 @@ import {
 } from './ai/operations'
 import { applyHfText, hfEditText } from './editor/hf-text'
 import { AiAskPopover, selectionKind as askSelectionKind } from './components/AiAskPopover'
+import { AskQueuePanel } from './components/AskQueuePanel'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type DocsEditQueueItem } from './ai/edit-queue'
 import { addQueueAnchor, clearQueueAnchors, removeQueueAnchors } from './editor/ai-queue-anchors'
 import { asianCharCount, countWords, nonAsianWordCount } from './word-count'
@@ -1060,6 +1061,8 @@ export function App() {
    * Defaults to AI mode in the EverRoom embed; persisted per user; switched back
    * from the floating bar, ⌘⇧F, or the host toggle IPC.
    */
+  /** EverRoom embed: 宿主批注队列快照（文档内高亮 + 面板、对话区共用同一份事实）。 */
+  const [hostAskQueue, setHostAskQueue] = useState<DocsAskQueueItem[]>([])
   const [chromeHidden, setChromeHidden] = useState(() => {
     const stored = localStorage.getItem('aidocs.chromeHidden')
     if (stored === '1' || stored === '0') return stored === '1'
@@ -5619,6 +5622,32 @@ export function App() {
         }
       : undefined
   /**
+   * EverRoom embed: the host owns the annotation queue and pushes snapshots
+   * down; the editor only renders them (anchored highlights + side panel).
+   */
+  useEffect(() => {
+    if (!everroomEmbed || typeof window.desktop.onAskQueue !== 'function') return
+    return window.desktop.onAskQueue((items) => setHostAskQueue(Array.isArray(items) ? items : []))
+  }, [everroomEmbed])
+
+  /** 宿主队列 → 文档内锚点（块索引 → PM 位置；文档改动后块索引可能漂移，见说明文档）。 */
+  useEffect(() => {
+    if (!everroomEmbed || !editor) return
+    clearQueueAnchors(editor)
+    for (const item of hostAskQueue) {
+      const { from, to } = blockRangePositions(editor, item.fromBlockIndex, item.toBlockIndex)
+      if (from < to) addQueueAnchor(editor, item.id, from, to)
+    }
+  }, [everroomEmbed, editor, hostAskQueue])
+
+  /** 点批注里的原文摘要 → 跳到锚点（并把光标落到选区起点）。 */
+  const focusAskQueueItem = (item: DocsAskQueueItem): void => {
+    if (!editor) return
+    const { from } = blockRangePositions(editor, item.fromBlockIndex, item.toBlockIndex)
+    editor.chain().focus().setTextSelection(from + 1).scrollIntoView().run()
+  }
+
+  /**
    * EverRoom embed: the host agent owns the edit, so the popover's instruction
    * is sent to the host together with a block-index locator (host word tools
    * address blocks by index, never by page/line) plus a text excerpt the agent
@@ -5858,8 +5887,16 @@ export function App() {
             )}
             {doc && showNav && <NavPane editor={editor} doc={editor.state.doc} />}
             {doc && everroomEmbed && (
-              // Host-driven popover: no in-editor AI backend and no anchor
-              // queue — Enter relays the instruction to the host agent.
+              <AskQueuePanel
+                items={hostAskQueue}
+                onFocus={focusAskQueueItem}
+                onRemove={(id) => window.desktop.askQueueAction({ kind: 'remove', draftId: id })}
+                onSendAll={() => window.desktop.askQueueAction({ kind: 'send-all' })}
+              />
+            )}
+            {doc && everroomEmbed && (
+              // Host-driven popover: no in-editor AI backend. Enter sends now,
+              // 加入批注 hands the item to the host's queue (mirrored above).
               <AiAskPopover
                 editor={editor}
                 queueFull

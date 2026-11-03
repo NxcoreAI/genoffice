@@ -21,6 +21,7 @@ import {
   nativeImage,
   net,
   shell,
+  webContents,
 } from 'electron'
 import {
   appMenuLabels,
@@ -67,6 +68,8 @@ import type {
   DecryptOpenResult,
   DocsAgentAskOp,
   DocsAgentAskResult,
+  DocsAskQueueAction,
+  DocsAskQueueItem,
   DocsTabInfo,
   MenuCommand,
   OpenDocxResult,
@@ -2927,6 +2930,28 @@ function normalizeAgentAskOp(raw: unknown): DocsAgentAskOp | null {
 }
 
 /**
+ * EverRoom embed only: the host pushes its annotation queue for this document
+ * down so the editor can render the anchored text plus the note, and can ask
+ * the host to send the batch / drop one item.
+ */
+let docsAskQueueActionHook:
+  | ((wcId: number, action: DocsAskQueueAction) => void)
+  | null = null
+
+export function setDocsAskQueueActionHook(
+  hook: ((wcId: number, action: DocsAskQueueAction) => void) | null,
+): void {
+  docsAskQueueActionHook = hook
+}
+
+/** Push the host's queue snapshot to one docs view (empty array clears it). */
+export function pushDocsAskQueue(wcId: number, items: DocsAskQueueItem[]): void {
+  const contents = webContents.fromId(wcId)
+  if (!contents || contents.isDestroyed()) return
+  contents.send('docs:ask-queue', items)
+}
+
+/**
  * Fired when a docx is opened INSIDE an existing tab (File > Open dialog or an
  * explicit path open). Sheets and slides have had this hook from the start;
  * docs only synced the tab on save-as/first-save, so a file opened into an
@@ -3169,6 +3194,19 @@ export function registerDocsIpc(): void {
       result?: unknown
       error?: string
     }>(event.sender.id, { kind: 'reformat-job-status', jobId }))
+
+  // EverRoom embed: 批注队列面板里的动作（全部发送 / 移除一条）→ 宿主。
+  ipcMain.on('docs:ask-queue-action', (event, raw?: unknown) => {
+    if (!docsAskQueueActionHook) return
+    const value = (raw ?? {}) as { kind?: unknown; draftId?: unknown }
+    if (value.kind === 'send-all') {
+      docsAskQueueActionHook(event.sender.id, { kind: 'send-all' })
+      return
+    }
+    if (value.kind === 'remove' && typeof value.draftId === 'string' && value.draftId) {
+      docsAskQueueActionHook(event.sender.id, { kind: 'remove', draftId: value.draftId.slice(0, 80) })
+    }
+  })
 
   // EverRoom embed: 选区「AI 修改」浮层 → 宿主 Agent（宿主按 webContents id 反查文件与空间）。
   ipcMain.handle('docs:agent-ask', async (event, raw?: unknown): Promise<DocsAgentAskResult> => {

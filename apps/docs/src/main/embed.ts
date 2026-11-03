@@ -10,11 +10,13 @@ export {
   describeAgentDoc,
   docsQueryDirty,
   markDocsNewBlank,
+  pushDocsAskQueue,
   queueDocsAiContent,
   registerDocsIpc,
   requestDocsClose,
   setActiveDocsResolver,
   setDocsAgentAskHook,
+  setDocsAskQueueActionHook,
   setDocsChromeHidden,
   setDocsFileSavedHook,
   setDocsMenuGate,
@@ -29,6 +31,7 @@ export type {
   DocsAgentToolResult,
   DocsThesisPanelAction,
 } from './docs-main'
+export type { DocsAskQueueAction, DocsAskQueueItem } from '../shared/ipc'
 export {
   buildThesisDocx,
   buildThesisDocxOnTemplate,

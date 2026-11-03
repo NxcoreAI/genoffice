@@ -7,6 +7,7 @@ import type {
   AiStreamRequest,
   DesktopApi,
   DocsAgentAskOp,
+  DocsAskQueueItem,
   MenuCommand,
   UiTheme,
 } from '../shared/ipc'
@@ -210,6 +211,12 @@ const api: DesktopApi = {
     return () => ipcRenderer.removeListener('docs:thesis-changed', listener)
   },
   agentAsk: (op: DocsAgentAskOp) => ipcRenderer.invoke('docs:agent-ask', op),
+  onAskQueue: (handler) => {
+    const listener = (_event: IpcRendererEvent, items: DocsAskQueueItem[]) => handler(items)
+    ipcRenderer.on('docs:ask-queue', listener)
+    return () => ipcRenderer.removeListener('docs:ask-queue', listener)
+  },
+  askQueueAction: (action) => ipcRenderer.send('docs:ask-queue-action', action),
 }
 
 const projectApi: ProjectApi = {
