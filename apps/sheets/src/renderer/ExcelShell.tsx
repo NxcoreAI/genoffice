@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { platformShortcuts } from '@genoffice/i18n'
-import { Dropdown, SHAPE_GALLERY_GROUPS, ShapePreview, useDismissablePopover } from '@genoffice/ui'
+import {
+  Dropdown,
+  EditorModeBar,
+  EditorModeToggle,
+  SHAPE_GALLERY_GROUPS,
+  ShapePreview,
+  useDismissablePopover,
+} from '@genoffice/ui'
 
 import {
   CaretIcon,
@@ -110,6 +117,11 @@ const CHART_TEXT_LABELS: Record<ChartTextTarget, { heading: StringKey; command: 
 /// lights / caption buttons — the ribbon must not reserve space for them.
 const IN_TAB = new URLSearchParams(window.location.search).get('mode') === 'tab'
 const IS_MAC = navigator.platform.toLowerCase().includes('mac')
+
+/// Read-only embed (host passes readonly=1) — the same flag App.tsx derives.
+/// Nothing may edit that workbook, so AI edit mode's bar drops its AI action
+/// there too (the one-click action starts an edit).
+const READONLY_EMBED = new URLSearchParams(window.location.search).get('readonly') === '1'
 
 /// Excel's grow/shrink font walks its size ladder, not ±1.
 const FONT_SIZE_LADDER = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 26, 28, 36, 48, 72]
@@ -381,6 +393,14 @@ export function ExcelShell({
   useEffect(() => {
     localStorage.setItem('ai-sheets-show-ai', isCopilotOpen ? '1' : '0')
   }, [isCopilotOpen])
+  /// Two-state operation panel (docs parity): in AI edit mode the ribbon,
+  /// name-box row and status bar fold away, the grid fills the window, and the
+  /// shared floating bar is the only chrome left. Persisted like the panel's
+  /// open state; default off.
+  const [aiMode, setAiMode] = useState(() => localStorage.getItem('ai-sheets-ai-mode') === '1')
+  useEffect(() => {
+    localStorage.setItem('ai-sheets-ai-mode', aiMode ? '1' : '0')
+  }, [aiMode])
   const [showFormatCells, setShowFormatCells] = useState(false)
   const [axisSizeTarget, setAxisSizeTarget] = useState<'row' | 'col' | null>(null)
   const [showLinkDialog, setShowLinkDialog] = useState(false)
@@ -467,18 +487,31 @@ export function ExcelShell({
     ? [...ribbonTabs, 'Chart Design']
     : ribbonTabs
   const saveAsTitle = `${t('appSaveAs')} (${platformShortcuts('⇧⌘S')})`
+  /// AI edit mode's one-click action: the same path as the ribbon's Genspark AI
+  /// ▸ "AI 分析" button (open the panel, send the analyze prompt).
+  const runAiAnalyze = () => {
+    setIsCopilotOpen(true)
+    onSend(t('aiAnalyzePrompt'))
+  }
 
   return (
     <main
       className={`app-shell ${isCopilotOpen ? '' : 'copilot-collapsed'}${
         __GENOFFICE_EMBED_ONLY__ ? ' copilot-off' : ''
-      }`}
+      }${aiMode ? ' ai-mode' : ''}`}
     >
       <header className="excel-header">
         <nav
           className={`ribbon-tabs ${IN_TAB ? '' : IS_MAC ? 'ribbon-tabs-mac' : 'ribbon-tabs-win'}`}
           aria-label="Workbook commands"
         >
+          {/* Front-of-panel switch: normal edit mode ⇄ AI edit mode */}
+          <EditorModeToggle
+            hidden={aiMode}
+            label={t(aiMode ? 'editorModeNormalTip' : 'editorModeAiTip')}
+            className="qa-btn"
+            onClick={() => setAiMode((value) => !value)}
+          />
           <button
             type="button"
             className="qa-btn"
@@ -604,6 +637,30 @@ export function ExcelShell({
           onAiToggle={() => setIsCopilotOpen((open) => !open)}
         />
       </header>
+
+      {/* AI edit mode: the panel is collapsed, only save / undo / redo / AI 分析 stay
+          (fixed overlay, so hiding the header never reflows the grid) */}
+      {aiMode && (
+        <EditorModeBar
+          labels={{
+            restore: t('editorModeNormalTip'),
+            save: t('appSaveTitle'),
+            undo: t('appUndo'),
+            redo: t('appRedo'),
+            ai: t('aiAnalyzeBtn'),
+          }}
+          canSave={canSave}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          showAi={!__GENOFFICE_EMBED_ONLY__ && !READONLY_EMBED}
+          aiDisabled={!sheetHasContent || aiBusy}
+          onRestore={() => setAiMode(false)}
+          onSave={onSave}
+          onUndo={() => onUndo()}
+          onRedo={onRedo}
+          onAi={runAiAnalyze}
+        />
+      )}
 
       {/* AI panel docks on the left, full height under the ribbon (unified with docs);
           folded out of EverRoom embed builds (collapsed rail included) */}

@@ -1559,6 +1559,26 @@ button.check-item:hover {
   min-height: 0;
 }
 
+/* ---- AI edit mode (operation panel hidden, grid fills the window) ----
+   Two-state panel: the front-of-panel toggle folds away the ribbon, name-box
+   row and status bar. What is left is the grid plus the shared floating bar
+   (save / undo / redo / AI 分析) — see packages/ui/src/editor-mode.css. The
+   Univer sheet tab bar and the AI dock stay: those are document chrome, not
+   panel chrome. */
+.app-shell.ai-mode .excel-header,
+.app-shell.ai-mode .name-box-bar,
+.app-shell.ai-mode .status-bar {
+  display: none !important;
+}
+
+/* display:none removes those rows as grid items, so both grids are left with a
+   single flexible track — otherwise the header's `auto` row would size the
+   sheet body to its content instead of the window. */
+.app-shell.ai-mode,
+.app-shell.ai-mode .sheet-main {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 /* ================= status bar (unified with docs/slides) ================= */
 
 .status-bar {

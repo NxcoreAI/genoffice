@@ -4124,3 +4124,13 @@ button {
   flex: 1;
   min-width: 0;
 }
+
+/* ---- AI edit mode (operation panel hidden, page remains) ----
+   Two-state panel: the front-of-panel toggle hides the ribbon and the status bar,
+   leaving the page plus the shared floating bar (restore / save / undo / redo /
+   AI 总结) — see packages/ui/src/editor-mode.css. Keep the thumbnail pane, the
+   find bar, dialogs and the AI dock: those are user-invoked, not panel chrome. */
+.app.ai-mode .ribbon,
+.app.ai-mode .status-bar {
+  display: none !important;
+}

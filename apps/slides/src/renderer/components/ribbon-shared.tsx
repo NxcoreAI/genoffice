@@ -326,6 +326,10 @@ export interface Props {
   editing: boolean
   autoSave: boolean
   onAutoSaveChange: (on: boolean) => void
+  /** Two-state operation panel: true = AI edit mode (ribbon collapsed, canvas fills the window) */
+  aiMode: boolean
+  /** Front-of-panel switch between normal edit mode and AI edit mode */
+  onToggleAiMode: () => void
   onOpen: () => void
   onSave: () => void
   onUndo: () => void

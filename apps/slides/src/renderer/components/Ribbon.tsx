@@ -16,6 +16,7 @@ import type { ChartStyleInfo } from '@genoffice/pptx-render'
 import {
   useDismissablePopover,
   Dropdown,
+  EditorModeToggle,
   THEME_COLORS,
   THEME_COLOR_SHADES,
   STANDARD_COLORS,
@@ -1083,6 +1084,8 @@ export function Ribbon({
   editing,
   autoSave,
   onAutoSaveChange,
+  aiMode,
+  onToggleAiMode,
   onOpen,
   onSave,
   onUndo,
@@ -1692,6 +1695,14 @@ export function Ribbon({
           anyPanelOpen ? ' ribbon-tabs-nodrag' : ''
         }`}
       >
+        {/* Operation-panel switch: normal edit mode ⇄ AI edit mode. Leftmost item
+            so it reads as the panel's own power switch. */}
+        <EditorModeToggle
+          hidden={aiMode}
+          label={t(aiMode ? 'editorModeNormalTip' : 'editorModeAiTip')}
+          className="qa-btn"
+          onClick={onToggleAiMode}
+        />
         {!IS_MAC && (
           <div className="file-tab-wrap">
             <button
