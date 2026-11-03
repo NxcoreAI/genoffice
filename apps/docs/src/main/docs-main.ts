@@ -65,6 +65,8 @@ import type {
   CreateDocumentRequest,
   CreateDocumentResult,
   DecryptOpenResult,
+  DocsAgentAskOp,
+  DocsAgentAskResult,
   DocsTabInfo,
   MenuCommand,
   OpenDocxResult,
@@ -2881,6 +2883,49 @@ async function runThesisPanel<T>(
 }
 
 /**
+ * EverRoom embed only: the floating "ask" popover on a document selection
+ * relays the user's instruction here. The host resolves room/file from the
+ * calling view's webContents id and injects the request into its agent
+ * conversation, so no ids travel from the renderer.
+ */
+let docsAgentAskHook:
+  | ((wcId: number, op: DocsAgentAskOp) => Promise<DocsAgentAskResult>)
+  | null = null
+
+export function setDocsAgentAskHook(
+  hook: ((wcId: number, op: DocsAgentAskOp) => Promise<DocsAgentAskResult>) | null,
+): void {
+  docsAgentAskHook = hook
+}
+
+/** Normalize an untrusted renderer payload into a bounded op. */
+function normalizeAgentAskOp(raw: unknown): DocsAgentAskOp | null {
+  const value = (raw ?? {}) as Partial<DocsAgentAskOp>
+  const instruction = typeof value.instruction === 'string' ? value.instruction.trim() : ''
+  if (!instruction) return null
+  const toIndex = (input: unknown): number => {
+    const num = typeof input === 'number' ? input : Number(input)
+    return Number.isFinite(num) ? Math.max(0, Math.trunc(num)) : 0
+  }
+  const a = toIndex(value.fromBlockIndex)
+  const b = toIndex(value.toBlockIndex)
+  const kind: DocsAgentAskOp['kind'] =
+    value.kind === 'image' || value.kind === 'chart' || value.kind === 'table' ? value.kind : 'text'
+  const excerpt = typeof value.excerpt === 'string'
+    ? value.excerpt.replace(/\s+/g, ' ').trim().slice(0, 200)
+    : ''
+  const blockType = typeof value.blockType === 'string' ? value.blockType.slice(0, 64) : ''
+  return {
+    instruction: instruction.slice(0, 2000),
+    fromBlockIndex: Math.min(a, b),
+    toBlockIndex: Math.max(a, b),
+    kind,
+    ...(excerpt ? { excerpt } : {}),
+    ...(blockType ? { blockType } : {}),
+  }
+}
+
+/**
  * Fired when a docx is opened INSIDE an existing tab (File > Open dialog or an
  * explicit path open). Sheets and slides have had this hook from the start;
  * docs only synced the tab on save-as/first-save, so a file opened into an
@@ -3123,6 +3168,19 @@ export function registerDocsIpc(): void {
       result?: unknown
       error?: string
     }>(event.sender.id, { kind: 'reformat-job-status', jobId }))
+
+  // EverRoom embed: 选区「AI 修改」浮层 → 宿主 Agent（宿主按 webContents id 反查文件与空间）。
+  ipcMain.handle('docs:agent-ask', async (event, raw?: unknown): Promise<DocsAgentAskResult> => {
+    const op = normalizeAgentAskOp(raw)
+    if (!op) return { ok: false, error: 'EMPTY_INSTRUCTION' }
+    if (!docsAgentAskHook) return { ok: false, error: 'NO_HOST_AGENT' }
+    return docsAgentAskHook(event.sender.id, op).catch(
+      (error: unknown): DocsAgentAskResult => ({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  })
 
   ipcMain.handle('docs:open', async (event) => {
     const result = await openDialog(event, {

@@ -6,6 +6,7 @@ import type {
   AiStreamChunk,
   AiStreamRequest,
   DesktopApi,
+  DocsAgentAskOp,
   MenuCommand,
   UiTheme,
 } from '../shared/ipc'
@@ -208,6 +209,7 @@ const api: DesktopApi = {
     ipcRenderer.on('docs:thesis-changed', listener)
     return () => ipcRenderer.removeListener('docs:thesis-changed', listener)
   },
+  agentAsk: (op: DocsAgentAskOp) => ipcRenderer.invoke('docs:agent-ask', op),
 }
 
 const projectApi: ProjectApi = {

@@ -56,6 +56,7 @@ import {
 import {
   COMMANDS_GUIDE,
   HTML_RULES,
+  blockIndexOfPos,
   blockRangePositions,
   buildDocContext,
   findNumId,
@@ -71,7 +72,7 @@ import {
   runOperations,
 } from './ai/operations'
 import { applyHfText, hfEditText } from './editor/hf-text'
-import { AiAskPopover } from './components/AiAskPopover'
+import { AiAskPopover, selectionKind as askSelectionKind } from './components/AiAskPopover'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type DocsEditQueueItem } from './ai/edit-queue'
 import { addQueueAnchor, clearQueueAnchors, removeQueueAnchors } from './editor/ai-queue-anchors'
 import { asianCharCount, countWords, nonAsianWordCount } from './word-count'
@@ -5584,6 +5585,49 @@ export function App() {
           transform: 'none',
         }
       : undefined
+  /**
+   * EverRoom embed: the host agent owns the edit, so the popover's instruction
+   * is sent to the host together with a block-index locator (host word tools
+   * address blocks by index, never by page/line) plus a text excerpt the agent
+   * can cross-check after its own re-read.
+   */
+  const submitHostAgentAsk = (instruction: string) => {
+    const text = instruction.trim()
+    if (!text || !editor) return
+    const { from, to } = editor.state.selection
+    const docNode = editor.state.doc
+    const fromBlockIndex = blockIndexOfPos(docNode, from)
+    const toBlockIndex = blockIndexOfPos(docNode, to)
+    const excerpt = from === to
+      ? ''
+      : docNode.textBetween(from, to, ' ', ' ').replace(/\s+/g, ' ').trim().slice(0, 200)
+    const firstBlock = docNode.child(Math.min(fromBlockIndex, Math.max(0, docNode.childCount - 1)))
+    void window.desktop
+      .agentAsk({
+        instruction: text,
+        fromBlockIndex,
+        toBlockIndex,
+        kind: askSelectionKind(editor),
+        ...(excerpt ? { excerpt } : {}),
+        ...(firstBlock ? { blockType: firstBlock.type.name } : {}),
+      })
+      .then((result) => {
+        if (result.ok) return
+        // Prototype copy: this entry only exists in the (Chinese-first) EverRoom
+        // embed, so the host-facing failure is explained in place rather than
+        // adding a key to every locale. Graduate to i18n when it ships broadly.
+        const reason = result.error === 'NO_HOST_AGENT'
+          ? '当前环境没有可用的 Agent'
+          : result.error === 'EMPTY_INSTRUCTION'
+            ? '请先输入修改意见'
+            : result.error
+        setStatus(t('aiErrorPrefix', { error: reason }))
+      })
+      .catch((error: unknown) => {
+        setStatus(t('aiErrorPrefix', { error: error instanceof Error ? error.message : String(error) }))
+      })
+  }
+
   const docZoomStyle = {
     zoom: zoom / 100,
     '--page-w': canvasBox ? `${paperW}px` : undefined,
@@ -5754,6 +5798,20 @@ export function App() {
               />
             )}
             {doc && showNav && <NavPane editor={editor} doc={editor.state.doc} />}
+            {doc && everroomEmbed && (
+              // Host-driven popover: no in-editor AI backend and no anchor
+              // queue — Enter relays the instruction to the host agent.
+              <AiAskPopover
+                editor={editor}
+                queueFull
+                getItem={() => undefined}
+                onSendNow={submitHostAgentAsk}
+                onQueueAdd={() => undefined}
+                onQueueUpdate={() => undefined}
+                onQueueRemove={() => undefined}
+                hostMode
+              />
+            )}
             {doc && !everroomEmbed && (
               <AiAskPopover
                 editor={editor}

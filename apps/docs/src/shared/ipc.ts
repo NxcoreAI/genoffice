@@ -423,7 +423,33 @@ export interface DesktopApi {
     cardId?: string,
   ): Promise<ThesisPanelOutcome<{ originalName: string; report?: Record<string, unknown> }>>
   onThesisCardsChanged(handler: () => void): () => void
+  /**
+   * EverRoom embed only: a selection-scoped "ask" typed into the floating
+   * popover is relayed to the host agent (the embed build has no AI backend of
+   * its own). The host resolves room/file from this view's webContents id, so
+   * the renderer only describes the selection.
+   */
+  agentAsk(op: DocsAgentAskOp): Promise<DocsAgentAskResult>
 }
+
+/** Selection kind the popover was opened for (mirrors AiAskPopover's SelectionKind). */
+export type DocsAgentAskKind = 'text' | 'image' | 'chart' | 'table'
+
+/** Selection-scoped instruction relayed from the docs embed to the host agent. */
+export interface DocsAgentAskOp {
+  /** What the user typed into the popover. */
+  instruction: string
+  /** Top-level block index range of the selection (0-based, inclusive). */
+  fromBlockIndex: number
+  toBlockIndex: number
+  kind: DocsAgentAskKind
+  /** Plain-text excerpt of the selection; the host puts it in the message as a cross-check. */
+  excerpt?: string
+  /** ProseMirror node name of the first selected block (diagnostics / table hints). */
+  blockType?: string
+}
+
+export type DocsAgentAskResult = { ok: true } | { ok: false; error: string }
 
 /** One thesis format card as shown in the AI tab panel. */
 export interface ThesisPanelCard {

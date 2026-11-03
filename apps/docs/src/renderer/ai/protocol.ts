@@ -573,7 +573,7 @@ const REVISION_KIND_LABEL: Record<RevisionRange['kind'], string> = {
 }
 
 /** top-level block index containing a document position */
-function blockIndexOfPos(doc: ProseMirrorNode, pos: number): number {
+export function blockIndexOfPos(doc: ProseMirrorNode, pos: number): number {
   let index = 0
   let result = Math.max(0, doc.childCount - 1)
   doc.forEach((node, offset) => {

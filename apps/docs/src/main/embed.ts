@@ -14,6 +14,7 @@ export {
   registerDocsIpc,
   requestDocsClose,
   setActiveDocsResolver,
+  setDocsAgentAskHook,
   setDocsChromeHidden,
   setDocsFileSavedHook,
   setDocsMenuGate,

@@ -39,6 +39,12 @@ interface Props {
   onQueueAdd: (text: string) => void
   onQueueUpdate: (qid: string, text: string) => void
   onQueueRemove: (qid: string) => void
+  /**
+   * Host-driven mode (EverRoom embed): there is no in-editor AI backend and no
+   * anchor queue, so Enter / the single confirm button hand the instruction to
+   * the host agent immediately and an outside click discards it.
+   */
+  hostMode?: boolean
 }
 
 type OpenState = { mode: 'new' } | { mode: 'edit'; qid: string }
@@ -48,7 +54,7 @@ const GAP = 8
 const EDGE = 8
 const EST_HEIGHT = 150
 
-type SelectionKind = 'image' | 'chart' | 'table' | 'text'
+export type SelectionKind = 'image' | 'chart' | 'table' | 'text'
 
 /** Suggestions match what the AI can actually do to the selected element */
 const CHIP_KEYS: Record<SelectionKind, StringKey[]> = {
@@ -58,7 +64,7 @@ const CHIP_KEYS: Record<SelectionKind, StringKey[]> = {
   text: ['aiChipPolish', 'aiChipShorten', 'aiChipExpand', 'aiChipFixGrammar'],
 }
 
-function selectionKind(editor: Editor): SelectionKind {
+export function selectionKind(editor: Editor): SelectionKind {
   const sel = editor.state.selection
   if (sel instanceof CellSelection) return 'table'
   if (sel instanceof NodeSelection) {
@@ -99,6 +105,7 @@ export function AiAskPopover({
   onQueueAdd,
   onQueueUpdate,
   onQueueRemove,
+  hostMode = false,
 }: Props): React.JSX.Element | null {
   const { t } = useI18n()
   const [trigger, setTrigger] = useState<{ left: number; top: number } | null>(null)
@@ -116,6 +123,8 @@ export function AiAskPopover({
   textRef.current = text
   const queueFullRef = useRef(queueFull)
   queueFullRef.current = queueFull
+  const hostModeRef = useRef(hostMode)
+  hostModeRef.current = hostMode
 
   const anchorRect = useCallback((): AnchorRect | null => {
     const state = openRef.current
@@ -207,6 +216,12 @@ export function AiAskPopover({
   const commitOrClose = useCallback(() => {
     const state = openRef.current
     const value = textRef.current.trim()
+    // Host mode has no anchor queue: an accidental outside click must not fire
+    // a request at the host agent.
+    if (hostModeRef.current) {
+      close()
+      return
+    }
     if (state && value) {
       if (state.mode === 'edit') onQueueUpdate(state.qid, value)
       else if (!queueFullRef.current) onQueueAdd(value)
@@ -311,6 +326,9 @@ export function AiAskPopover({
               if (open.mode === 'edit') {
                 onQueueUpdate(open.qid, text.trim())
                 close()
+              } else if (hostMode) {
+                onSendNow(text.trim())
+                close()
               } else if (!queueFull) {
                 onQueueAdd(text.trim())
                 close()
@@ -358,6 +376,17 @@ export function AiAskPopover({
                 {t('aiAskUpdate')}
               </button>
             </>
+          ) : hostMode ? (
+            <button
+              className="ai-ask-confirm"
+              disabled={!canSubmit}
+              onClick={() => {
+                onSendNow(text.trim())
+                close()
+              }}
+            >
+              {t('aiAskSendNow')}
+            </button>
           ) : (
             <>
               <button
