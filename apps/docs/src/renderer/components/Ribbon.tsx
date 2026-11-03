@@ -307,7 +307,15 @@ const PAINTER_BLOCK_EXTRA: Record<string, string[]> = {
 // bar (which we provide). Windows Word does have one, so keep it there.
 const IS_MAC = navigator.platform.toLowerCase().includes('mac')
 /** shell tab mode: the tab strip above owns traffic lights / caption buttons */
-const IN_TAB = new URLSearchParams(window.location.search).get('mode') === 'tab'
+const HOST_MODE = new URLSearchParams(window.location.search).get('mode')
+const IN_TAB = HOST_MODE === 'tab'
+/**
+ * Hosted views (EverRoom window 'everroom', shell tab 'tab') live inside another
+ * window's chrome, so the ribbon must not reserve the OS window's traffic-light
+ * or caption-button gutters — otherwise the quick-access row starts ~84px in and
+ * the operation panel looks padded on the left.
+ */
+const HOSTED = IN_TAB || HOST_MODE === 'everroom'
 
 // EverRoom embed builds gain an "AI" tab right after Home (thesis format
 // panel; standalone has no EverRoom host to serve it).
@@ -1815,7 +1823,7 @@ function RibbonInner({
   return (
     <div className="ribbon">
       <div
-        className={`ribbon-tabs ${IN_TAB ? '' : IS_MAC ? 'ribbon-tabs-mac' : 'ribbon-tabs-win'}`}
+        className={`ribbon-tabs ${HOSTED ? '' : IS_MAC ? 'ribbon-tabs-mac' : 'ribbon-tabs-win'}`}
       >
         {!IS_MAC && (
           <div className="file-tab-wrap">
