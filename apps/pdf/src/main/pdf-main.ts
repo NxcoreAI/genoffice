@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { userInfo } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { BrowserWindow, WebContentsView, app, dialog, ipcMain, shell } from 'electron'
 import type { WebContents } from 'electron'
 import {
@@ -26,8 +26,10 @@ import {
 import { createI18n, getUiLang } from '@genoffice/i18n'
 import { gskGenerateImage, hasGskAuth } from '@genoffice/ai-search'
 import { cloudToolsEnabled, type AiSettings } from '@genoffice/ai-provider'
-import { PDF_CHANNELS } from '../shared/ipc'
+import { PDF_CHANNELS, PDF_AGENT_CHANNELS } from '../shared/ipc'
 import type {
+  PdfAgentDescribeResult,
+  PdfAgentToolResultRow,
   ExportImagesRequest,
   ExportImagesResult,
   PdfAutoRenameResult,
@@ -553,6 +555,188 @@ export function clearPdfDirty(webContentsId: number): void {
   dirtyByWc.delete(webContentsId)
 }
 
+// ── Host agent executor (EverRoom): the host's agent (gateway) drives the
+// pdf AI tool layer living in the renderer — the same describe → apply →
+// silent save shape as docs' executor. describe returns the document context
+// + embed-safe tool vocabulary; apply executes tool calls (reads and edits),
+// and the renderer drains its pending edits into a silent save so the host's
+// fileSaved hook fires its version backfill. ──
+
+export interface PdfAgentToolCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+interface PdfAgentReply {
+  ok: boolean
+  describe?: PdfAgentDescribeResult
+  results?: PdfAgentToolResultRow[]
+  error?: string
+}
+
+const agentToolWaiters = new Map<number, Map<string, (reply: PdfAgentReply) => void>>()
+const PDF_AGENT_TOOL_TIMEOUT_MS = 120_000
+let agentRequestSeq = 0
+
+function requestRendererAgentAction<T extends PdfAgentReply>(
+  contents: WebContents,
+  kind: 'describe' | 'apply',
+  body: { calls?: PdfAgentToolCall[] },
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const requestId = `pdf-agent-${++agentRequestSeq}-${Date.now()}`
+    let byRequest = agentToolWaiters.get(contents.id)
+    if (!byRequest) {
+      byRequest = new Map()
+      agentToolWaiters.set(contents.id, byRequest)
+      contents.once('destroyed', () => {
+        const pending = agentToolWaiters.get(contents.id)
+        agentToolWaiters.delete(contents.id)
+        pending?.forEach((w) => w({ ok: false, error: 'view closed' }))
+      })
+    }
+    const timer = setTimeout(() => {
+      agentToolWaiters.get(contents.id)?.delete(requestId)
+      resolve({ ok: false, error: 'renderer did not reply in time' } as T)
+    }, PDF_AGENT_TOOL_TIMEOUT_MS)
+    byRequest.set(requestId, (reply) => {
+      clearTimeout(timer)
+      resolve(reply as T)
+    })
+    contents.send(PDF_AGENT_CHANNELS.agentToolRequest, { requestId, kind, ...body })
+  })
+}
+
+/** Fresh document description for the host agent: context + tool vocabulary. */
+export async function describeAgentPdf(
+  contents: WebContents,
+): Promise<PdfAgentDescribeResult | { error: string }> {
+  const reply = await requestRendererAgentAction<PdfAgentReply>(contents, 'describe', {})
+  if (!reply.ok || !reply.describe) return { error: reply.error ?? 'describe failed' }
+  return reply.describe
+}
+
+/**
+ * Execute a batch of pdf AI tool calls on the live renderer document. After a
+ * mutating batch the renderer silently saves its pending edits, so the host's
+ * fileSaved hook fires the version backfill. Network-backed tools
+ * (image_search / generate_image / create_document) are rejected
+ * renderer-side: embed mode registers no AI backend for them.
+ */
+export async function applyAgentPdfTools(
+  contents: WebContents,
+  calls: PdfAgentToolCall[],
+): Promise<{ results: PdfAgentToolResultRow[] } | { error: string }> {
+  const safeCalls = calls
+    .filter((c) => typeof c?.name === 'string' && c.name && typeof c?.id === 'string' && c.id)
+    .slice(0, 50)
+    .map((c) => ({ id: c.id, name: c.name, input: c.input ?? {} }))
+  if (safeCalls.length === 0) return { error: 'no valid tool calls' }
+  const reply = await requestRendererAgentAction<PdfAgentReply>(contents, 'apply', {
+    calls: safeCalls,
+  })
+  if (!reply.ok || !reply.results) return { error: reply.error ?? 'apply failed' }
+  return { results: reply.results }
+}
+
+// ── Agent readiness (EverRoom hidden pdf view): "document loaded and ready" ──
+// EverRoom creates a pdf WebContentsView on demand (possibly hidden) and then
+// drives describeAgentPdf/applyAgentPdfTools. Loading a pdf is asynchronous
+// (renderer fetch + pdf.js parse), so the host needs a positive signal that
+// the requested working copy — not the boot empty view — is installed. The
+// renderer reports the path once the document reaches 'ready'; a missing file
+// reports null (tracked, but never satisfied for a non-null expected path).
+// Tracking is per webContents so a destroyed view cannot leak waiters.
+
+/** Latest reported path per webContents; null = renderer ready without a file. */
+const agentReadyPathByWebContents = new Map<number, string | null>()
+const agentReadyWaiters = new Map<number, Set<(filePath: string | null) => void>>()
+
+function samePdfPath(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  if (a === b) return true
+  try {
+    return resolve(a) === resolve(b)
+  } catch {
+    return false
+  }
+}
+
+/** Destroy-time cleanup: drop the tracked path and fail every pending wait. */
+function dropAgentReadyState(wcId: number): void {
+  agentReadyPathByWebContents.delete(wcId)
+  const waiters = agentReadyWaiters.get(wcId)
+  agentReadyWaiters.delete(wcId)
+  waiters?.forEach((finish) => finish(null))
+}
+
+/**
+ * Wait until this webContents has loaded exactly `expectedPath` and reported
+ * readiness. Resolves true only on a matching report (a report that arrived
+ * before the call counts), false on timeout or when the view is destroyed.
+ * `timeoutMs` defaults to 15s (a cold hidden view must boot + parse the pdf).
+ */
+export function waitForAgentReady(
+  contents: WebContents,
+  expectedPath: string,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  if (!expectedPath || typeof expectedPath !== 'string') return Promise.resolve(false)
+  if (contents.isDestroyed()) return Promise.resolve(false)
+  const reported = agentReadyPathByWebContents.get(contents.id)
+  if (samePdfPath(reported, expectedPath)) return Promise.resolve(true)
+  return new Promise<boolean>((resolveWait) => {
+    let settled = false
+    const finish = (filePath: string | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const waiters = agentReadyWaiters.get(contents.id)
+      waiters?.delete(listener)
+      if (waiters && waiters.size === 0) agentReadyWaiters.delete(contents.id)
+      resolveWait(filePath !== null && samePdfPath(filePath, expectedPath))
+    }
+    const listener = (filePath: string | null) => {
+      // null = view destroyed / cleanup; a different path's report is ignored
+      // so concurrent waits for different paths keep waiting
+      if (filePath === null) {
+        finish(null)
+        return
+      }
+      if (samePdfPath(filePath, expectedPath)) finish(filePath)
+    }
+    const timer = setTimeout(() => finish(null), Math.max(0, timeoutMs))
+    let waiters = agentReadyWaiters.get(contents.id)
+    if (!waiters) {
+      waiters = new Set()
+      agentReadyWaiters.set(contents.id, waiters)
+    }
+    waiters.add(listener)
+    // destroyed between the isDestroyed check and registration: settle now
+    if (contents.isDestroyed()) finish(null)
+  })
+}
+
+/** Fired after a save lands on the file (the renderer's silent save included).
+ * The EverRoom host uses it to sync the version backfill. Never called standalone. */
+let pdfFileSavedHook: ((wc: WebContents, filePath: string) => void) | null = null
+
+export function setPdfFileSavedHook(hook: ((wc: WebContents, filePath: string) => void) | null): void {
+  pdfFileSavedHook = hook
+}
+
+function notifyPdfFileSaved(wc: WebContents, filePath: string): void {
+  if (pdfFileSavedHook) {
+    try {
+      pdfFileSavedHook(wc, filePath)
+    } catch (err) {
+      // The save itself already succeeded; a host hook must not turn it into a failure.
+      console.warn('[pdf] fileSaved hook failed:', err)
+    }
+  }
+}
+
 // ── Content-derived auto-naming (pdf's analog of sheets' autoRenameWorkbook) ──
 
 /** Paths of shell-created blank PDFs still carrying their untitled name; only these may auto-rename */
@@ -862,6 +1046,10 @@ function registerPdfIpc(): void {
         target,
         request,
       )
+      // Host version-backfill signal (EverRoom): fired after the bytes land,
+      // before the reply — the renderer reloads on the reply and the host may
+      // re-read the file at any point afterwards.
+      notifyPdfFileSaved(e.sender, target)
       return {
         ok: true,
         ...(skippedTextEdits.length > 0 ? { skippedTextEdits } : {}),
@@ -1415,6 +1603,35 @@ function registerPdfIpc(): void {
     waiter?.(ok === true)
   })
 
+  // Host agent executor (EverRoom): the host's agent drives the pdf AI tool
+  // layer living in the renderer — the same describe → apply → silent save
+  // shape as docs' and sheets' agent bridges. describe answers with the
+  // document context + embed-safe tool vocabulary; apply executes tool calls
+  // (reads and edits) and the renderer drains its pending edits into a silent
+  // save so the host's fileSaved hook fires its version backfill.
+  ipcMain.on(PDF_AGENT_CHANNELS.agentToolResult, (event, payload: unknown) => {
+    const p = payload as { requestId?: unknown; reply?: unknown } | null
+    if (typeof p?.requestId !== 'string') return
+    const waiter = agentToolWaiters.get(event.sender.id)?.get(p.requestId)
+    if (!waiter) return
+    agentToolWaiters.get(event.sender.id)?.delete(p.requestId)
+    waiter((p.reply ?? { ok: false, error: 'malformed reply' }) as PdfAgentReply)
+  })
+
+  // Agent readiness: the renderer reports the file it installed. A missing
+  // file (empty view / error state) reports null — tracked for state, but not
+  // a usable readiness signal for a non-null expected path.
+  ipcMain.on(PDF_AGENT_CHANNELS.agentReady, (event, payload: unknown) => {
+    const p = payload as { filePath?: unknown } | null
+    const filePath = typeof p?.filePath === 'string' && p.filePath.length > 0 ? p.filePath : null
+    const wcId = event.sender.id
+    agentReadyPathByWebContents.set(wcId, filePath)
+    if (filePath === null) return
+    const waiters = agentReadyWaiters.get(wcId)
+    if (!waiters) return
+    for (const waiter of [...waiters]) waiter(filePath)
+  })
+
   // Language channel shared with other modules; removeHandler tolerates duplicate registration
   ipcMain.removeHandler(PDF_CHANNELS.getLanguage)
   ipcMain.handle(PDF_CHANNELS.getLanguage, () => getUiLang())
@@ -1439,6 +1656,7 @@ function grantAndTrack(wc: WebContents, openPath?: string | null): void {
     allowedByWc.delete(wcId)
     dirtyByWc.delete(wcId)
     saveAsTargetByWc.delete(wcId)
+    dropAgentReadyState(wcId)
     closeSaveWaiters.get(wcId)?.(false)
     closeSaveWaiters.delete(wcId)
     saveAsWaiters.get(wcId)?.(false)

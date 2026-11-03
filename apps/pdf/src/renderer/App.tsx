@@ -26,6 +26,7 @@ import {
   type OcrPageData,
 } from './ocr-layer'
 import type { PdfAiDeps } from './ai/tools'
+import { AGENT_TOOLS, executePdfTool } from './ai/tools'
 import {
   MARKUP_COLORS,
   geomDispSize,
@@ -281,6 +282,25 @@ const RIBBON_TABS = [
   { id: 'view', labelKey: 'ribbonTabView' },
 ] as const
 type RibbonTab = (typeof RIBBON_TABS)[number]['id'] | 'fillForm'
+
+/** Host agent context (EverRoom describe): one status block mirroring the
+ *  panel skill's buildContext, minus UI-only bits (selection, current view).
+ *  The host agent has no selection; it locates content with search_text. */
+function buildAgentContext(deps: PdfAiDeps): string {
+  const parts = [
+    `Current document: "${deps.fileName()}", ${deps.pageCount()} pages.`,
+  ]
+  if (deps.readOnly()) parts.push('The document is read-only (encrypted or host-readonly); it cannot be modified.')
+  const outline = deps.outline()
+  if (outline && outline.length > 0) {
+    parts.push(`The document has an outline (${outline.length} top-level entries); use get_outline to view it.`)
+  }
+  const annots = deps.annotationSummary()
+  if (annots) parts.push(annots)
+  const pending = deps.pendingSummary()
+  if (pending) parts.push(pending)
+  return parts.join('\n')
+}
 
 export default function App() {
   const { lang, t } = useI18n()
@@ -1151,6 +1171,9 @@ export default function App() {
   const readOnly =
     status === 'ready' &&
     (embedReadonly || passwordRef.current !== undefined || documentEncrypted)
+  /** Latest readOnly for mount-once async callbacks (host agent executor). */
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
 
   useEffect(() => {
     if (
@@ -5140,6 +5163,136 @@ export default function App() {
     savedOnceRef.current = true
     void save(true)
   }
+
+  // ── Host agent executor (EverRoom embed): the host's agent drives the same
+  // pdf AI tool layer AiPanel uses. describe answers with the document context
+  // + embed-safe tool vocabulary; apply executes calls through executePdfTool
+  // with the live aiApi deps; after a mutating batch the pending edits are
+  // silently saved via save(true) so the host's fileSaved hook fires its
+  // version backfill. All state flows through refs (aiApi is rebuilt each
+  // render; save reads live state), so this effect mounts once. ──
+  const aiApiRef = useRef<PdfAiDeps>(aiApi)
+  aiApiRef.current = aiApi
+  const saveRef = useRef(save)
+  saveRef.current = save
+  const agentFilePathRef = useRef<string>('')
+  agentFilePathRef.current = filePath
+  const agentStatusRef = useRef<'loading' | 'error' | 'empty' | 'password' | 'ready'>(status)
+  agentStatusRef.current = status
+  const agentReadyReportedRef = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    // Readiness: report the loaded path once the document reaches 'ready' —
+    // the host gates describe/apply on it. A missing/failed load reports null;
+    // waitForAgentReady only accepts a report matching its expected path.
+    const path = agentStatusRef.current === 'ready' ? agentFilePathRef.current || null : null
+    if (agentReadyReportedRef.current === path) return
+    agentReadyReportedRef.current = path
+    window.pdfApi.reportAgentReady?.(path)
+  }, [filePath, status])
+
+  useEffect(() => {
+    // Tools that need the Genspark cloud backend (or a shell tab router) are
+    // unavailable in the embed: generate_image needs gsk auth, image_search/
+    // fetch_image need the ai:* shell channels, create_document routes through
+    // the shell's document creator. describe never advertises them.
+    const EMBED_BLOCKED_TOOLS = new Set([
+      'generate_image',
+      'create_document',
+    ])
+    const offRequest = window.pdfApi.onAgentToolRequest?.((request) => {
+      const reply = (payload: unknown) =>
+        window.pdfApi.reportAgentToolReply(request.requestId, payload)
+      if (agentStatusRef.current !== 'ready' || !agentFilePathRef.current) {
+        reply({ ok: false, error: 'no document is open' })
+        return
+      }
+      if (request.kind === 'describe') {
+        const deps = aiApiRef.current
+        reply({
+          ok: true,
+          describe: {
+            context: buildAgentContext(deps),
+            tools: AGENT_TOOLS.filter((tool) => !EMBED_BLOCKED_TOOLS.has(tool.name)).map(
+              ({ name, description, inputSchema }) => ({ name, description, inputSchema }),
+            ),
+          },
+        })
+        return
+      }
+      // Host-readonly mode must never be mutated. The desktop only creates
+      // editable agent sessions, but the gate mirrors sheets' last line of
+      // defence.
+      if (embedReadonly || readOnlyRef.current) {
+        reply({ ok: false, error: 'this document is open read-only' })
+        return
+      }
+      const calls = Array.isArray(request.calls) ? request.calls : []
+      void (async () => {
+        const results = []
+        let mutated = false
+        for (const call of calls.slice(0, 50)) {
+          if (EMBED_BLOCKED_TOOLS.has(call.name)) {
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: `Tool ${call.name} is not available in this embed; use one of the allowed tools`,
+              isError: true,
+            })
+            continue
+          }
+          try {
+            const execution = await executePdfTool(
+              aiApiRef.current,
+              { id: call.id, name: call.name, input: call.input ?? {} },
+            )
+            if (execution.mutated) mutated = true
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: execution.output,
+              isError: execution.isError === true,
+              mutated: execution.mutated === true,
+              summary: execution.summary,
+            })
+          } catch (error) {
+            results.push({
+              id: call.id,
+              name: call.name,
+              output: error instanceof Error ? error.message : String(error),
+              isError: true,
+            })
+          }
+        }
+        // Silently drain the pending edits. AI edits land in the same pending
+        // queues as user edits (dirty=true), so the host's fileSaved hook
+        // fires the version backfill; a failed save is reported instead of
+        // claimed as persisted.
+        let saved = true
+        if (mutated) {
+          try {
+            saved = await saveRef.current(true)
+          } catch {
+            saved = false
+          }
+        }
+        reply({
+          ok: true,
+          results,
+          ...(mutated && !saved
+            ? {
+                error:
+                  'applied but NOT saved: the edits are still pending in the viewer. ' +
+                  'Report this to the user; do not claim the changes were persisted.',
+              }
+            : {}),
+        })
+      })()
+    })
+    return () => {
+      offRequest?.()
+    }
+    // refs only: aiApi/save/status read live refs
+  }, [])
 
   /** Internal destination of a Link annotation → jump to that page */
   const goToDest = async (dest: unknown) => {

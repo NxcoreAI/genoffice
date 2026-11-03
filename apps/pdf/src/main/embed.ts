@@ -5,8 +5,14 @@
  * exports the GenOffice AI/standalone surface (tree-shaken in embed builds).
  */
 export {
+  applyAgentPdfTools,
   configurePdfRuntime,
   createPdfView,
+  describeAgentPdf,
   pdfIsDirty,
   requestPdfClose,
+  setPdfFileSavedHook,
+  waitForAgentReady,
 } from './pdf-main'
+export type { PdfAgentToolCall } from './pdf-main'
+export type { PdfAgentDescribeResult, PdfAgentToolResultRow } from '../shared/ipc'

@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { Lang } from '@genoffice/i18n'
 import type { AiStreamChunk } from '@genoffice/ai-provider'
 import { installDropOpenBridge } from '@genoffice/electron-utils/drop-open'
-import { AI_CHANNELS, PDF_CHANNELS } from '../shared/ipc'
+import { AI_CHANNELS, PDF_AGENT_CHANNELS, PDF_CHANNELS } from '../shared/ipc'
 import type { PdfApi, UiTheme } from '../shared/ipc'
 
 const api: PdfApi = {
@@ -90,6 +90,20 @@ const api: PdfApi = {
     ipcRenderer.on(AI_CHANNELS.streamChunk, listener)
     return () => ipcRenderer.removeListener(AI_CHANNELS.streamChunk, listener)
   },
+  onAgentToolRequest: (handler) => {
+    const listener = (
+      _e: Electron.IpcRendererEvent,
+      request: Parameters<typeof handler>[0],
+    ) => handler(request)
+    ipcRenderer.on(PDF_AGENT_CHANNELS.agentToolRequest, listener)
+    return () => ipcRenderer.removeListener(PDF_AGENT_CHANNELS.agentToolRequest, listener)
+  },
+  reportAgentToolReply: (requestId, reply) =>
+    ipcRenderer.send(PDF_AGENT_CHANNELS.agentToolResult, { requestId, reply }),
+  reportAgentReady: (filePath) =>
+    ipcRenderer.send(PDF_AGENT_CHANNELS.agentReady, {
+      filePath: typeof filePath === 'string' && filePath.length > 0 ? filePath : null,
+    }),
 }
 
 // Shared project chat store (registered app-wide by the shell's main init):

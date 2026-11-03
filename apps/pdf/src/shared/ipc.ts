@@ -653,6 +653,13 @@ export const AI_CHANNELS = {
   fetchImage: 'ai:fetch-image',
 } as const
 
+/** Host agent executor (EverRoom embed): main → renderer describe/apply requests */
+export const PDF_AGENT_CHANNELS = {
+  agentToolRequest: 'pdf:agent-tool-request',
+  agentToolResult: 'pdf:agent-tool-result',
+  agentReady: 'pdf:agent-ready',
+} as const
+
 export interface ImageSearchResponse {
   images: Array<{
     title: string
@@ -765,4 +772,29 @@ export interface PdfApi {
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>
   onAiStream(handler: (chunk: AiStreamChunk) => void): () => void
+  /** Host agent executor: main forwards describe/apply requests; replies via reportAgentToolReply */
+  onAgentToolRequest(handler: (request: {
+    requestId: string
+    kind: 'describe' | 'apply'
+    calls?: Array<{ id: string; name: string; input: Record<string, unknown> }>
+  }) => void): () => void
+  reportAgentToolReply(requestId: string, reply: unknown): void
+  /** Agent readiness: this view has finished loading a document (null = none/blank) */
+  reportAgentReady(filePath: string | null): void
+}
+
+/** describe reply payload: context line + tool vocabulary (embed-safe subset). */
+export interface PdfAgentDescribeResult {
+  context: string
+  tools?: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>
+}
+
+/** apply reply payload: per-call results in request order. */
+export interface PdfAgentToolResultRow {
+  id: string
+  name: string
+  output: string
+  isError?: boolean
+  mutated?: boolean
+  summary?: string
 }
