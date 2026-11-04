@@ -185,12 +185,16 @@ import { traceWorkbookDependents, traceWorkbookPrecedents } from './ai/formula-a
 import { createFilesSkill } from './ai/files-skill'
 import { createSearchSkill } from './ai/search-skill'
 import { createImageSkill } from './ai/image-skill'
+import { AiNoteLayer } from './ai/AiNoteLayer'
+import { readSelectionExcerpt } from './ai/selection-excerpt'
 import { ATTACHMENT_IMAGE_EXTS } from '../shared/desktop-api'
 import type {
   AttachmentAddResult,
   AttachmentMeta,
   MenuAction,
   RecoveryPromptPayload,
+  SheetsAskQueueAction,
+  SheetsAskQueueItem,
   WorkbookFile,
   WorkbookStyleEdit,
   WorkbookVisualObject,
@@ -309,10 +313,7 @@ import { installRtlTextDirectionFix } from './rtl-text-fix'
 import { installRtlGridMirror } from './rtl-grid-mirror'
 import { installReadonlyVeto } from './readonly-veto'
 import type { DeletedRange } from './structural-shift-guard'
-import {
-  installStructuralShiftVeto,
-  structuralShiftBlock,
-} from './structural-shift-runtime'
+import { installStructuralShiftVeto, structuralShiftBlock } from './structural-shift-runtime'
 import { showToast } from './toast-bus'
 import { installMultiRowAutofit } from './autofit-multi-row'
 import { installCopyMaterialize } from './copy-materialize'
@@ -596,6 +597,11 @@ export function App(): React.JSX.Element {
   /// only a range the user deliberately dragged or shift-selected does.
   const [aiScope, setAiScope] = useState<FrozenSelection | null>(null)
   const [aiSelectionAskAnchor, setAiSelectionAskAnchor] = useState<SelectionAskAnchor | null>(null)
+  /// EverRoom embed: the host's annotation queue snapshot (the host owns it).
+  const [askQueueItems, setAskQueueItems] = useState<readonly SheetsAskQueueItem[]>([])
+  /// Bumped once the Univer runtime exists, so the note layer (which needs the
+  /// live instance to map A1 ranges to pixels) mounts after the grid is ready.
+  const [univerReady, setUniverReady] = useState(false)
   const selectionDragRef = useRef<{
     start: Point
     initialRangeKey: string | null
@@ -1494,6 +1500,7 @@ export function App(): React.JSX.Element {
     })
     loadSnapshotIntoUniver(runtime, initialSnapshot, 'new-workbook', 'Untitled')
     univerRef.current = runtime
+    setUniverReady(true)
     // Read-only embed: seal the edit entry (Univer's official disableEdit —
     // no cell editor mount, fx input disabled) and veto the direct-write
     // commands the config alone leaves open (Delete, context menu, paste).
@@ -2631,6 +2638,7 @@ export function App(): React.JSX.Element {
       }
       runtime.univer.dispose()
       univerRef.current = null
+      setUniverReady(false)
     }
   }, [])
 
@@ -2638,6 +2646,14 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     crossHighlightRef.current?.setVisible(crossHighlightVisible)
   }, [crossHighlightVisible])
+
+  // EverRoom embed: the host owns the annotation queue and pushes snapshots
+  // down; the grid renders them (AiNoteLayer) and sends edit/delete actions
+  // back over IPC.
+  useEffect(() => {
+    if (!__GENOFFICE_EMBED_ONLY__) return undefined
+    return window.desktopApi?.onAskQueue?.((items) => setAskQueueItems(items)) ?? undefined
+  }, [])
 
   function handleSend(
     overrideInstruction?: string,
@@ -3012,7 +3028,9 @@ export function App(): React.JSX.Element {
           // Trust the bytes, not the Content-Type header the handler echoed
           const sniffed = sniffImageMime(fetched.base64)
           if (!sniffed) {
-            throw new Error('The downloaded image is not PNG/JPEG/GIF/SVG — pick another image URL.')
+            throw new Error(
+              'The downloaded image is not PNG/JPEG/GIF/SVG — pick another image URL.',
+            )
           }
           dataUrl = `data:${sniffed};base64,${fetched.base64}`
           mediaType = sniffed
@@ -4892,14 +4910,21 @@ export function App(): React.JSX.Element {
   /**
    * EverRoom embed: selection notes go to the host agent. The host addresses
    * sheets by sheetId (not name), so the payload carries the active sheet id
-   * plus the A1 range and the sheet name for the human-readable message.
+   * plus the A1 range, the sheet name for the human-readable message, and the
+   * selected cells' text excerpt that the host shows on the note card.
    */
-  const handleAiSelectionAskHost = (op: { instruction: string; range: string; mode: 'now' | 'queue' }) => {
+  const handleAiSelectionAskHost = (op: {
+    instruction: string
+    range: string
+    mode: 'now' | 'queue'
+  }) => {
     const active = univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    const excerpt = readSelectionExcerpt(univerRef.current, op.range)
     void window.desktopApi
       ?.agentAsk?.({
         instruction: op.instruction,
         range: op.range,
+        ...(excerpt ? { excerpt } : {}),
         ...(active?.getSheetId() ? { sheetId: active.getSheetId() } : {}),
         ...(active?.getSheetName() ? { sheetName: active.getSheetName() } : {}),
         ...(op.mode === 'queue' ? { mode: 'queue' as const } : {}),
@@ -4911,6 +4936,11 @@ export function App(): React.JSX.Element {
         setMessage(String(result.error))
       })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))
+  }
+
+  /** EverRoom embed: edit / delete of a queued note goes back to the host store. */
+  const handleAskQueueAction = (action: SheetsAskQueueAction): void => {
+    window.desktopApi?.askQueueAction?.(action)
   }
 
   const aiScopeChip = resolveScopeChip(aiRunScope, aiScope, aiScopeDismissed)
@@ -5028,6 +5058,15 @@ export function App(): React.JSX.Element {
         onGetConsolidateDefault={() => consolidateDefaultReferenceImpl(dataToolsContext())}
         onApplyHeaderFooter={(result) => handleApplyHeaderFooterImpl(pageLayoutContext(), result)}
       />
+      {__GENOFFICE_EMBED_ONLY__ && (
+        // EverRoom embed: host-note anchors over the noted grid ranges, with a
+        // hover card (edit / delete) that routes through the host queue IPC.
+        <AiNoteLayer
+          runtime={univerReady ? univerRef.current : null}
+          items={askQueueItems}
+          onAction={handleAskQueueAction}
+        />
+      )}
       {advancedFilterColumns !== null && (
         <AdvancedFilterDialog
           columns={advancedFilterColumns}

@@ -2584,6 +2584,15 @@ export interface DesktopApi {
    * so no ids beyond the selection travel from the renderer.
    */
   agentAsk(op: SheetsAgentAskOp): Promise<SheetsAgentAskResult>
+  /**
+   * EverRoom embed only: the host's annotation queue for this workbook is
+   * pushed down so the grid can draw a dashed anchor plus a numbered badge on
+   * each noted range and show a hover card (edit / delete). The queue itself
+   * stays owned by the host conversation; the editor only renders it.
+   */
+  onAskQueue(handler: (items: SheetsAskQueueItem[]) => void): () => void
+  /** EverRoom embed only: ask the host to update one note / drop one item / send the batch. */
+  askQueueAction(action: SheetsAskQueueAction): void
 }
 
 /** How the host should treat the ask: send it now, or add it to a batch. */
@@ -2598,8 +2607,37 @@ export interface SheetsAgentAskOp {
   sheetName?: string
   /** A1 range of the selection (empty = the active cell). */
   range?: string
+  /**
+   * Plain-text snapshot of the selected cells (whitespace-collapsed, ≤200
+   * characters), so the host conversation can show the original content next
+   * to the note and the agent can cross-check its own re-read.
+   */
+  excerpt?: string
   mode?: SheetsAgentAskMode
 }
+
+/**
+ * One host-side annotation for a sheet range: the anchored cell content
+ * snapshot plus the user's note. Flat, because the host renders it directly.
+ */
+export interface SheetsAskQueueItem {
+  id: string
+  /** The user's note (typed in the compact popover). */
+  instruction: string
+  /** Original-content excerpt captured when the note was created. */
+  excerpt?: string
+  /** Worksheet id the note is anchored to (the host addresses sheets by id). */
+  sheetId?: string
+  /** Worksheet name at capture time; display cross-check only. */
+  sheetName?: string
+  /** A1 range the note is anchored to. */
+  range?: string
+}
+
+export type SheetsAskQueueAction =
+  | { kind: 'send-all' }
+  | { kind: 'remove'; draftId: string }
+  | { kind: 'update'; draftId: string; instruction: string }
 
 export type SheetsAgentAskResult = { ok: true } | { ok: false; error: string }
 

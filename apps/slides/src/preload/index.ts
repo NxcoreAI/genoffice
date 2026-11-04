@@ -82,6 +82,9 @@ import type {
   MenuCommand,
   OpenResult,
   SlidesApi,
+  SlidesAgentAskOp,
+  SlidesAskQueueAction,
+  SlidesAskQueueItem,
   UiTheme,
   SetEffectsPatch,
 } from '../shared/ipc'
@@ -150,14 +153,14 @@ const api: SlidesApi = {
   }) => ipcRenderer.invoke('slides:cloud-page-generate', op),
   localGeneratePage: (op: { specJson: string }) =>
     ipcRenderer.invoke('slides:local-page-generate', op),
-  agentAsk: (op: {
-    instruction: string
-    slideIndex: number
-    targets: Array<{
-      id: string
-      desc: { type: string; text?: string; rows?: number; cols?: number }
-    }>
-  }) => ipcRenderer.invoke('slides:agent-ask', op),
+  agentAsk: (op: SlidesAgentAskOp) => ipcRenderer.invoke('slides:agent-ask', op),
+  onAskQueue: (handler) => {
+    const listener = (_event: IpcRendererEvent, items: SlidesAskQueueItem[]) => handler(items)
+    ipcRenderer.on('slides:ask-queue', listener)
+    return () => ipcRenderer.removeListener('slides:ask-queue', listener)
+  },
+  askQueueAction: (action: SlidesAskQueueAction) =>
+    ipcRenderer.send('slides:ask-queue-action', action),
   editText: (op: EditTextOp) => ipcRenderer.invoke('slides:edit-text', op),
   setElementFont: (op: SetElementFontOp) => ipcRenderer.invoke('slides:set-element-font', op),
   setElementParagraphFormat: (op: SetElementParagraphFormatOp) =>

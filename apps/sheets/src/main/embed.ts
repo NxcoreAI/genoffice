@@ -6,10 +6,12 @@ export {
   describeAgentWorkbook,
   hasActiveQueuedWorkbook,
   queueWorkbookForView,
+  pushSheetsAskQueue,
   registerSheetsIpc,
   requestSheetsClose,
   setActiveSheetsWebContents,
   setSheetsAgentAskHook,
+  setSheetsAskQueueActionHook,
   setSheetsFileSavedHook,
   setSheetsShellWindow,
   sheetsPendingEditCount,
@@ -17,6 +19,7 @@ export {
   teardownSheetsRenderer,
   waitForAgentReady,
 } from './sheets-main'
+export type { SheetsAskQueueAction, SheetsAskQueueItem } from '../shared/desktop-api'
 export type {
   SheetsAgentDescribeResult,
   SheetsAgentToolCall,

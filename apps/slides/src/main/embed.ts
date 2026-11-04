@@ -14,11 +14,14 @@ export { buildAgentDeckPptx } from './agent-deck'
 export {
   configureSlidesRuntime,
   createSlidesView,
+  pushSlidesAskQueue,
   registerSlidesIpc,
   requestSlidesClose,
   setActiveSlidesWebContents,
   setSlidesAgentAskHook,
+  setSlidesAskQueueActionHook,
   setSlidesFileSavedHook,
   setSlidesShellWindow,
   slidesIsDirty,
 } from './slides-main'
+export type { SlidesAskQueueAction, SlidesAskQueueItem } from '../shared/ipc'

@@ -26,6 +26,7 @@ import {
   shell,
   systemPreferences,
   WebContentsView,
+  webContents,
 } from 'electron'
 import type {
   IpcMainInvokeEvent,
@@ -91,8 +92,11 @@ import type {
   AttachmentReadResult,
   SheetsAgentAskOp,
   SheetsAgentAskResult,
+  SheetsAskQueueAction,
+  SheetsAskQueueItem,
   WorkbookFile,
 } from '../shared/desktop-api'
+import { normalizeSheetsAgentAskOp, normalizeSheetsAskQueueAction } from '../shared/ask-queue'
 import {
   ATTACHMENT_IMAGE_EXTS,
   aiChatRequestSchema,
@@ -1543,8 +1547,7 @@ function sanitizeAutoRenameBase(raw: string): string | null {
  * view's webContents id and injects the request into its agent conversation.
  */
 let sheetsAgentAskHook:
-  | ((wcId: number, op: SheetsAgentAskOp) => Promise<SheetsAgentAskResult>)
-  | null = null
+  ((wcId: number, op: SheetsAgentAskOp) => Promise<SheetsAgentAskResult>) | null = null
 
 export function setSheetsAgentAskHook(
   hook: ((wcId: number, op: SheetsAgentAskOp) => Promise<SheetsAgentAskResult>) | null,
@@ -1552,22 +1555,24 @@ export function setSheetsAgentAskHook(
   sheetsAgentAskHook = hook
 }
 
-/** Normalize an untrusted renderer payload into a bounded op. */
-function normalizeSheetsAgentAskOp(raw: unknown): SheetsAgentAskOp | null {
-  if (!raw || typeof raw !== 'object') return null
-  const value = raw as Record<string, unknown>
-  const instruction = typeof value.instruction === 'string' ? value.instruction.trim() : ''
-  if (!instruction) return null
-  const sheetId = typeof value.sheetId === 'string' ? value.sheetId.trim().slice(0, 64) : ''
-  const sheetName = typeof value.sheetName === 'string' ? value.sheetName.trim().slice(0, 120) : ''
-  const range = typeof value.range === 'string' ? value.range.trim().slice(0, 64) : ''
-  return {
-    instruction: instruction.slice(0, 2000),
-    ...(sheetId ? { sheetId } : {}),
-    ...(sheetName ? { sheetName } : {}),
-    ...(range ? { range } : {}),
-    ...(value.mode === 'queue' ? { mode: 'queue' as const } : {}),
-  }
+/**
+ * EverRoom embed only: the host pushes its annotation queue for this workbook
+ * down so the grid can draw the anchored range plus the note, and can ask the
+ * host to drop one item / update one note.
+ */
+let sheetsAskQueueActionHook: ((wcId: number, action: SheetsAskQueueAction) => void) | null = null
+
+export function setSheetsAskQueueActionHook(
+  hook: ((wcId: number, action: SheetsAskQueueAction) => void) | null,
+): void {
+  sheetsAskQueueActionHook = hook
+}
+
+/** Push the host's queue snapshot to one sheets view (empty array clears it). */
+export function pushSheetsAskQueue(wcId: number, items: SheetsAskQueueItem[]): void {
+  const contents = webContents.fromId(wcId)
+  if (!contents || contents.isDestroyed()) return
+  contents.send('sheets:ask-queue', items)
 }
 
 let workbookOpenedHook: ((wc: WebContents, path: string) => void) | null = null
@@ -2333,16 +2338,27 @@ export function registerSheetsIpc(): void {
   registerSheetsAgentIpc()
 
   // Grid-selection「AI 修改」→ 宿主 Agent（宿主按 webContents id 反查文件与空间）。
-  ipcMain.handle('sheets:agent-ask', async (event, raw?: unknown): Promise<SheetsAgentAskResult> => {
-    const op = normalizeSheetsAgentAskOp(raw)
-    if (!op) return { ok: false, error: 'EMPTY_INSTRUCTION' }
-    if (!sheetsAgentAskHook) return { ok: false, error: 'NO_HOST_AGENT' }
-    return sheetsAgentAskHook(event.sender.id, op).catch(
-      (error: unknown): SheetsAgentAskResult => ({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    )
+  ipcMain.handle(
+    'sheets:agent-ask',
+    async (event, raw?: unknown): Promise<SheetsAgentAskResult> => {
+      const op = normalizeSheetsAgentAskOp(raw)
+      if (!op) return { ok: false, error: 'EMPTY_INSTRUCTION' }
+      if (!sheetsAgentAskHook) return { ok: false, error: 'NO_HOST_AGENT' }
+      return sheetsAgentAskHook(event.sender.id, op).catch(
+        (error: unknown): SheetsAgentAskResult => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    },
+  )
+
+  // EverRoom embed: annotation action (update one note / drop one item / send
+  // the whole batch) → host. The queue itself lives in the host store.
+  ipcMain.on('sheets:ask-queue-action', (event, raw?: unknown) => {
+    if (!sheetsAskQueueActionHook) return
+    const action = normalizeSheetsAskQueueAction(raw)
+    if (action) sheetsAskQueueActionHook(event.sender.id, action)
   })
 
   // Registered here (not in registerSheetsAiIpc, skipped in shell mode):
@@ -2586,8 +2602,15 @@ export function registerSheetsIpc(): void {
     }
     if (bytes.length >= 6 && bytes.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif'
     // SVG 是 XML 文本、没有魔数：看开头有没有 <svg（允许 xml 声明/BOM/注释在前）。
-    const head = bytes.subarray(0, 4096).toString('utf8').replace(/^\uFEFF/, '')
-    if (/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) {
+    const head = bytes
+      .subarray(0, 4096)
+      .toString('utf8')
+      .replace(/^\uFEFF/, '')
+    if (
+      /^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(
+        head,
+      )
+    ) {
       return 'image/svg+xml'
     }
     return null

@@ -190,8 +190,13 @@ import type {
   AnimationItem,
   ShapeKey,
   SetEffectsPatch,
+  SlidesAgentAskOp,
+  SlidesAgentAskResult,
+  SlidesAskQueueAction,
+  SlidesAskQueueItem,
 } from '../shared/ipc'
 import { buildPrintDocumentHtml } from '../shared/print-html'
+import { normalizeAgentAskOp, normalizeAskQueueAction, normalizeAskQueueItems } from './ask-queue'
 
 import { tm } from './i18n-main'
 import { tiffToPng } from './tiff-decode'
@@ -399,26 +404,36 @@ export function setSlidesFileSavedHook(fn: ((wc: WebContents, path: string) => v
 }
 
 /**
- * Host hook: the "AI 修改" popover's send-now payload, relayed so the embed
- * host (EverRoom) can route it to its own agent. The ids are the deck outline
- * / edit-op id space (durableId ?? sourceId).
+ * Host hook: the selection-ask popover's payload, relayed so the embed host
+ * (EverRoom) can route it to its own agent. The ids are the deck outline /
+ * edit-op id space (durableId ?? sourceId). `mode: 'queue'` marks a note that
+ * joins the host's batch, `excerpt` is the selected elements' text snapshot.
  */
-export interface SlidesAgentAskOp {
-  instruction: string
-  slideIndex: number
-  targets: Array<{
-    id: string
-    desc: { type: string; text?: string; rows?: number; cols?: number }
-  }>
-}
-export type SlidesAgentAskResult = { ok: true } | { ok: false; error: string }
 let slidesAgentAskHook:
-  | ((wcId: number, op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>)
-  | null = null
+  ((wcId: number, op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>) | null = null
 export function setSlidesAgentAskHook(
   fn: ((wcId: number, op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>) | null,
 ): void {
   slidesAgentAskHook = fn
+}
+
+/**
+ * Host hook: an annotation action from the deck (edit one note / remove one /
+ * send the whole batch). The queue itself is host-owned; slides only render a
+ * snapshot and send intents back.
+ */
+let slidesAskQueueActionHook: ((wcId: number, action: SlidesAskQueueAction) => void) | null = null
+export function setSlidesAskQueueActionHook(
+  hook: ((wcId: number, action: SlidesAskQueueAction) => void) | null,
+): void {
+  slidesAskQueueActionHook = hook
+}
+
+/** Push the host's annotation queue snapshot to one slides view (empty array clears it). */
+export function pushSlidesAskQueue(wcId: number, items: SlidesAskQueueItem[]): void {
+  const contents = webContents.fromId(wcId)
+  if (!contents || contents.isDestroyed()) return
+  contents.send('slides:ask-queue', normalizeAskQueueItems(items))
 }
 
 /**
@@ -1645,24 +1660,22 @@ export function registerSlidesIpc(): void {
     },
   )
 
-  // ── Host "AI 修改" forward (EverRoom embed): the popover's send-now payload is
+  // ── Host ask forward (EverRoom embed): the popover's payload is
   // validated here and handed to the host hook; without a host (standalone app)
   // the invoke answers with an error instead of hanging forever.
   ipcMain.handle('slides:agent-ask', async (e, op: unknown): Promise<SlidesAgentAskResult> => {
-    const o = (op ?? {}) as Partial<SlidesAgentAskOp>
-    const instruction = typeof o.instruction === 'string' ? o.instruction.trim() : ''
-    const slideIndex = typeof o.slideIndex === 'number' ? Math.trunc(o.slideIndex) : -1
-    const targets = Array.isArray(o.targets)
-      ? o.targets.filter(
-          (t): t is SlidesAgentAskOp['targets'][number] =>
-            !!t && typeof t === 'object' && typeof t.id === 'string' && t.id.length > 0,
-        )
-      : []
-    if (!instruction || slideIndex < 0 || targets.length === 0) {
-      return { ok: false, error: 'invalid ask payload' }
-    }
+    const normalized = normalizeAgentAskOp(op)
+    if (!normalized) return { ok: false, error: 'invalid ask payload' }
     if (!slidesAgentAskHook) return { ok: false, error: 'no host agent registered' }
-    return slidesAgentAskHook(e.sender.id, { instruction, slideIndex, targets })
+    return slidesAgentAskHook(e.sender.id, normalized)
+  })
+
+  // ── Host annotation queue (EverRoom embed): edit one note / remove one /
+  // send the whole batch → host hook. The queue lives in the host.
+  ipcMain.on('slides:ask-queue-action', (event, raw?: unknown) => {
+    if (!slidesAskQueueActionHook) return
+    const action = normalizeAskQueueAction(raw)
+    if (action) slidesAskQueueActionHook(event.sender.id, action)
   })
 
   // ── Local single-page generation (no gsk needed, e.g. BYOK): a JSON slide spec written by

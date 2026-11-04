@@ -10,9 +10,19 @@ export {
   createPdfView,
   describeAgentPdf,
   pdfIsDirty,
+  pushPdfAskQueue,
   requestPdfClose,
+  setPdfAgentAskHook,
+  setPdfAskQueueActionHook,
   setPdfFileSavedHook,
   waitForAgentReady,
 } from './pdf-main'
 export type { PdfAgentToolCall } from './pdf-main'
-export type { PdfAgentDescribeResult, PdfAgentToolResultRow } from '../shared/ipc'
+export type {
+  PdfAgentAskOp,
+  PdfAgentAskResult,
+  PdfAgentDescribeResult,
+  PdfAgentToolResultRow,
+  PdfAskQueueAction,
+  PdfAskQueueItem,
+} from '../shared/ipc'

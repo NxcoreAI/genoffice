@@ -2906,6 +2906,120 @@ body.vib .slide-list {
   cursor: default;
 }
 
+/* ── EverRoom embed: host annotation queue anchors ───────────────────── */
+
+/* Dashed outline over a commented element; the numbered badge above it opens
+ * the hover card. Both are fixed-position viewport overlays, re-measured by the
+ * app on scroll/zoom so the canvas transform never scales the chrome. */
+.host-note-outline {
+  position: fixed;
+  z-index: 57;
+  pointer-events: none;
+  border: 1.5px dashed var(--color-ai-action);
+  border-radius: var(--radius-6);
+}
+
+.host-note-badge {
+  position: fixed;
+  z-index: 58;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--surface);
+  border-radius: 999px;
+  background: var(--color-ai-action);
+  color: var(--color-ai-action-text);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--slides-shadow-popup);
+}
+
+.host-note-badge:hover,
+.host-note-badge:focus-visible {
+  background: var(--color-ai-action-hover);
+  outline: none;
+}
+
+.host-note-card {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-8);
+  background: var(--surface);
+  box-shadow: var(--slides-shadow-popup);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.host-note-card-excerpt {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-note-card-note {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.host-note-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.host-note-card-edit,
+.host-note-card-del {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.host-note-card-edit:hover {
+  color: var(--color-ai-action);
+}
+
+.host-note-card-del:hover {
+  color: var(--danger);
+}
+
+/* Compact host-note popover: one input, no title/excerpt/chips/footer */
+.ai-ask-pop-compact {
+  padding: 8px;
+}
+
+.host-note-pop-delete {
+  align-self: flex-end;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.host-note-pop-delete:hover {
+  color: var(--danger);
+}
+
 /* Queue card above the composer */
 .ai-queue {
   margin-bottom: 8px;

@@ -11,7 +11,7 @@ import {
 import { readFile, writeFile } from 'node:fs/promises'
 import { userInfo } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { BrowserWindow, WebContentsView, app, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, WebContentsView, app, dialog, ipcMain, shell, webContents } from 'electron'
 import type { WebContents } from 'electron'
 import {
   buildPrintableHtml,
@@ -28,8 +28,12 @@ import { gskGenerateImage, hasGskAuth } from '@genoffice/ai-search'
 import { cloudToolsEnabled, type AiSettings } from '@genoffice/ai-provider'
 import { PDF_CHANNELS, PDF_AGENT_CHANNELS } from '../shared/ipc'
 import type {
+  PdfAgentAskOp,
+  PdfAgentAskResult,
   PdfAgentDescribeResult,
   PdfAgentToolResultRow,
+  PdfAskQueueAction,
+  PdfAskQueueItem,
   ExportImagesRequest,
   ExportImagesResult,
   PdfAutoRenameResult,
@@ -62,6 +66,7 @@ import type {
   ValidateTextEditsRequest,
 } from '../shared/ipc'
 import type { SavedSignature } from '../shared/ipc'
+import { normalizeAgentAskOp, normalizeAskQueueAction, normalizeAskQueueItems } from './host-ask'
 import { writePdfAtomically } from './atomic-write'
 import {
   cropPagesBytes,
@@ -640,6 +645,40 @@ export async function applyAgentPdfTools(
   return { results: reply.results }
 }
 
+// ── Host annotations (EverRoom embed): selection notes ↔ host agent queue ──
+// The host owns the annotation queue (conversation-side state); the pdf view
+// only renders anchors for a pushed snapshot and reports user actions back.
+// Hooks are installed by the host after loading this embed entry.
+
+let pdfAgentAskHook: ((wcId: number, op: PdfAgentAskOp) => Promise<PdfAgentAskResult>) | null = null
+
+/** Install the host's selection-note forwarder (null clears it). */
+export function setPdfAgentAskHook(
+  hook: ((wcId: number, op: PdfAgentAskOp) => Promise<PdfAgentAskResult>) | null,
+): void {
+  pdfAgentAskHook = hook
+}
+
+let pdfAskQueueActionHook: ((wcId: number, action: PdfAskQueueAction) => void) | null = null
+
+/** Install the host's queue-action sink (null clears it). */
+export function setPdfAskQueueActionHook(
+  hook: ((wcId: number, action: PdfAskQueueAction) => void) | null,
+): void {
+  pdfAskQueueActionHook = hook
+}
+
+/**
+ * Push the host's annotation queue snapshot to one pdf view (empty array clears
+ * the page anchors). Malformed rows are dropped: the renderer trusts nothing
+ * that comes over IPC.
+ */
+export function pushPdfAskQueue(wcId: number, items: PdfAskQueueItem[]): void {
+  const contents = webContents.fromId(wcId)
+  if (!contents || contents.isDestroyed()) return
+  contents.send(PDF_CHANNELS.askQueue, normalizeAskQueueItems(items))
+}
+
 // ── Agent readiness (EverRoom hidden pdf view): "document loaded and ready" ──
 // EverRoom creates a pdf WebContentsView on demand (possibly hidden) and then
 // drives describeAgentPdf/applyAgentPdfTools. Loading a pdf is asynchronous
@@ -722,7 +761,9 @@ export function waitForAgentReady(
  * The EverRoom host uses it to sync the version backfill. Never called standalone. */
 let pdfFileSavedHook: ((wc: WebContents, filePath: string) => void) | null = null
 
-export function setPdfFileSavedHook(hook: ((wc: WebContents, filePath: string) => void) | null): void {
+export function setPdfFileSavedHook(
+  hook: ((wc: WebContents, filePath: string) => void) | null,
+): void {
   pdfFileSavedHook = hook
 }
 
@@ -1545,7 +1586,8 @@ function registerPdfIpc(): void {
       async (_e, op: { prompt?: unknown; aspectRatio?: unknown }) => {
         if (!hasGskAuth())
           return {
-            error: 'Genspark account is not logged in on this machine; ask the user to log in first',
+            error:
+              'Genspark account is not logged in on this machine; ask the user to log in first',
           }
         if (!gskCloudToolsOn())
           return {
@@ -1631,6 +1673,28 @@ function registerPdfIpc(): void {
     if (!waiters) return
     for (const waiter of [...waiters]) waiter(filePath)
   })
+
+  // EverRoom embed: annotation queue actions (send-all / remove / update) → host.
+  ipcMain.on(PDF_CHANNELS.askQueueAction, (event, raw?: unknown) => {
+    if (!pdfAskQueueActionHook) return
+    const action = normalizeAskQueueAction(raw)
+    if (action) pdfAskQueueActionHook(event.sender.id, action)
+  })
+
+  // EverRoom embed: selection note → host agent. The host resolves file and
+  // workspace from the calling view's webContents id, so no ids travel down.
+  ipcMain.handle(
+    PDF_CHANNELS.agentAsk,
+    async (event, raw?: unknown): Promise<PdfAgentAskResult> => {
+      const op = normalizeAgentAskOp(raw)
+      if (!op) return { ok: false, error: 'EMPTY_INSTRUCTION_OR_ANCHOR' }
+      if (!pdfAgentAskHook) return { ok: false, error: 'NO_HOST_AGENT' }
+      return pdfAgentAskHook(event.sender.id, op).catch((error: unknown): PdfAgentAskResult => ({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }))
+    },
+  )
 
   // Language channel shared with other modules; removeHandler tolerates duplicate registration
   ipcMain.removeHandler(PDF_CHANNELS.getLanguage)

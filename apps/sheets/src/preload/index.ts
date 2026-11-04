@@ -39,6 +39,7 @@ import type {
   ImageSearchResponse,
   GenerateImageResult,
 } from '../shared/desktop-api'
+import { normalizeSheetsAskQueueItems } from '../shared/ask-queue'
 import {
   IPC_CHANNELS,
   MAX_CSV_EXPORT_CHARS,
@@ -582,6 +583,13 @@ const desktopApi: DesktopApi = {
     return webUtils.getPathForFile(file)
   },
   agentAsk: (op) => ipcRenderer.invoke('sheets:agent-ask', op),
+  onAskQueue: (handler) => {
+    const listener = (_event: Electron.IpcRendererEvent, items: unknown) =>
+      handler(normalizeSheetsAskQueueItems(items))
+    ipcRenderer.on('sheets:ask-queue', listener)
+    return () => ipcRenderer.removeListener('sheets:ask-queue', listener)
+  },
+  askQueueAction: (action) => ipcRenderer.send('sheets:ask-queue-action', action),
 }
 
 function parseAttachmentAddResult(input: unknown): AttachmentAddResult {

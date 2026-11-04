@@ -4134,3 +4134,134 @@ button {
 .app.ai-mode .status-bar {
   display: none !important;
 }
+
+/* ---- EverRoom embed: host annotation (note) anchors and cards ----
+ * The anchored passage is document content, tinted in the AI-action ink so it
+ * reads as a host note rather than a native highlight/underline markup; the
+ * badge, card and popover are chrome and use the shared semantic tokens. */
+.pdf-ask-anchor-set {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.pdf-ask-anchor {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-ai-action) 14%, transparent);
+  border-bottom: 2px dashed var(--color-ai-action);
+}
+
+.pdf-ask-anchor:hover,
+.pdf-ask-anchor.is-editing {
+  background: color-mix(in srgb, var(--color-ai-action) 26%, transparent);
+}
+
+.pdf-ask-anchor.is-editing {
+  border-bottom-style: solid;
+}
+
+.pdf-ask-anchor-badge {
+  position: absolute;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border: none;
+  border-radius: 7px;
+  background: var(--color-ai-action);
+  box-shadow: 0 0 0 1px var(--surface);
+  color: var(--color-ai-action-text);
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.pdf-ask-anchor-badge:hover {
+  background: var(--color-ai-action-hover);
+}
+
+.host-note-pop {
+  gap: 6px;
+  padding: 6px;
+}
+
+.host-note-pop-input {
+  padding: 6px 8px;
+}
+
+.host-note-pop-delete {
+  align-self: flex-end;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.host-note-pop-delete:hover {
+  color: var(--danger);
+}
+
+.host-note-card {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-8);
+  background: var(--surface);
+  box-shadow: var(--pdf-shadow-popup);
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.host-note-card-excerpt {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-note-card-note {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.host-note-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.host-note-card-edit,
+.host-note-card-del {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.host-note-card-edit:hover {
+  color: var(--color-ai-action);
+}
+
+.host-note-card-del:hover {
+  color: var(--danger);
+}

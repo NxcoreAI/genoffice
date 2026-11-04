@@ -1153,6 +1153,52 @@ export type MenuCommand =
   | 'copy'
   | 'paste'
 
+/**
+ * Selection-scoped annotation relayed from the slides embed to the host agent.
+ * The host resolves the room/file from this view's webContents id, so the
+ * renderer only describes the selection: page, durable element ids, and a text
+ * excerpt the agent can cross-check after its own re-read.
+ */
+export interface SlidesAgentAskOp {
+  instruction: string
+  slideIndex: number
+  targets: Array<{
+    id: string
+    desc: { type: string; text?: string; rows?: number; cols?: number }
+  }>
+  /** 'queue' = collect into the host's batch instead of sending right away (default 'now'). */
+  mode?: 'now' | 'queue'
+  /** Plain-text excerpt of the selected elements (whitespace collapsed, ≤200 chars). */
+  excerpt?: string
+}
+
+export type SlidesAgentAskResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * One host-side annotation for this deck: the anchored elements (page hint +
+ * durable ids, resolved again after page reorder) and the user's note.
+ *
+ * The host sends the fields flat (no anchor wrapper). `slideIndex` and
+ * `elementIds` are optional on the wire because anchors without an element
+ * cannot be drawn; the main process normalizes the snapshot before it reaches
+ * the renderer, so renderer code still treats `elementIds` as possibly empty.
+ */
+export interface SlidesAskQueueItem {
+  id: string
+  instruction: string
+  /** Original element-text excerpt captured when the note was queued. */
+  excerpt?: string
+  /** Page the note was made on; a hint only — anchors re-resolve by element id. */
+  slideIndex?: number
+  /** Durable element ids (durableId ?? sourceId) the note is anchored to. */
+  elementIds?: string[]
+}
+
+export type SlidesAskQueueAction =
+  | { kind: 'send-all' }
+  | { kind: 'remove'; draftId: string }
+  | { kind: 'update'; draftId: string; instruction: string }
+
 export interface SlidesApi {
   /** current UI language (persisted by the shell in app-settings.json) */
   getLanguage: () => Promise<
@@ -1241,15 +1287,16 @@ export interface SlidesApi {
   localGeneratePage: (op: {
     specJson: string
   }) => Promise<{ ok: boolean; marker?: string; error?: string; imageFailures?: string[] }>
-  /** Host (EverRoom embed) "AI 修改" forward: the popover's send-now payload is relayed to the host agent */
-  agentAsk: (op: {
-    instruction: string
-    slideIndex: number
-    targets: Array<{
-      id: string
-      desc: { type: string; text?: string; rows?: number; cols?: number }
-    }>
-  }) => Promise<{ ok: boolean; error?: string }>
+  /** Host (EverRoom embed) annotation forward: the popover's payload is relayed to the host agent */
+  agentAsk: (op: SlidesAgentAskOp) => Promise<SlidesAgentAskResult>
+  /**
+   * EverRoom embed only: the host's annotation queue (file-scoped) is pushed
+   * down so slides can draw numbered anchors on the commented elements (hover
+   * card: excerpt + note + edit/delete); the queue itself stays host-owned.
+   */
+  onAskQueue: (handler: (items: SlidesAskQueueItem[]) => void) => () => void
+  /** EverRoom embed only: ask the host to update one note / drop one item / send the whole queue. */
+  askQueueAction: (action: SlidesAskQueueAction) => void
   editText: (op: EditTextOp) => Promise<RenderSlide | null>
   /** Change font/size on selected elements wholesale (elements without text ignored; returns null if all ignored) */
   setElementFont: (op: SetElementFontOp) => Promise<RenderSlide | null>

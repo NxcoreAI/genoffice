@@ -27,6 +27,7 @@ import type {
   PasteSlideMode,
   SectionInfo,
   SetEffectsPatch,
+  SlidesAskQueueItem,
   SlideComment,
   TransitionKind,
 } from '../shared/ipc'
@@ -62,6 +63,7 @@ import {
   type AnchorRect,
   type AskTarget,
 } from './components/AiAskPopover'
+import { HostNoteAnchors, type HostNoteAnchor } from './components/HostNoteAnchors'
 import {
   anchorId,
   buildSelectionInstruction,
@@ -70,6 +72,12 @@ import {
   resolveQueueItem,
   type EditQueueItem,
 } from './ai/edit-queue'
+import {
+  buildElementExcerpt,
+  resolveAskQueueItem,
+  resolveAskQueue,
+  type ElementPlacement,
+} from './ai/host-queue-anchors'
 import { FormatBackgroundPane, type BgPaneOp } from './components/FormatBackgroundPane'
 import { FormatPane } from './components/FormatPane'
 import { CommentsPane } from './components/CommentsPane'
@@ -1213,20 +1221,53 @@ export function App() {
   // document content, so nothing here is persisted with the file.
 
   /** Open annotation popover; ids are the canvas selection it was opened on */
-  const [askState, setAskState] = useState<{ ids: string[]; itemKey?: string } | null>(null)
+  const [askState, setAskState] = useState<{
+    ids: string[]
+    itemKey?: string
+    /** Host queue edit: pre-resolved placements of the annotated elements */
+    placements?: ElementPlacement[]
+    /** Host queue edit: host draft id being edited (askQueueAction 'update'/'remove') */
+    hostItemId?: string
+    /** Host queue edit: page the placements were resolved on (closes when the user navigates away) */
+    hostSlideIndex?: number
+  } | null>(null)
   askOpenRef.current = askState !== null
   /** When the popover last dismissed itself — see the guard in openAskPopover */
   const askClosedAtRef = useRef(0)
 
+  // ── EverRoom embed: host-owned annotation queue ────────────────────────
+  // The host owns the queue (draft ids + note text) and pushes snapshots down;
+  // slides renders numbered anchors on the annotated elements and sends edits /
+  // removals back over askQueueAction. Empty snapshot = clear.
+  const [hostAskQueue, setHostAskQueue] = useState<SlidesAskQueueItem[]>([])
+  useEffect(() => {
+    if (!everroomEmbed || typeof window.slidesApi.onAskQueue !== 'function') return
+    return window.slidesApi.onAskQueue((items) => setHostAskQueue(Array.isArray(items) ? items : []))
+  }, [everroomEmbed])
+
   // A deliberate page change (thumbnail, outline, queue row) leaves the popover
   // anchored to elements that are no longer rendered, which would unmount it
-  // without committing; drop it rather than strand askState
+  // without committing; drop it rather than strand askState. A host-note edit
+  // is exempt: opening it may have just switched pages to reach the elements.
   useEffect(() => {
-    setAskState(null)
+    setAskState((prev) => {
+      if (!prev) return prev
+      if (prev.hostItemId && prev.hostSlideIndex === current) return prev
+      return null
+    })
   }, [current])
 
   const askTargets = useMemo((): AskTarget[] => {
     if (!askState) return []
+    // Host queue edits carry pre-resolved placements (which may target a group
+    // child that findNodeCtx cannot see without entering the group)
+    if (askState.placements) {
+      return askState.placements.map((placement) => ({
+        id: anchorId(placement.node),
+        sourceId: placement.node.sourceId,
+        desc: describeNode(placement.node),
+      }))
+    }
     return askState.ids.flatMap((id) => {
       const node = findNodeCtx(id)?.node
       return node ? [{ id: anchorId(node), sourceId: node.sourceId, desc: describeNode(node) }] : []
@@ -1275,9 +1316,48 @@ export function App() {
     [findNodeCtx, slides, current],
   )
 
+  /** Viewport rect of pre-resolved placements (host queue anchors; group offsets already folded in) */
+  const placementsRect = useCallback(
+    (placements: ElementPlacement[]): AnchorRect | null => {
+      const rel = stageRelRef.current
+      const slide = slides[current]
+      if (!rel || !slide || placements.length === 0) return null
+      const r = rel.getBoundingClientRect()
+      const scale = slide.widthPx > 0 ? r.width / slide.widthPx : 1
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const placement of placements) {
+        const b = placement.node.box
+        minX = Math.min(minX, placement.x)
+        minY = Math.min(minY, placement.y)
+        maxX = Math.max(maxX, placement.x + b.w)
+        maxY = Math.max(maxY, placement.y + b.h)
+      }
+      if (!Number.isFinite(minX)) return null
+      const view = rel.closest('.stage-wrap')?.getBoundingClientRect()
+      const rect = {
+        left: Math.max(r.left + minX * scale, view?.left ?? -Infinity),
+        top: Math.max(r.top + minY * scale, view?.top ?? -Infinity),
+        right: Math.min(r.left + maxX * scale, view?.right ?? Infinity),
+        bottom: Math.min(r.top + maxY * scale, view?.bottom ?? Infinity),
+        viewTop: view?.top ?? 0,
+        viewBottom: view?.bottom ?? window.innerHeight,
+      }
+      return rect.right <= rect.left || rect.bottom <= rect.top ? null : rect
+    },
+    [slides, current],
+  )
+
   const getAskAnchorRect = useCallback(
-    (): AnchorRect | null => (askState ? selectionRect(askState.ids) : null),
-    [askState, selectionRect],
+    (): AnchorRect | null =>
+      askState
+        ? askState.placements
+          ? placementsRect(askState.placements)
+          : selectionRect(askState.ids)
+        : null,
+    [askState, placementsRect, selectionRect],
   )
 
   /** Anchor for the floating Ask AI chip that follows the live selection */
@@ -1295,6 +1375,96 @@ export function App() {
     // never touches the queue, so the popover still opens
     setAskState({ ids: selectedIds })
   }, [editing, editingCell, selectedIds])
+
+  // ── EverRoom embed: host queue anchors ────────────────────────────────
+  /** Queue rows whose elements resolve onto the current page, with the queue
+   * position that numbers their badge. Notes whose elements are gone (deleted
+   * page, regenerated element) simply do not render. */
+  const hostAnchors = useMemo((): HostNoteAnchor[] => {
+    if (!everroomEmbed || hostAskQueue.length === 0) return []
+    const order = new Map(hostAskQueue.map((item, index) => [item.id, index + 1]))
+    return resolveAskQueue(slides, hostAskQueue).flatMap((resolved) =>
+      resolved.slideIndex === current
+        ? [
+            {
+              item: resolved.item,
+              order: order.get(resolved.item.id) ?? 0,
+              placements: resolved.placements,
+            },
+          ]
+        : [],
+    )
+  }, [everroomEmbed, hostAskQueue, slides, current])
+
+  /** Open the compact popover in edit mode on one host note (badge / card click). */
+  const openHostNoteEditor = useCallback(
+    (item: SlidesAskQueueItem) => {
+      const resolved = resolveAskQueueItem(slides, item)
+      if (!resolved) return
+      if (resolved.slideIndex !== current) setCurrent(resolved.slideIndex)
+      setEditing(null)
+      setEditingCell(null)
+      setAskState({
+        ids: resolved.placements.map((placement) => placement.node.sourceId),
+        placements: resolved.placements,
+        hostItemId: item.id,
+        hostSlideIndex: resolved.slideIndex,
+      })
+    },
+    [slides, current],
+  )
+
+  /** Host queue: Enter in the compact popover → the host's batch (mode 'queue'). */
+  const submitHostAsk = useCallback(
+    (instruction: string) => {
+      const state = askState
+      setAskState(null)
+      if (!state) return
+      const targets = state.placements
+        ? state.placements.map((placement) => ({
+            id: anchorId(placement.node),
+            desc: describeNode(placement.node),
+          }))
+        : state.ids.flatMap((id) => {
+            const node = findNodeCtx(id)?.node
+            return node ? [{ id: anchorId(node), desc: describeNode(node) }] : []
+          })
+      if (targets.length === 0) return
+      const excerpt = buildElementExcerpt(targets.map((target) => target.desc))
+      void window.slidesApi
+        .agentAsk({
+          instruction,
+          slideIndex: current,
+          targets,
+          mode: 'queue',
+          ...(excerpt ? { excerpt } : {}),
+        })
+        .then((res) => {
+          if (!res.ok) showToast(res.error ?? t('aiErrUnknown'), 'error')
+        })
+        .catch((err) => showToast(err instanceof Error ? err.message : String(err), 'error'))
+    },
+    [askState, findNodeCtx, current],
+  )
+
+  /** Host queue: save an edit of a queued note (askQueueAction 'update'). */
+  const updateHostNote = useCallback((draftId: string, instruction: string) => {
+    setAskState(null)
+    window.slidesApi.askQueueAction({ kind: 'update', draftId, instruction })
+  }, [])
+
+  /** Host queue: drop a note (card delete / popover delete). */
+  const removeHostNote = useCallback((draftId: string) => {
+    setAskState(null)
+    window.slidesApi.askQueueAction({ kind: 'remove', draftId })
+  }, [])
+
+  /** A send-all / host-side removal drops the note being edited: close the popover. */
+  useEffect(() => {
+    const hostItemId = askState?.hostItemId
+    if (!hostItemId) return
+    if (!hostAskQueue.some((item) => item.id === hostItemId)) setAskState(null)
+  }, [askState, hostAskQueue])
 
   const commitAsk = useCallback(
     (instruction: string) => {
@@ -4171,10 +4341,10 @@ export function App() {
         </div>
       )}
 
-      {/* EverRoom embed builds fold the AI annotation entry (floating chip and
-          its popover) out; the host drives edits through its own agent UI. */}
-      {!everroomEmbed &&
-        !askState &&
+      {/* Annotate entry: the standalone build opens the full AI edit form; the
+          EverRoom embed gets the compact host-note input (pencil chip → one
+          line → Enter joins the host's queue). */}
+      {!askState &&
         !editing &&
         !editingCell &&
         !cropTarget &&
@@ -4182,15 +4352,57 @@ export function App() {
         !embedReadonly &&
         inkTool === 'select' &&
         selectedIds.length > 0 && (
-          <AiAskTrigger getAnchorRect={getAskTriggerRect} onOpen={openAskPopover} />
+          <AiAskTrigger
+            getAnchorRect={getAskTriggerRect}
+            onOpen={openAskPopover}
+            hostMode={everroomEmbed}
+          />
         )}
 
-      {!everroomEmbed && askState && askTargets.length > 0 && (
+      {/* Host queue anchors: numbered badges + outline on the commented elements,
+          hover card with excerpt / note / edit / delete. Only the current page
+          renders; a note whose element vanished is skipped. */}
+      {everroomEmbed && hostAnchors.length > 0 && (
+        <HostNoteAnchors
+          anchors={hostAnchors}
+          zoom={zoom}
+          measure={placementsRect}
+          onEdit={openHostNoteEditor}
+          onDelete={(item) => removeHostNote(item.id)}
+        />
+      )}
+
+      {askState && askTargets.length > 0 && everroomEmbed && (
+        <AiAskPopover
+          // Remount per draft so the edit form prefills the note being edited
+          key={askState.hostItemId ?? 'host-note-new'}
+          targets={askTargets}
+          initialText={
+            askState.hostItemId
+              ? (hostAskQueue.find((item) => item.id === askState.hostItemId)?.instruction ?? '')
+              : ''
+          }
+          getAnchorRect={getAskAnchorRect}
+          hostMode
+          editDraftId={askState.hostItemId}
+          onSubmit={() => undefined}
+          onCancel={() => {
+            askClosedAtRef.current = Date.now()
+            setAskState(null)
+          }}
+          onHostQueue={submitHostAsk}
+          onHostUpdate={updateHostNote}
+          onHostDelete={
+            askState.hostItemId ? () => removeHostNote(askState.hostItemId!) : undefined
+          }
+        />
+      )}
+
+      {askState && askTargets.length > 0 && !everroomEmbed && (
         <AiAskPopover
           targets={askTargets}
           getAnchorRect={getAskAnchorRect}
           queueFull={editQueue.length >= EDIT_QUEUE_MAX}
-          hideQueue={everroomEmbed}
           onSubmit={(instruction) => {
             askClosedAtRef.current = Date.now()
             commitAsk(instruction)
@@ -4205,24 +4417,6 @@ export function App() {
               : (instruction) => {
                   askClosedAtRef.current = Date.now()
                   setAskState(null)
-                  if (everroomEmbed) {
-                    // Embed hosts own the AI: forward the ask to the host's
-                    // agent (EverRoom Room chat) instead of the compiled-out
-                    // AiPanel pipeline.
-                    void window.slidesApi
-                      .agentAsk({
-                        instruction,
-                        slideIndex: current,
-                        targets: askTargets.map((tg) => ({ id: tg.id, desc: tg.desc })),
-                      })
-                      .then((res) => {
-                        if (!res.ok) showToast(res.error ?? t('aiErrUnknown'), 'error')
-                      })
-                      .catch((err) =>
-                        showToast(err instanceof Error ? err.message : String(err), 'error'),
-                      )
-                    return
-                  }
                   // Carry the popover's frozen durable targets into the run.
                   // The canvas keeps parse-time source ids for rendering, while
                   // the AI inventory and edit tools speak durable ids.

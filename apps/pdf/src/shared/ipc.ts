@@ -44,6 +44,12 @@ export const PDF_CHANNELS = {
   languageChanged: 'app:language-changed',
   getTheme: 'app:get-theme',
   themeChanged: 'app:theme-changed',
+  /** EverRoom embed: selection note relayed to the host agent (invoke) */
+  agentAsk: 'pdf:agent-ask',
+  /** EverRoom embed: host pushes its annotation queue snapshot (main → renderer) */
+  askQueue: 'pdf:ask-queue',
+  /** EverRoom embed: queue actions back to the host (renderer → main) */
+  askQueueAction: 'pdf:ask-queue-action',
 } as const
 
 export const VISUAL_SIGNATURE_CONTENT_PREFIX = 'GenOffice visual signature field: '
@@ -773,15 +779,73 @@ export interface PdfApi {
   aiStreamCancel(requestId: string): Promise<void>
   onAiStream(handler: (chunk: AiStreamChunk) => void): () => void
   /** Host agent executor: main forwards describe/apply requests; replies via reportAgentToolReply */
-  onAgentToolRequest(handler: (request: {
-    requestId: string
-    kind: 'describe' | 'apply'
-    calls?: Array<{ id: string; name: string; input: Record<string, unknown> }>
-  }) => void): () => void
+  onAgentToolRequest(
+    handler: (request: {
+      requestId: string
+      kind: 'describe' | 'apply'
+      calls?: Array<{ id: string; name: string; input: Record<string, unknown> }>
+    }) => void,
+  ): () => void
   reportAgentToolReply(requestId: string, reply: unknown): void
   /** Agent readiness: this view has finished loading a document (null = none/blank) */
   reportAgentReady(filePath: string | null): void
+  /**
+   * EverRoom embed only: a selection-scoped note typed into the compact popover
+   * is relayed to the host (the embed build has no AI backend of its own). The
+   * host resolves the file/workspace from this view's webContents id, so the
+   * renderer only describes the selection.
+   */
+  agentAsk(op: PdfAgentAskOp): Promise<PdfAgentAskResult>
+  /**
+   * EverRoom embed only: the host's annotation queue (file-scoped) is pushed
+   * down so the page can mark the anchored passage (hover card: note +
+   * edit/delete); the queue itself stays owned by the conversation side.
+   */
+  onAskQueue(handler: (items: PdfAskQueueItem[]) => void): () => void
+  /** EverRoom embed only: ask the host to update one note / drop one item / send the whole queue. */
+  askQueueAction(action: PdfAskQueueAction): void
 }
+
+/**
+ * EverRoom embed only: one selection-scoped note relayed to the host agent.
+ * Positioning uses original page order (rotation-stable) plus quads in PDF user
+ * space, the same shape the native markups already store.
+ */
+export interface PdfAgentAskOp {
+  /** What the user typed into the compact popover (bounded by main). */
+  instruction: string
+  /**
+   * Original page index (0-based, unrotated order) the selection starts on.
+   * Stable across display rotation and page spread.
+   */
+  pageIndex: number
+  /** Selection rectangles in PDF user space: [x1,yMax,x2,yMax,x1,yMin,x2,yMin] (y up). */
+  quads: number[][]
+  /** Plain-text excerpt of the selection; the host puts it in the message as a cross-check. */
+  excerpt?: string
+  /** 'queue' = add to the host's batch instead of sending right away (default 'now'). */
+  mode?: 'now' | 'queue'
+}
+
+export type PdfAgentAskResult = { ok: true } | { ok: false; error: string }
+
+/** One host-side annotation for this document: the anchored passage + the user's note. */
+export interface PdfAskQueueItem {
+  id: string
+  /** The note itself (what the user typed). */
+  instruction: string
+  /** Original-text excerpt captured when the note was made. */
+  excerpt?: string
+  /** Original page index (0-based, rotation-stable) the quads belong to. */
+  pageIndex: number
+  /** Anchored selection rectangles in PDF user space (same format as PdfAgentAskOp.quads). */
+  quads: number[][]
+}
+
+export type PdfAskQueueAction =
+  | { kind: 'send-all' }
+  | { kind: 'remove'; draftId: string }
+  | { kind: 'update'; draftId: string; instruction: string }
 
 /** describe reply payload: context line + tool vocabulary (embed-safe subset). */
 export interface PdfAgentDescribeResult {

@@ -1781,6 +1781,129 @@ button.check-item:hover {
   cursor: default;
 }
 
+/* EverRoom embed: compact note popover (Word-parity single input, Enter queues) */
+.ai-ask-pop-compact {
+  padding: 8px;
+}
+
+/* Host-note anchors over noted cell ranges: dashed box + numbered badge.
+ * The box is click-through so the grid keeps working underneath; the badge is
+ * the interactive part, and the hover card follows the pointer over the box. */
+.sheet-note-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  pointer-events: none;
+}
+
+.sheet-note-anchor {
+  position: fixed;
+  box-sizing: border-box;
+  border: 1px dashed var(--color-ai-action);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.sheet-note-badge {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-ai-action);
+  color: var(--color-ai-action-text);
+  font-family: var(--gs-font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.sheet-note-badge:hover {
+  background: var(--color-ai-action-hover);
+}
+
+.sheet-note-card {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-8);
+  background: var(--surface);
+  box-shadow: var(--sheets-shadow-menu);
+  font-family: var(--gs-font-sans);
+  font-size: 11.5px;
+  color: var(--color-text-primary);
+  pointer-events: auto;
+}
+
+.sheet-note-card-excerpt {
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-note-card-note {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sheet-note-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.sheet-note-card-edit,
+.sheet-note-card-del {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.sheet-note-card-edit:hover {
+  color: var(--color-ai-action);
+}
+
+.sheet-note-card-del:hover {
+  color: var(--danger);
+}
+
+.sheet-note-editor {
+  z-index: 61;
+}
+
+.sheet-note-pop-delete {
+  align-self: flex-end;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.sheet-note-pop-delete:hover {
+  color: var(--danger);
+}
+
 .copilot {
   position: relative;
   display: flex;

@@ -46,26 +46,63 @@ interface Props {
   onSendNow?: (text: string) => void
   /** Disables "Add to queue" only; sending now never touches the queue */
   queueFull?: boolean
-  /** Embed hosts have no queue UI (the queue card lives in the host-compiled AiPanel): send-now only */
+  /** Embed hosts have no in-editor AI backend: the popover collapses to a single-line note input */
   hideQueue?: boolean
+  /** EverRoom embed: compact host-note variant (pencil trigger, one input, Enter queues) */
+  hostMode?: boolean
+  /** Host mode only: collect the note into the host's batch instead of running an edit */
+  onHostQueue?: (text: string) => void
+  /** Host mode only: save an edit of an already-queued host note (askQueueAction 'update') */
+  onHostUpdate?: (draftId: string, text: string) => void
+  /** Host mode only: draft id being edited — switches the placeholder and shows the delete action */
+  editDraftId?: string
+  /** Host mode only: drop the note being edited (askQueueAction 'remove') */
+  onHostDelete?: () => void
 }
 
 const WIDTH = 340
+/** EverRoom embed compact note input */
+const HOST_WIDTH = 260
 /** Gap between the anchor box and the popover */
 const GAP = 10
 /** Keep-away margin from the viewport edges */
 const EDGE = 8
 /** Height assumed before the first measurement, used only to pick a side */
 const EST_HEIGHT = 150
+const HOST_EST_HEIGHT = 72
+
+/**
+ * Watch the canvas viewport for layout changes that fire neither scroll nor
+ * window resize (AI mode hides the ribbon/status bar, panes open/close). Both
+ * the trigger and the popover anchor to live viewport rects, so a stale one
+ * would point at the wrong place after such a layout change.
+ */
+function observeStage(onChange: () => void): () => void {
+  if (typeof ResizeObserver === 'undefined') return () => undefined
+  const observer = new ResizeObserver(onChange)
+  for (const target of [
+    document.querySelector('.stage-wrap'),
+    document.querySelector('.stage-rel'),
+  ]) {
+    if (target) observer.observe(target)
+  }
+  return () => observer.disconnect()
+}
 
 interface TriggerProps {
   /** Re-measured on scroll/zoom/selection change; null hides the chip */
   getAnchorRect: () => AnchorRect | null
   onOpen: () => void
+  /** EverRoom embed: pencil "Annotate" chip instead of the AI sparkle */
+  hostMode?: boolean
 }
 
 /** Floating Ask AI chip that follows the selected element(s), matching Docs. */
-export function AiAskTrigger({ getAnchorRect, onOpen }: TriggerProps): React.JSX.Element | null {
+export function AiAskTrigger({
+  getAnchorRect,
+  onOpen,
+  hostMode,
+}: TriggerProps): React.JSX.Element | null {
   const { t } = useI18n()
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -99,12 +136,14 @@ export function AiAskTrigger({ getAnchorRect, onOpen }: TriggerProps): React.JSX
     const scroller = document.querySelector('.stage-wrap')
     scroller?.addEventListener('scroll', update, { passive: true })
     window.addEventListener('resize', update)
+    const stopObserving = observeStage(update)
     document.addEventListener('pointerdown', onPointerDown, true)
     document.addEventListener('pointerup', onPointerUp, true)
     document.addEventListener('pointercancel', onPointerUp, true)
     return () => {
       scroller?.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
+      stopObserving()
       document.removeEventListener('pointerdown', onPointerDown, true)
       document.removeEventListener('pointerup', onPointerUp, true)
       document.removeEventListener('pointercancel', onPointerUp, true)
@@ -121,12 +160,23 @@ export function AiAskTrigger({ getAnchorRect, onOpen }: TriggerProps): React.JSX
       onClick={onOpen}
     >
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden>
-        <path
-          d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7L12 3zM19 15l.85 2.3L22 18.15l-2.15.85L19 21.3l-.85-2.3-2.15-.85 2.15-.85L19 15z"
-          fill="currentColor"
-        />
+        {hostMode ? (
+          // pencil: annotating the selection, not asking for an AI rewrite
+          <path
+            d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3zM14 7l3 3"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : (
+          <path
+            d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7L12 3zM19 15l.85 2.3L22 18.15l-2.15.85L19 21.3l-.85-2.3-2.15-.85 2.15-.85L19 15z"
+            fill="currentColor"
+          />
+        )}
       </svg>
-      {t('aiAskBtn')}
+      {t(hostMode ? 'aiNoteBtn' : 'aiAskBtn')}
     </button>
   )
 }
@@ -160,6 +210,11 @@ export function AiAskPopover({
   onSendNow,
   queueFull,
   hideQueue,
+  hostMode,
+  onHostQueue,
+  onHostUpdate,
+  editDraftId,
+  onHostDelete,
 }: Props): React.JSX.Element | null {
   const { t } = useI18n()
   const [text, setText] = useState(initialText ?? '')
@@ -182,9 +237,11 @@ export function AiAskPopover({
     const scroller = document.querySelector('.stage-wrap')
     scroller?.addEventListener('scroll', update, { passive: true })
     window.addEventListener('resize', update)
+    const stopObserving = observeStage(update)
     return () => {
       scroller?.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
+      stopObserving()
     }
   }, [getAnchorRect])
 
@@ -193,10 +250,16 @@ export function AiAskPopover({
 
   /** Clicking away keeps whatever was typed: it lands in the queue, where it can still be edited or removed */
   const commitOrCancel = useCallback(() => {
+    // Host mode has no in-editor queue: an outside click must discard, never
+    // fire an ask at the host agent (the note only joins on Enter).
+    if (hostMode) {
+      onCancel()
+      return
+    }
     const value = textRef.current.trim()
     if (value && !queueBlocked && !hideQueue) onSubmit(value)
     else onCancel()
-  }, [onSubmit, onCancel, queueBlocked, hideQueue])
+  }, [onSubmit, onCancel, queueBlocked, hideQueue, hostMode])
 
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
@@ -231,6 +294,64 @@ export function AiAskPopover({
   const noun = t(NODE_NOUN_KEY[targets[0]?.desc.type ?? 'shape'])
   const preview = targets.length === 1 ? targets[0]!.desc.text : undefined
   const canSubmit = text.trim().length > 0
+
+  // EverRoom embed: compact host-note input — one line, no title/excerpt/chips/
+  // footer, exactly like the docs embed. Enter queues the note; editing a host
+  // note prefills it and Enter saves through askQueueAction.
+  if (hostMode) {
+    const hostHeight = boxRef.current?.offsetHeight ?? HOST_EST_HEIGHT
+    const bandTop = Math.max(rect.viewTop, EDGE)
+    const bandBottom = Math.min(rect.viewBottom, window.innerHeight - EDGE)
+    const below = rect.bottom + GAP
+    const above = rect.top - GAP - hostHeight
+    const top =
+      below + hostHeight <= bandBottom
+        ? below
+        : above >= bandTop
+          ? above
+          : Math.min(Math.max(rect.top + GAP, bandTop), Math.max(bandTop, bandBottom - hostHeight))
+    const hostLeft = Math.min(
+      Math.max(EDGE, (rect.left + rect.right) / 2 - HOST_WIDTH / 2),
+      Math.max(EDGE, window.innerWidth - HOST_WIDTH - EDGE),
+    )
+    return (
+      <div
+        ref={boxRef}
+        className="ai-ask-pop ai-ask-pop-compact"
+        style={{ left: hostLeft, top, width: HOST_WIDTH }}
+        role="dialog"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            onCancel()
+          }
+        }}
+      >
+        <input
+          ref={inputRef}
+          className="ai-ask-pop-input"
+          value={text}
+          maxLength={EDIT_INSTRUCTION_MAX}
+          placeholder={t(editDraftId ? 'aiNoteEditPlaceholder' : 'aiNotePlaceholder')}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              if (!canSubmit) return
+              if (editDraftId) onHostUpdate?.(editDraftId, text.trim())
+              else onHostQueue?.(text.trim())
+            }
+          }}
+        />
+        {editDraftId && onHostDelete && (
+          <button type="button" className="host-note-pop-delete" onClick={onHostDelete}>
+            {t('aiNoteCardDelete')}
+          </button>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div

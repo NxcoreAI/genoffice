@@ -3,7 +3,7 @@ import type { Lang } from '@genoffice/i18n'
 import type { AiStreamChunk } from '@genoffice/ai-provider'
 import { installDropOpenBridge } from '@genoffice/electron-utils/drop-open'
 import { AI_CHANNELS, PDF_AGENT_CHANNELS, PDF_CHANNELS } from '../shared/ipc'
-import type { PdfApi, UiTheme } from '../shared/ipc'
+import type { PdfApi, PdfAskQueueItem, UiTheme } from '../shared/ipc'
 
 const api: PdfApi = {
   consumePending: () => ipcRenderer.invoke(PDF_CHANNELS.consumePending),
@@ -91,10 +91,8 @@ const api: PdfApi = {
     return () => ipcRenderer.removeListener(AI_CHANNELS.streamChunk, listener)
   },
   onAgentToolRequest: (handler) => {
-    const listener = (
-      _e: Electron.IpcRendererEvent,
-      request: Parameters<typeof handler>[0],
-    ) => handler(request)
+    const listener = (_e: Electron.IpcRendererEvent, request: Parameters<typeof handler>[0]) =>
+      handler(request)
     ipcRenderer.on(PDF_AGENT_CHANNELS.agentToolRequest, listener)
     return () => ipcRenderer.removeListener(PDF_AGENT_CHANNELS.agentToolRequest, listener)
   },
@@ -104,6 +102,13 @@ const api: PdfApi = {
     ipcRenderer.send(PDF_AGENT_CHANNELS.agentReady, {
       filePath: typeof filePath === 'string' && filePath.length > 0 ? filePath : null,
     }),
+  agentAsk: (op) => ipcRenderer.invoke(PDF_CHANNELS.agentAsk, op),
+  onAskQueue: (handler) => {
+    const listener = (_e: Electron.IpcRendererEvent, items: PdfAskQueueItem[]) => handler(items)
+    ipcRenderer.on(PDF_CHANNELS.askQueue, listener)
+    return () => ipcRenderer.removeListener(PDF_CHANNELS.askQueue, listener)
+  },
+  askQueueAction: (action) => ipcRenderer.send(PDF_CHANNELS.askQueueAction, action),
 }
 
 // Shared project chat store (registered app-wide by the shell's main init):

@@ -17,6 +17,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { GensparkMark } from './ai/genspark-mark'
 import { AiAskPopover, type AskAnchorRect } from './AiAskPopover'
+import { AskQueueAnchors, AskQueueHoverCard, HostNotePopover, useAskHover } from './HostNotes'
 import { loadSavedAnnots } from './annotation-catalog'
 import {
   OcrTextLayer,
@@ -130,6 +131,7 @@ import type {
   TextInsertFailure,
   TextInsertInput,
   PdfOcrLine,
+  PdfAskQueueItem,
 } from '../shared/ipc'
 import {
   ZOOM_STEPS,
@@ -287,13 +289,14 @@ type RibbonTab = (typeof RIBBON_TABS)[number]['id'] | 'fillForm'
  *  panel skill's buildContext, minus UI-only bits (selection, current view).
  *  The host agent has no selection; it locates content with search_text. */
 function buildAgentContext(deps: PdfAiDeps): string {
-  const parts = [
-    `Current document: "${deps.fileName()}", ${deps.pageCount()} pages.`,
-  ]
-  if (deps.readOnly()) parts.push('The document is read-only (encrypted or host-readonly); it cannot be modified.')
+  const parts = [`Current document: "${deps.fileName()}", ${deps.pageCount()} pages.`]
+  if (deps.readOnly())
+    parts.push('The document is read-only (encrypted or host-readonly); it cannot be modified.')
   const outline = deps.outline()
   if (outline && outline.length > 0) {
-    parts.push(`The document has an outline (${outline.length} top-level entries); use get_outline to view it.`)
+    parts.push(
+      `The document has an outline (${outline.length} top-level entries); use get_outline to view it.`,
+    )
   }
   const annots = deps.annotationSummary()
   if (annots) parts.push(annots)
@@ -713,6 +716,58 @@ export default function App() {
   } | null>(null)
   /** Ask-AI popover opened from the markup bar; the anchor rect is captured at open */
   const [askPop, setAskPop] = useState<{ rect: AskAnchorRect; excerpt: string } | null>(null)
+  /** EverRoom embed: host-owned annotation queue snapshot (empty = clear anchors) */
+  const [askQueue, setAskQueue] = useState<PdfAskQueueItem[]>([])
+  /** EverRoom embed: compact host-note popover — new note from the selection
+      bar, or edit of an existing queued draft (draftId set) */
+  const [hostNotePop, setHostNotePop] = useState<{
+    rect: AskAnchorRect
+    mode: 'new' | 'edit'
+    pageIndex: number
+    quads: number[][]
+    excerpt: string
+    draftId?: string
+    initialText?: string
+  } | null>(null)
+  /** EverRoom embed: hovered queue anchor (the card follows the anchor) */
+  const askHover = useAskHover()
+  /** Anchors grouped by original page index, keeping the queue order for the badges */
+  const askQueueByPage = useMemo(() => {
+    const byPage = new Map<number, Array<{ item: PdfAskQueueItem; index: number }>>()
+    askQueue.forEach((item, index) => {
+      const list = byPage.get(item.pageIndex)
+      if (list) list.push({ item, index })
+      else byPage.set(item.pageIndex, [{ item, index }])
+    })
+    return byPage
+  }, [askQueue])
+  const hoveredAskItem =
+    askHover.hoveredId === null
+      ? null
+      : (askQueue.find((item) => item.id === askHover.hoveredId) ?? null)
+  /** Re-follow the hover card when zoom or a page rotation moves the anchor. */
+  const askLayoutKey = useMemo(
+    () => `${scale}:${[...rotations.entries()].map(([page, rot]) => `${page}:${rot}`).join(',')}`,
+    [scale, rotations],
+  )
+  // EverRoom embed: the host owns the annotation queue; render whatever snapshot
+  // it pushes (an empty array clears the anchors). A queued edit whose draft
+  // disappeared (sent/removed elsewhere) closes its popover, and a hovered
+  // anchor dropped from the queue closes its card.
+  useEffect(() => {
+    if (!everroomEmbed) return
+    return window.pdfApi.onAskQueue((items) => {
+      setAskQueue(items)
+      setHostNotePop((prev) =>
+        prev?.mode === 'edit' && prev.draftId && !items.some((i) => i.id === prev.draftId)
+          ? null
+          : prev,
+      )
+    })
+  }, [])
+  useEffect(() => {
+    if (askHover.hoveredId !== null && hoveredAskItem === null) askHover.reset()
+  }, [askHover.hoveredId, askHover.reset, hoveredAskItem])
   /** Whole-document saved-annotation counts per original page for the AI context
       (scanned once per doc; kept per-page so deleted pages can be excluded) */
   const [aiAnnotCounts, setAiAnnotCounts] = useState<{
@@ -1169,8 +1224,7 @@ export default function App() {
   /** pdf-lib cannot write encrypted files, including owner-protected files that open without a password.
    * EverRoom embed readonly mode routes through the same flag so the edit surface stays gated in one place. */
   const readOnly =
-    status === 'ready' &&
-    (embedReadonly || passwordRef.current !== undefined || documentEncrypted)
+    status === 'ready' && (embedReadonly || passwordRef.current !== undefined || documentEncrypted)
   /** Latest readOnly for mount-once async callbacks (host agent executor). */
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
@@ -1937,6 +1991,93 @@ export default function App() {
     if (!rect) return
     setSelPopup(null)
     setAskPop({ rect, excerpt: aiSelection?.text ?? sel?.toString() ?? '' })
+  }
+
+  // ── EverRoom embed: host annotation notes (queue owned by the host) ──
+
+  /** EverRoom embed: pencil entry on the markup bar. Capture the selection
+      anchor (original page + PDF-space quads, the same shape native markups
+      store) and open the compact note popover. A cross-page selection is
+      represented by its first page — the host contract carries one pageIndex;
+      the excerpt keeps the whole selected text. */
+  const openHostNotePopover = () => {
+    const sel = window.getSelection()
+    const quads = selectionQuads()
+    if (!quads || quads.size === 0) return
+    // min, not insertion order: the visual walk can hit original indices out of
+    // sequence after a page reorder
+    const pageIndex = Math.min(...quads.keys())
+    const pageQuads = quads.get(pageIndex)!
+    const box =
+      sel && !sel.isCollapsed && sel.rangeCount > 0
+        ? sel.getRangeAt(0).getBoundingClientRect()
+        : null
+    const rect: AskAnchorRect = box
+      ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom }
+      : selPopup
+        ? { left: selPopup.x, top: selPopup.y, right: selPopup.x, bottom: selPopup.y + 36 }
+        : { left: window.innerWidth / 2, top: 120, right: window.innerWidth / 2, bottom: 156 }
+    const excerpt = (aiSelection?.text ?? sel?.toString() ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 200)
+    setSelPopup(null)
+    setHostNotePop({ rect, mode: 'new', pageIndex, quads: pageQuads, excerpt })
+  }
+
+  /** EverRoom embed: Enter in the compact popover → hand the note to the host queue. */
+  const queueHostNote = (text: string) => {
+    const pop = hostNotePop
+    if (!pop) return
+    setHostNotePop(null)
+    void window.pdfApi
+      .agentAsk({
+        instruction: text,
+        pageIndex: pop.pageIndex,
+        quads: pop.quads,
+        ...(pop.excerpt ? { excerpt: pop.excerpt } : {}),
+        mode: 'queue',
+      })
+      .then((result) => {
+        if (result.ok) return
+        // Host rejections (file outside a workspace / instance gone) must be visible:
+        // the note does not land in the queue, and a silent console warning reads as success.
+        console.warn('[pdf] host note queue failed:', result.error)
+        showNotice(result.error || t('aiNoteQueueFailed'))
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn('[pdf] host note queue failed:', message)
+        showNotice(message || t('aiNoteQueueFailed'))
+      })
+  }
+
+  /** EverRoom embed: rewrite an existing queued draft (Enter in the edit popover / card). */
+  const updateHostNote = (draftId: string, text: string) => {
+    setHostNotePop(null)
+    askHover.reset()
+    window.pdfApi.askQueueAction({ kind: 'update', draftId, instruction: text })
+  }
+
+  /** EverRoom embed: drop one queued draft (delete button on the card / popover). */
+  const removeHostNote = (draftId: string) => {
+    setHostNotePop(null)
+    askHover.reset()
+    window.pdfApi.askQueueAction({ kind: 'remove', draftId })
+  }
+
+  /** EverRoom embed: open the compact popover in edit mode on a queued anchor. */
+  const openHostNoteEditor = (item: PdfAskQueueItem, rect: AskAnchorRect) => {
+    askHover.reset()
+    setHostNotePop({
+      rect,
+      mode: 'edit',
+      pageIndex: item.pageIndex,
+      quads: item.quads,
+      excerpt: item.excerpt ?? '',
+      draftId: item.id,
+      initialText: item.instruction,
+    })
   }
 
   /** Markup types the whole current selection already carries — shown as pressed
@@ -5195,10 +5336,7 @@ export default function App() {
     // unavailable in the embed: generate_image needs gsk auth, image_search/
     // fetch_image need the ai:* shell channels, create_document routes through
     // the shell's document creator. describe never advertises them.
-    const EMBED_BLOCKED_TOOLS = new Set([
-      'generate_image',
-      'create_document',
-    ])
+    const EMBED_BLOCKED_TOOLS = new Set(['generate_image', 'create_document'])
     const offRequest = window.pdfApi.onAgentToolRequest?.((request) => {
       const reply = (payload: unknown) =>
         window.pdfApi.reportAgentToolReply(request.requestId, payload)
@@ -5241,10 +5379,11 @@ export default function App() {
             continue
           }
           try {
-            const execution = await executePdfTool(
-              aiApiRef.current,
-              { id: call.id, name: call.name, input: call.input ?? {} },
-            )
+            const execution = await executePdfTool(aiApiRef.current, {
+              id: call.id,
+              name: call.name,
+              input: call.input ?? {},
+            })
             if (execution.mutated) mutated = true
             results.push({
               id: call.id,
@@ -5426,6 +5565,7 @@ export default function App() {
       }
       if (e.key === 'Escape') {
         if (askPop) setAskPop(null)
+        else if (hostNotePop) setHostNotePop(null)
         else if (textDraft) setTextDraft(null)
         else if (pendingTextInsert) setPendingTextInsert(null)
         else if (imagePick) setImagePick(null)
@@ -7749,6 +7889,24 @@ export default function App() {
                                 scale={scale}
                                 selectedId={selected?.kind === 'markup' ? selected.id : null}
                               />
+                              {/* EverRoom embed: host annotation anchors for this page
+                                (queue snapshot pushed by the host; distinct ink from
+                                the native markups, with a queue-order badge) */}
+                              {everroomEmbed && (
+                                <AskQueueAnchors
+                                  entries={askQueueByPage.get(origIdx) ?? []}
+                                  geom={geom}
+                                  scale={scale}
+                                  editingId={
+                                    hostNotePop?.mode === 'edit'
+                                      ? (hostNotePop.draftId ?? null)
+                                      : null
+                                  }
+                                  onHover={askHover.hover}
+                                  onLeave={askHover.leave}
+                                  onOpen={openHostNoteEditor}
+                                />
+                              )}
                               {/* Selection outline for a saved markup annotation (the markup
                                 itself is painted in the canvas raster) */}
                               {selected?.kind === 'savedMarkup' &&
@@ -8018,6 +8176,29 @@ export default function App() {
                     {t('aiAskBtn')}
                   </button>
                 )}
+                {/* EverRoom embed: the host owns the annotation queue, so the
+                  selection bar carries a pencil "annotate" entry instead of the
+                  AI rewrite entry (which the embed closure folds out). */}
+                {everroomEmbed && (
+                  <button
+                    type="button"
+                    className="pdf-sel-ask pdf-sel-note"
+                    data-tip={t('aiNoteBtn')}
+                    aria-label={t('aiNoteBtn')}
+                    onClick={openHostNotePopover}
+                  >
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden>
+                      <path
+                        d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3zM14 7l3 3"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    {t('aiNoteBtn')}
+                  </button>
+                )}
               </div>
             )}
             {/* AI ask popover: folded out of the EverRoom embed together with the
@@ -8032,6 +8213,36 @@ export default function App() {
                   runAiPreset(text)
                 }}
                 onClose={() => setAskPop(null)}
+              />
+            )}
+            {/* EverRoom embed: compact host-note popover (new note from the
+              selection bar, or edit of a queued draft) and the hover card of a
+              queued anchor. Both are host-owned: no local queue lives here. */}
+            {everroomEmbed && hostNotePop && (
+              <HostNotePopover
+                rect={hostNotePop.rect}
+                mode={hostNotePop.mode}
+                initialText={hostNotePop.initialText}
+                onQueue={queueHostNote}
+                onUpdate={(text) => {
+                  if (hostNotePop.draftId) updateHostNote(hostNotePop.draftId, text)
+                }}
+                onDelete={
+                  hostNotePop.draftId
+                    ? () => removeHostNote(hostNotePop.draftId as string)
+                    : undefined
+                }
+                onClose={() => setHostNotePop(null)}
+              />
+            )}
+            {everroomEmbed && hoveredAskItem && (
+              <AskQueueHoverCard
+                item={hoveredAskItem}
+                layoutKey={askLayoutKey}
+                onEdit={openHostNoteEditor}
+                onDelete={(item) => removeHostNote(item.id)}
+                onMouseEnter={askHover.enterCard}
+                onMouseLeave={askHover.leave}
               />
             )}
             {selected && (
