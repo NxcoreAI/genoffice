@@ -70,6 +70,14 @@ interface Props {
    * askQueueAction 'update'), wired when the host queue is reachable.
    */
   onHostUpdate?: (draftId: string, text: string) => void
+  /**
+   * External open request (EverRoom embed): each new nonzero value opens the
+   * popover on the live selection. Lets the selection format toolbar carry the
+   * comment entry while this component keeps owning the input UI.
+   */
+  openNonce?: number
+  /** Hide the floating trigger (the embed's format toolbar carries the entry). */
+  hideTrigger?: boolean
 }
 
 type OpenState =
@@ -123,6 +131,8 @@ export function AiAskPopover({
   hostMode = false,
   onHostQueue,
   onHostUpdate,
+  openNonce,
+  hideTrigger = false,
 }: Props): React.JSX.Element | null {
   const { t } = useI18n()
   const [trigger, setTrigger] = useState<{ left: number; top: number } | null>(null)
@@ -220,6 +230,16 @@ export function AiAskPopover({
     window.addEventListener(AI_QUEUE_ANCHOR_CLICK, onAnchorClick)
     return () => window.removeEventListener(AI_QUEUE_ANCHOR_CLICK, onAnchorClick)
   }, [getItem])
+
+  // external open request (format toolbar's comment button): a fresh nonce
+  // opens the popover on the live selection, same as the trigger click did
+  useEffect(() => {
+    if (!openNonce) return
+    setText('')
+    setKind(selectionKind(editor))
+    setOpen({ mode: 'new' })
+    setTrigger(null)
+  }, [openNonce, editor])
 
   // popover position follows scroll/resize; a vanished anchor closes it
   useLayoutEffect(() => {
@@ -536,7 +556,7 @@ export function AiAskPopover({
 
   return (
     <>
-      {trigger && !open && (
+      {trigger && !open && !hideTrigger && (
         <button
           ref={triggerRef}
           className="ai-ask-trigger"

@@ -732,6 +732,15 @@ export function ExcelShell({
                       onAiSelectionAskHost({ instruction, range: aiScopeRange, mode: 'queue' }),
                   }
                 : {})}
+              {...(__GENOFFICE_EMBED_ONLY__
+                ? {
+                    // Embed: the trigger grows into a WPS-style format bar
+                    // (B/I/U/S + quick colors + note pencil) over the drag
+                    // selection; commands reuse the ribbon pipeline.
+                    onFormatCommand: onCommand,
+                    selectionFormat,
+                  }
+                : {})}
             />
           )}
 

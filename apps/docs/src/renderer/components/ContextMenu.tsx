@@ -311,6 +311,7 @@ export function EditorContextMenu({
       style={{ left: pos.left, top: pos.top, minWidth: MENU_WIDTH }}
       onContextMenu={(e) => e.preventDefault()}
     >
+      <div className="ctx-list">
       {item(t('appCut'), {
         key: '⌘X',
         disabled: !hasSelection || !canEdit,
@@ -513,6 +514,7 @@ export function EditorContextMenu({
       <div className="ctx-sep" />
       {item(t('appHyperlinkMenu'), { key: '⌘K', onClick: run(onLink) })}
       {item(t('appNewComment'), { disabled: !hasSelection, onClick: run(onNewComment) })}
+      </div>
     </div>
   )
 }

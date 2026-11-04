@@ -45,16 +45,9 @@ export function buildCtxItems(ctx: ActionCtx): Array<CtxItem | null> {
         disabled: !ctx.canPasteSlide,
         onClick: () => void clipboardActions.pasteSlideAfter(ctx, i),
       },
-      {
-        label: t('appCtxPasteSlideKeepSource'),
-        disabled: !ctx.canPasteSlide,
-        onClick: () => void clipboardActions.pasteSlideAfter(ctx, i, 'source'),
-      },
-      {
-        label: t('appCtxPasteSlideAsPicture'),
-        disabled: !ctx.canPasteSlide,
-        onClick: () => void clipboardActions.pasteSlideAfter(ctx, i, 'picture'),
-      },
+      // rare paste variants (keep-source / as-picture) live on the paste
+      // options floater after a paste; they were tripling the menu for a
+      // niche path (PasteOptionsFloater covers them at paste time)
       null,
       { label: t('appCtxAddSectionBefore'), onClick: () => void slideActions.addSectionAt(ctx, i) },
       null,
@@ -191,43 +184,49 @@ export function buildCtxItems(ctx: ActionCtx): Array<CtxItem | null> {
             void tableActions.tableMergeOp(ctx, ctxMenu.targetId, 'merge-down', cell.row, cell.col),
         },
         {
-          label: t('appCtxCellAnchorTop'),
-          onClick: () =>
-            void window.slidesApi
-              .setTableCellAnchor({
-                slideIndex: current,
-                sourceId: ctxMenu.targetId,
-                row: cell.row,
-                col: cell.col,
-                anchor: 'top',
-              })
-              .then((r) => r && ctx.applySlide(current, r)),
-        },
-        {
-          label: t('appCtxCellAnchorMiddle'),
-          onClick: () =>
-            void window.slidesApi
-              .setTableCellAnchor({
-                slideIndex: current,
-                sourceId: ctxMenu.targetId,
-                row: cell.row,
-                col: cell.col,
-                anchor: 'middle',
-              })
-              .then((r) => r && ctx.applySlide(current, r)),
-        },
-        {
-          label: t('appCtxCellAnchorBottom'),
-          onClick: () =>
-            void window.slidesApi
-              .setTableCellAnchor({
-                slideIndex: current,
-                sourceId: ctxMenu.targetId,
-                row: cell.row,
-                col: cell.col,
-                anchor: 'bottom',
-              })
-              .then((r) => r && ctx.applySlide(current, r)),
+          // vertical text anchor folded: three rare rows into one submenu
+          label: t('appCtxCellAnchorMenu'),
+          children: [
+            {
+              label: t('appCtxCellAnchorTop'),
+              onClick: () =>
+                void window.slidesApi
+                  .setTableCellAnchor({
+                    slideIndex: current,
+                    sourceId: ctxMenu.targetId,
+                    row: cell.row,
+                    col: cell.col,
+                    anchor: 'top',
+                  })
+                  .then((r) => r && ctx.applySlide(current, r)),
+            },
+            {
+              label: t('appCtxCellAnchorMiddle'),
+              onClick: () =>
+                void window.slidesApi
+                  .setTableCellAnchor({
+                    slideIndex: current,
+                    sourceId: ctxMenu.targetId,
+                    row: cell.row,
+                    col: cell.col,
+                    anchor: 'middle',
+                  })
+                  .then((r) => r && ctx.applySlide(current, r)),
+            },
+            {
+              label: t('appCtxCellAnchorBottom'),
+              onClick: () =>
+                void window.slidesApi
+                  .setTableCellAnchor({
+                    slideIndex: current,
+                    sourceId: ctxMenu.targetId,
+                    row: cell.row,
+                    col: cell.col,
+                    anchor: 'bottom',
+                  })
+                  .then((r) => r && ctx.applySlide(current, r)),
+            },
+          ],
         },
         {
           label: t('appCtxSplitCell'),
@@ -295,30 +294,35 @@ export function buildCtxItems(ctx: ActionCtx): Array<CtxItem | null> {
       onClick: () => void arrangeActions.reorderSelected(ctx, ctxMenu.targetId, 'backward'),
     },
     null,
-    // Rotate/flip group (PowerPoint parity) for shapes, pictures and groups; connectors
-    // are endpoint-based and keep their existing menu
+    // Rotate/flip folded into one submenu (PowerPoint parity) for shapes,
+    // pictures and groups; connectors are endpoint-based and keep their
+    // existing menu
     ...(node &&
     (node.type === 'shape' || node.type === 'picture' || node.type === 'group') &&
     !(node as { line?: unknown }).line
       ? [
           {
-            label: t('appCtxRotateLeft90'),
-            onClick: () => void arrangeActions.rotateSelected(ctx, -90),
+            label: t('appCtxRotateMenu'),
+            children: [
+              {
+                label: t('appCtxRotateLeft90'),
+                onClick: () => void arrangeActions.rotateSelected(ctx, -90),
+              },
+              {
+                label: t('appCtxRotateRight90'),
+                onClick: () => void arrangeActions.rotateSelected(ctx, 90),
+              },
+              null,
+              {
+                label: t('appCtxFlipH'),
+                onClick: () => void arrangeActions.flipSelected(ctx, 'h'),
+              },
+              {
+                label: t('appCtxFlipV'),
+                onClick: () => void arrangeActions.flipSelected(ctx, 'v'),
+              },
+            ],
           } as CtxItem,
-          {
-            label: t('appCtxRotateRight90'),
-            onClick: () => void arrangeActions.rotateSelected(ctx, 90),
-          } as CtxItem,
-          null,
-          {
-            label: t('appCtxFlipH'),
-            onClick: () => void arrangeActions.flipSelected(ctx, 'h'),
-          } as CtxItem,
-          {
-            label: t('appCtxFlipV'),
-            onClick: () => void arrangeActions.flipSelected(ctx, 'v'),
-          } as CtxItem,
-          null,
         ]
       : []),
     ...(node && isEditableText(node)
@@ -378,42 +382,49 @@ export function buildCtxItems(ctx: ActionCtx): Array<CtxItem | null> {
       : []),
     ...(selectedIds.length >= 1
       ? [
-          null,
           {
-            label: t('appCtxAlignLeft'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'left'),
-          } as CtxItem,
-          {
-            label: t('appCtxAlignCenterH'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'center-h'),
-          } as CtxItem,
-          {
-            label: t('appCtxAlignRight'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'right'),
-          } as CtxItem,
-          {
-            label: t('appCtxAlignTop'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'top'),
-          } as CtxItem,
-          {
-            label: t('appCtxAlignCenterV'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'center-v'),
-          } as CtxItem,
-          {
-            label: t('appCtxAlignBottom'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'bottom'),
-          } as CtxItem,
-        ]
-      : []),
-    ...(selectedIds.length >= 3
-      ? [
-          {
-            label: t('appCtxDistributeH'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'distribute-h'),
-          } as CtxItem,
-          {
-            label: t('appCtxDistributeV'),
-            onClick: () => void arrangeActions.alignSelected(ctx, 'distribute-v'),
+            // align/distribute folded: eight rare rows into one submenu keeps
+            // the top level to the everyday actions
+            label: t('appCtxAlignMenu'),
+            children: [
+              {
+                label: t('appCtxAlignLeft'),
+                onClick: () => void arrangeActions.alignSelected(ctx, 'left'),
+              },
+              {
+                label: t('appCtxAlignCenterH'),
+                onClick: () => void arrangeActions.alignSelected(ctx, 'center-h'),
+              },
+              {
+                label: t('appCtxAlignRight'),
+                onClick: () => void arrangeActions.alignSelected(ctx, 'right'),
+              },
+              {
+                label: t('appCtxAlignTop'),
+                onClick: () => void arrangeActions.alignSelected(ctx, 'top'),
+              },
+              {
+                label: t('appCtxAlignCenterV'),
+                onClick: () => void arrangeActions.alignSelected(ctx, 'center-v'),
+              },
+              {
+                label: t('appCtxAlignBottom'),
+                onClick: () => void arrangeActions.alignSelected(ctx, 'bottom'),
+              },
+              ...(selectedIds.length >= 3
+                ? [
+                    null,
+                    {
+                      label: t('appCtxDistributeH'),
+                      onClick: () => void arrangeActions.alignSelected(ctx, 'distribute-h'),
+                    } as CtxItem,
+                    {
+                      label: t('appCtxDistributeV'),
+                      onClick: () => void arrangeActions.alignSelected(ctx, 'distribute-v'),
+                    } as CtxItem,
+                  ]
+                : []),
+            ],
           } as CtxItem,
         ]
       : []),

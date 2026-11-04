@@ -1682,6 +1682,79 @@ button.check-item:hover {
   background: var(--hover);
 }
 
+/* selection format bar (WPS-style, EverRoom embed): B/I/U/S + quick font
+ * colors + the note pencil in one floating affordance */
+.sel-fmt-bar {
+  position: fixed;
+  z-index: 59;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--sheets-shadow-menu);
+}
+
+.sel-fmt-btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--gs-font-sans);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sel-fmt-btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+.sel-fmt-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sel-fmt-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--border);
+  flex: none;
+}
+
+.sel-fmt-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.sel-fmt-swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.sel-fmt-swatch:hover {
+  outline: 1px solid var(--accent);
+}
+
+.sel-fmt-comment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-ai-action);
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .ai-ask-pop {
   position: fixed;
   z-index: 60;
