@@ -3195,16 +3195,29 @@ export function registerDocsIpc(): void {
       error?: string
     }>(event.sender.id, { kind: 'reformat-job-status', jobId }))
 
-  // EverRoom embed: 批注队列面板里的动作（全部发送 / 移除一条）→ 宿主。
+  // EverRoom embed: 批注动作（修改一条 / 移除一条 / 全部发送）→ 宿主。
   ipcMain.on('docs:ask-queue-action', (event, raw?: unknown) => {
     if (!docsAskQueueActionHook) return
-    const value = (raw ?? {}) as { kind?: unknown; draftId?: unknown }
+    const value = (raw ?? {}) as { kind?: unknown; draftId?: unknown; instruction?: unknown }
     if (value.kind === 'send-all') {
       docsAskQueueActionHook(event.sender.id, { kind: 'send-all' })
       return
     }
     if (value.kind === 'remove' && typeof value.draftId === 'string' && value.draftId) {
       docsAskQueueActionHook(event.sender.id, { kind: 'remove', draftId: value.draftId.slice(0, 80) })
+      return
+    }
+    if (value.kind === 'update') {
+      const draftId = typeof value.draftId === 'string' ? value.draftId.trim().slice(0, 80) : ''
+      const instruction =
+        typeof value.instruction === 'string' ? value.instruction.replace(/\s+/g, ' ').trim() : ''
+      if (draftId && instruction) {
+        docsAskQueueActionHook(event.sender.id, {
+          kind: 'update',
+          draftId,
+          instruction: instruction.slice(0, 2000),
+        })
+      }
     }
   })
 

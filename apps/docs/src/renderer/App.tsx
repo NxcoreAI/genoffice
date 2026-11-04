@@ -73,9 +73,14 @@ import {
 } from './ai/operations'
 import { applyHfText, hfEditText } from './editor/hf-text'
 import { AiAskPopover, selectionKind as askSelectionKind } from './components/AiAskPopover'
-import { AskQueuePanel } from './components/AskQueuePanel'
+import { HostNoteCard } from './components/HostNoteCard'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type DocsEditQueueItem } from './ai/edit-queue'
-import { addQueueAnchor, clearQueueAnchors, removeQueueAnchors } from './editor/ai-queue-anchors'
+import {
+  addQueueAnchor,
+  clearQueueAnchors,
+  removeQueueAnchors,
+  HOST_NOTE_ANCHOR_CLASS,
+} from './editor/ai-queue-anchors'
 import { asianCharCount, countWords, nonAsianWordCount } from './word-count'
 import { CommentsPanel } from './components/CommentsPanel'
 import { EquationModal } from './components/EquationModal'
@@ -5630,22 +5635,29 @@ export function App() {
     return window.desktop.onAskQueue((items) => setHostAskQueue(Array.isArray(items) ? items : []))
   }, [everroomEmbed])
 
-  /** 宿主队列 → 文档内锚点（块索引 → PM 位置；文档改动后块索引可能漂移，见说明文档）。 */
+  /** 宿主队列 → 文档内下划线锚点（块索引 → PM 位置；文档改动后块索引可能漂移，见说明文档）。 */
   useEffect(() => {
     if (!everroomEmbed || !editor) return
     clearQueueAnchors(editor)
     for (const item of hostAskQueue) {
       const { from, to } = blockRangePositions(editor, item.fromBlockIndex, item.toBlockIndex)
-      if (from < to) addQueueAnchor(editor, item.id, from, to)
+      if (from < to) addQueueAnchor(editor, item.id, from, to, HOST_NOTE_ANCHOR_CLASS)
     }
   }, [everroomEmbed, editor, hostAskQueue])
 
-  /** 点批注里的原文摘要 → 跳到锚点（并把光标落到选区起点）。 */
-  const focusAskQueueItem = (item: DocsAskQueueItem): void => {
-    if (!editor) return
-    const { from } = blockRangePositions(editor, item.fromBlockIndex, item.toBlockIndex)
-    editor.chain().focus().setTextSelection(from + 1).scrollIntoView().run()
-  }
+  /**
+   * Host rows shaped as the popover's queue item (qid = host draft id): lets
+   * AiAskPopover open its edit mode from an anchor click / hover-card edit.
+   */
+  const hostQueueRef = useRef(hostAskQueue)
+  hostQueueRef.current = hostAskQueue
+  const getHostQueueItem = useCallback(
+    (qid: string): DocsEditQueueItem | undefined => {
+      const row = hostQueueRef.current.find((item) => item.id === qid)
+      return row ? { qid: row.id, instruction: row.instruction, capturedText: row.excerpt ?? '' } : undefined
+    },
+    [],
+  )
 
   /**
    * EverRoom embed: the host agent owns the edit, so the popover's instruction
@@ -5887,26 +5899,34 @@ export function App() {
             )}
             {doc && showNav && <NavPane editor={editor} doc={editor.state.doc} />}
             {doc && everroomEmbed && (
-              <AskQueuePanel
-                items={hostAskQueue}
-                onFocus={focusAskQueueItem}
-                onRemove={(id) => window.desktop.askQueueAction({ kind: 'remove', draftId: id })}
-                onSendAll={() => window.desktop.askQueueAction({ kind: 'send-all' })}
-              />
-            )}
-            {doc && everroomEmbed && (
-              // Host-driven popover: no in-editor AI backend. Enter sends now,
-              // 加入批注 hands the item to the host's queue (mirrored above).
+              // Host-driven popover: no in-editor AI backend. It collapses to a
+              // compact note input (Enter queues via onHostQueue); edits of
+              // existing host notes update through the ask-queue IPC.
               <AiAskPopover
                 editor={editor}
                 queueFull
-                getItem={() => undefined}
+                getItem={getHostQueueItem}
                 onSendNow={(text) => submitHostAgentAsk(text, 'now')}
                 onHostQueue={(text) => submitHostAgentAsk(text, 'queue')}
+                onHostUpdate={(draftId, text) =>
+                  window.desktop.askQueueAction({ kind: 'update', draftId, instruction: text })
+                }
                 onQueueAdd={() => undefined}
                 onQueueUpdate={() => undefined}
-                onQueueRemove={() => undefined}
+                onQueueRemove={(draftId) =>
+                  window.desktop.askQueueAction({ kind: 'remove', draftId })
+                }
                 hostMode
+              />
+            )}
+            {doc && everroomEmbed && (
+              // Hover card over the host-note underlines (edit / delete)
+              <HostNoteCard
+                editor={editor}
+                items={hostAskQueue}
+                onDelete={(item) =>
+                  window.desktop.askQueueAction({ kind: 'remove', draftId: item.id })
+                }
               />
             )}
             {doc && !everroomEmbed && (

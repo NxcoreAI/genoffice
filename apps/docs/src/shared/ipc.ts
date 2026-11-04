@@ -432,11 +432,12 @@ export interface DesktopApi {
   agentAsk(op: DocsAgentAskOp): Promise<DocsAgentAskResult>
   /**
    * EverRoom embed only: the host's annotation queue (doc-level, file-scoped)
-   * is pushed down so the document can show the anchored original text plus
-   * the user's note, and offer the same send/remove actions.
+   * is pushed down so the document can underline the anchored original text
+   * (hover card: note + edit/delete), while the queue itself stays owned by
+   * the conversation side.
    */
   onAskQueue(handler: (items: DocsAskQueueItem[]) => void): () => void
-  /** EverRoom embed only: ask the host to send the whole queue / drop one item. */
+  /** EverRoom embed only: ask the host to update one note / drop one item / send the whole queue. */
   askQueueAction(action: DocsAskQueueAction): void
 }
 
@@ -456,6 +457,7 @@ export interface DocsAskQueueItem {
 export type DocsAskQueueAction =
   | { kind: 'send-all' }
   | { kind: 'remove'; draftId: string }
+  | { kind: 'update'; draftId: string; instruction: string }
 
 /** Selection kind the popover was opened for (mirrors AiAskPopover's SelectionKind). */
 export type DocsAgentAskKind = 'text' | 'image' | 'chart' | 'table'

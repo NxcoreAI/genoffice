@@ -13,10 +13,15 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
  */
 
 interface AnchorMeta {
-  add?: { qid: string; from: number; to: number }
+  add?: { qid: string; from: number; to: number; className: string }
   remove?: string[]
   clear?: boolean
 }
+
+/** decoration class of the standalone build's queued-edit anchors */
+export const QUEUE_ANCHOR_CLASS = 'ai-queue-anchor'
+/** decoration class of the EverRoom embed's host-note anchors (underlined) */
+export const HOST_NOTE_ANCHOR_CLASS = 'host-note-anchor'
 
 export const aiQueueAnchorsKey = new PluginKey<DecorationSet>('aiQueueAnchors')
 
@@ -49,7 +54,7 @@ export const AiQueueAnchorsExtension = Extension.create({
                 Decoration.inline(
                   meta.add.from,
                   meta.add.to,
-                  { class: 'ai-queue-anchor' },
+                  { class: meta.add.className },
                   { qid: meta.add.qid },
                 ),
               ])
@@ -81,8 +86,14 @@ const anchorMeta = (editor: Editor, meta: AnchorMeta): void => {
   )
 }
 
-export function addQueueAnchor(editor: Editor, qid: string, from: number, to: number): void {
-  anchorMeta(editor, { add: { qid, from, to } })
+export function addQueueAnchor(
+  editor: Editor,
+  qid: string,
+  from: number,
+  to: number,
+  className: string = QUEUE_ANCHOR_CLASS,
+): void {
+  anchorMeta(editor, { add: { qid, from, to, className } })
 }
 
 export function removeQueueAnchors(editor: Editor, qids: string[]): void {
