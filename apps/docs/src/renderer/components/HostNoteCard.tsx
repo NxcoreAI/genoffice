@@ -91,13 +91,19 @@ export function HostNoteCard({ editor, items, onDelete }: Props): React.JSX.Elem
   }, [qidAt, cancelHide, scheduleHide])
 
   // resolve + follow the anchor rect while the card is visible; a vanished
-  // anchor (text deleted / queue updated) closes the card
+  // anchor (text deleted / queue updated) closes the card.
+  // Same-geometry updates must keep the previous state object (React bails on
+  // Object.is): this effect depends on `hover`, so feeding it a fresh rect
+  // object every run loops forever (React #185 → white screen).
   useLayoutEffect(() => {
     if (!hover) return
     const update = () => {
-      const rect = hostNoteRect(editor, hover.qid)
-      if (rect) setHover({ qid: hover.qid, rect })
-      else setHover(null)
+      setHover((prev) => {
+        if (!prev) return prev
+        const rect = hostNoteRect(editor, prev.qid)
+        if (!rect) return null
+        return sameRect(prev.rect, rect) ? prev : { qid: prev.qid, rect }
+      })
     }
     update()
     const scroller = document.querySelector('.editor-scroll')
@@ -175,6 +181,11 @@ function truncate(text: string, max: number): string {
 
 function zeroRect(): AnchorRect {
   return { left: 0, top: 0, right: 0, bottom: 0 }
+}
+
+/** viewport rects are compared by value (sub-pixel jitter must not re-render) */
+function sameRect(a: AnchorRect, b: AnchorRect): boolean {
+  return a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom
 }
 
 /** viewport rect of a host-note anchor; null once its range vanished */
