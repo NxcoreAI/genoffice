@@ -14,6 +14,7 @@ import { buildExtensions } from './editor/extensions'
 import { buildSlashItems } from './editor/slashCommand'
 import type { SlashController, SlashMenuState } from './editor/slashCommand'
 import { setImageBaseDir } from './editor/localImage'
+import { CommentAnchorsExtension } from './editor/comments'
 import { Ribbon } from './components/Ribbon'
 import { SlashMenu, type SlashMenuHandle } from './components/SlashMenu'
 import { ToastHost } from './components/toast'
@@ -23,6 +24,14 @@ import { AiAskPopover } from './components/AiAskPopover'
 import { AiPanel, GensparkMark, type AiPreset, type MarkdownAiDeps } from './ai/AiPanel'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type EditQueueItem } from './ai/edit-queue'
 import { addQueueAnchor, clearQueueAnchors, removeQueueAnchors } from './editor/aiQueueAnchors'
+import { EditorModeBar } from '@genoffice/ui'
+import { CommentsPanel } from './components/CommentsPanel'
+import {
+  captureSelectionAnchor,
+  jumpToComment,
+  nextCommentId,
+} from './editor/comments'
+import type { MdComment } from '../shared/ipc'
 import { DOCX_MAX_IMAGE_PX, exportDocxBytes } from './export/docxExport'
 import { buildPrintHtml } from './export/printHtml'
 import { resolveImageSrc } from './editor/localImage'
@@ -30,6 +39,8 @@ import type { ExportFormat, SaveMode } from '../shared/ipc'
 
 type LoadStatus = 'loading' | 'ready' | 'error'
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed'
+
+declare const __GENOFFICE_EMBED_ONLY__: boolean
 
 const MIN_ZOOM = 50
 const MAX_ZOOM = 200
@@ -129,6 +140,44 @@ export default function App() {
   const [autoSave, setAutoSave] = useState(() => localStorage.getItem('mdapp.autoSave') === '1')
   const [zoom, setZoom] = useState(100)
 
+  // EverRoom embed: ?mode=everroom (compile-time flag also folds the bundled
+  // AI surface out — the host supplies its own agent panel)
+  const everroomEmbed =
+    typeof __GENOFFICE_EMBED_ONLY__ !== 'undefined'
+      ? __GENOFFICE_EMBED_ONLY__
+      : new URLSearchParams(location.search).get('mode') === 'everroom'
+
+  /**
+   * Two-state operation panel (docs/sheets/slides/pdf parity): normal edit mode
+   * keeps the full ribbon; AI edit mode hides it and keeps only the floating
+   * bar (save / undo / redo). Defaults to collapsed in the EverRoom embed;
+   * persisted per user; toggled from the bar, ⌘⇧F, or the host IPC.
+   */
+  const [chromeHidden, setChromeHidden] = useState(() => {
+    const stored = localStorage.getItem('mdapp.chromeHidden')
+    if (stored === '1' || stored === '0') return stored === '1'
+    return everroomEmbed
+  })
+
+  // ---- comments (sidecar-anchored, docs CommentsPanel parity) ----
+  const [comments, setComments] = useState<MdComment[]>([])
+  const commentsLiveRef = useRef<MdComment[]>([])
+  const setCommentsLive = useCallback((action: MdComment[] | ((prev: MdComment[]) => MdComment[])) => {
+    commentsLiveRef.current = typeof action === 'function' ? action(commentsLiveRef.current) : action
+    setComments(commentsLiveRef.current)
+    // refresh anchor decorations without touching history
+    const current = editorRef.current
+    if (current) current.view.dispatch(current.state.tr.setMeta('mdCommentsChanged', true))
+  }, [])
+  const [showComments, setShowComments] = useState(false)
+  const [commentComposing, setCommentComposing] = useState(false)
+  const pendingAnchorRef = useRef<{
+    blockIndex: number
+    excerpt: string
+    offset: number
+  } | null>(null)
+  const [commentsToast, setCommentsToast] = useState<string | null>(null)
+
   const statusRef = useRef<LoadStatus>('loading')
   const dirtyRef = useRef(false)
   const savingRef = useRef(false)
@@ -170,11 +219,15 @@ export default function App() {
       onKeyDown: (event) => slashMenuRef.current?.handleKey(event) ?? false,
       onClose: () => setSlashState(null),
     }
-    return buildExtensions({
-      slashController: controller,
-      slashItems: () =>
-        buildSlashItems({ insertImage: filePathRef.current ? insertImage : undefined }),
-    })
+    return [
+      ...buildExtensions({
+        slashController: controller,
+        slashItems: () =>
+          buildSlashItems({ insertImage: filePathRef.current ? insertImage : undefined }),
+      }),
+      // comment anchors are decorations (never serialized into the markdown)
+      CommentAnchorsExtension(() => commentsLiveRef.current),
+    ]
   }, [insertImage])
 
   const editor = useEditor({
@@ -223,6 +276,16 @@ export default function App() {
         }
         statusRef.current = 'ready'
         setStatus('ready')
+        // host (EverRoom) background sessions wait on this before touching the view
+        window.markdownApi.reportAgentReady(path ?? null)
+        // comment sidecar loads with the document (empty when none exists)
+        try {
+          const sidecar = await window.markdownApi.readComments()
+          commentsLiveRef.current = sidecar.comments
+          setComments(sidecar.comments)
+        } catch (err) {
+          console.warn('[markdown] comment sidecar read failed:', err)
+        }
       } catch (err) {
         console.error('[markdown] load failed:', err)
         if (!cancelled) {
@@ -418,6 +481,10 @@ export default function App() {
       if (key === 's') {
         event.preventDefault()
         void doSave(event.shiftKey ? 'saveAs' : 'save')
+      } else if (key === 'f' && event.shiftKey) {
+        // ⌘⇧F / Ctrl+Shift+F: collapse/restore the operation panel (docs parity)
+        event.preventDefault()
+        setChromeHidden((v) => !v)
       } else if (key === 'p' && !event.shiftKey) {
         event.preventDefault()
         void printDoc()
@@ -565,6 +632,122 @@ export default function App() {
   }
 
   const fileName = filePath ? filePath.replace(/^.*[/\\]/, '') : null
+
+  // ---- comment operations (sidecar persistence; anchors resolved live) ----
+  const persistComments = useCallback(() => {
+    void window.markdownApi
+      .writeComments({ version: 1, comments: commentsLiveRef.current })
+      .catch((err) => console.warn('[markdown] comment sidecar write failed:', err))
+  }, [])
+
+  const startNewComment = useCallback(() => {
+    const current = editorRef.current
+    if (!current || statusRef.current !== 'ready') return
+    const anchor = captureSelectionAnchor(current)
+    if (!anchor) {
+      setCommentsToast(t('appSelectTextToComment'))
+      return
+    }
+    pendingAnchorRef.current = {
+      blockIndex: anchor.blockIndex,
+      excerpt: anchor.excerpt,
+      offset: anchor.offset,
+    }
+    setShowComments(true)
+    setCommentComposing(true)
+  }, [t])
+
+  const submitNewComment = useCallback(
+    (text: string) => {
+      const anchor = pendingAnchorRef.current
+      if (!anchor) {
+        setCommentsToast(t('appCommentSelectionLost'))
+        setCommentComposing(false)
+        return
+      }
+      const now = new Date().toISOString()
+      setCommentsLive((prev) => [
+        ...prev,
+        {
+          id: nextCommentId(prev),
+          author: 'User',
+          initials: 'U',
+          date: now,
+          text,
+          blockIndex: anchor.blockIndex,
+          excerpt: anchor.excerpt,
+          offset: anchor.offset,
+        },
+      ])
+      pendingAnchorRef.current = null
+      setCommentComposing(false)
+      persistComments()
+    },
+    [persistComments, setCommentsLive, t],
+  )
+
+  const replyToComment = useCallback(
+    (parentId: string, text: string) => {
+      const parent = commentsLiveRef.current.find((c) => c.id === parentId)
+      if (!parent) return
+      const now = new Date().toISOString()
+      setCommentsLive((prev) => [
+        ...prev,
+        {
+          id: nextCommentId(prev),
+          author: 'User',
+          initials: 'U',
+          date: now,
+          text,
+          parentId,
+          blockIndex: parent.blockIndex,
+          excerpt: parent.excerpt,
+          offset: parent.offset,
+        },
+      ])
+      persistComments()
+    },
+    [persistComments, setCommentsLive],
+  )
+
+  const resolveComment = useCallback(
+    (id: string, done: boolean) => {
+      // resolving flips the whole thread (Word parity)
+      setCommentsLive((prev) =>
+        prev.map((c) => (c.id === id || c.parentId === id ? { ...c, done } : c)),
+      )
+      persistComments()
+    },
+    [persistComments, setCommentsLive],
+  )
+
+  const deleteComment = useCallback(
+    (id: string) => {
+      setCommentsLive((prev) => prev.filter((c) => c.id !== id && c.parentId !== id))
+      persistComments()
+    },
+    [persistComments, setCommentsLive],
+  )
+
+  // comments toast auto-dismiss (status bar of the docs app shows these)
+  useEffect(() => {
+    if (!commentsToast) return
+    const id = window.setTimeout(() => setCommentsToast(null), 2600)
+    return () => window.clearTimeout(id)
+  }, [commentsToast])
+
+  // host clean-canvas IPC + ⌘⇧F (docs parity)
+  useEffect(() => {
+    localStorage.setItem('mdapp.chromeHidden', chromeHidden ? '1' : '0')
+  }, [chromeHidden])
+
+  useEffect(() => {
+    const off = window.markdownApi.onChromeToggle((hidden) => {
+      if (hidden === null) setChromeHidden((v) => !v)
+      else setChromeHidden(hidden)
+    })
+    return () => off()
+  }, [])
   const statusText =
     saveState === 'saving'
       ? t('saving')
@@ -585,7 +768,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${chromeHidden ? ' chrome-hidden' : ''}`}>
       <Ribbon
         editor={editor}
         disabled={status !== 'ready'}
@@ -603,11 +786,41 @@ export default function App() {
           setAiOpen(true)
           setAiPreset((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }))
         }}
+        chromeHidden={chromeHidden}
+        onToggleChrome={() => setChromeHidden((v) => !v)}
+        commentCount={comments.length}
+        openCommentCount={comments.filter((c) => !c.parentId && !c.done).length}
+        canComment={Boolean(editor && !editor.state.selection.empty)}
+        hasDoc={status === 'ready'}
+        onNewComment={startNewComment}
+        onShowComments={() => setShowComments(true)}
       />
+      {/* AI edit mode: the panel is hidden, only the floating bar remains
+          (fixed overlay — hiding the ribbon never reflows the document) */}
+      {chromeHidden && (
+        <EditorModeBar
+          labels={{
+            restore: t('editorModeNormalTip'),
+            save: t('save'),
+            undo: t('undo'),
+            redo: t('redo'),
+            ai: '',
+          }}
+          canSave={status === 'ready' && dirty}
+          canUndo={Boolean(editor?.can().undo())}
+          canRedo={Boolean(editor?.can().redo())}
+          showAi={false}
+          onRestore={() => setChromeHidden(false)}
+          onSave={() => void doSave('save')}
+          onUndo={() => editor?.chain().focus().undo().run()}
+          onRedo={() => editor?.chain().focus().redo().run()}
+          onAi={() => {}}
+        />
+      )}
       {status === 'loading' && <div className="center-note">{t('loading')}</div>}
       <div className="app-main" style={status === 'ready' ? undefined : { display: 'none' }}>
-        <div className={`ai-dock${aiOpen ? '' : ' collapsed'}`}>
-          {!aiOpen && (
+        <div className={`ai-dock${aiOpen && !everroomEmbed ? '' : ' collapsed'}`}>
+          {!aiOpen && !everroomEmbed && (
             <button
               className="ai-rail"
               data-tip={t('aiOpenAssistant')}
@@ -617,8 +830,9 @@ export default function App() {
               <GensparkMark size={22} />
             </button>
           )}
-          {/* mounted only after the file is loaded so chat history resolves against the real path */}
-          {status === 'ready' && (
+          {/* mounted only after the file is loaded so chat history resolves against the real path;
+              *  EverRoom embed hosts its own agent panel — the bundled one is folded out */}
+          {status === 'ready' && !everroomEmbed && (
             <AiPanel
               deps={aiDeps}
               filePath={filePath}
@@ -640,9 +854,29 @@ export default function App() {
               <EditorContent editor={editor} />
             </div>
           </div>
+          {showComments && (
+            <CommentsPanel
+              comments={comments}
+              composing={commentComposing}
+              onSubmitNew={submitNewComment}
+              onReply={replyToComment}
+              onResolve={resolveComment}
+              onCancelNew={() => {
+                pendingAnchorRef.current = null
+                setCommentComposing(false)
+              }}
+              onDelete={deleteComment}
+              onJump={(id) => {
+                const current = editorRef.current
+                return current ? jumpToComment(current, id, commentsLiveRef.current) : false
+              }}
+              onClose={() => setShowComments(false)}
+            />
+          )}
           <footer className="status-bar">
             <div className="status-left">
               {fileName && <span className="status-item status-file">{fileName}</span>}
+              {commentsToast && <span className="status-item comment-toast">{commentsToast}</span>}
             </div>
             <div className="status-right">
               {statusText && (

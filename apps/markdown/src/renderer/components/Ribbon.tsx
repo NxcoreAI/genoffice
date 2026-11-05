@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Editor } from '@tiptap/core'
 import { useEditorState } from '@tiptap/react'
-import { Dropdown, useDismissablePopover } from '@genoffice/ui'
+import { Dropdown, EditorModeToggle, useDismissablePopover } from '@genoffice/ui'
 import { useI18n } from '../i18n/locale'
 import type { StringKey } from '../i18n/locale'
 import { GensparkMark } from '../ai/AiPanel'
 import { liftFromList } from '../editor/slashCommand'
 import {
+  IconComment,
+  IconComments,
   IconBullets,
   IconHr,
   IconInlineCode,
@@ -36,6 +38,16 @@ interface Props {
   aiOpen: boolean
   onToggleAi: () => void
   onAiPreset: (instruction: string) => void
+  /** operation panel two-state toggle (docs/sheets parity) */
+  chromeHidden: boolean
+  onToggleChrome: () => void
+  /** comments (docs Review-tab parity) */
+  commentCount: number
+  openCommentCount: number
+  canComment: boolean
+  hasDoc: boolean
+  onNewComment: () => void
+  onShowComments: () => void
 }
 
 type BlockStyle = 'paragraph' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'quote' | 'codeBlock'
@@ -72,8 +84,7 @@ function applyBlockStyle(editor: Editor, style: BlockStyle): void {
 }
 
 /** doc + sparkle / pen + sparkle / lines + sparkle, same glyphs as the docs ribbon */
-function AiFeatureIcon({ kind }: { kind: 'summarize' | 'polish' | 'tidy' }) {
-  return (
+function AiFeatureIcon({ kind }: { kind: 'summarize' | 'polish' | 'tidy' }) {  return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -155,6 +166,14 @@ export function Ribbon({
   aiOpen,
   onToggleAi,
   onAiPreset,
+  chromeHidden,
+  onToggleChrome,
+  commentCount,
+  openCommentCount,
+  canComment,
+  hasDoc,
+  onNewComment,
+  onShowComments,
 }: Props) {
   const { t } = useI18n()
   const [linkOpen, setLinkOpen] = useState(false)
@@ -240,6 +259,13 @@ export function Ribbon({
     <div className="ribbon">
       {/* quick-access row above the toolbar (save / undo / redo / autosave), same as the docs QAT row */}
       <div className="ribbon-tabs">
+        {/* Front-of-panel switch: normal edit mode ⇄ AI edit mode (docs/sheets parity) */}
+        <EditorModeToggle
+          hidden={chromeHidden}
+          label={t(chromeHidden ? 'editorModeNormalTip' : 'editorModeAiTip')}
+          className="qa-btn"
+          onClick={onToggleChrome}
+        />
         <button
           type="button"
           className="qa-btn"
@@ -456,6 +482,28 @@ export function Ribbon({
               onClick={() => editor?.chain().focus().setHorizontalRule().run()}
             >
               <IconHr size={ICON} />
+            </IconBtn>
+          </div>
+        </div>
+
+        <div className="rb-sep" />
+
+        {/* Comments (docs Review-tab parity): new comment on the selection + open the pane */}
+        <div className="ribbon-group">
+          <div className="ribbon-group-items">
+            <IconBtn
+              title={t(canComment ? 'ribbonNewCommentTip' : 'appSelectTextToComment')}
+              disabled={disabled || !hasDoc || !canComment}
+              onClick={onNewComment}
+            >
+              <IconComment size={ICON} />
+            </IconBtn>
+            <IconBtn
+              title={t('ribbonShowCommentsTip', { count: openCommentCount })}
+              disabled={disabled || !hasDoc}
+              onClick={onShowComments}
+            >
+              <IconComments size={ICON} />
             </IconBtn>
           </div>
         </div>

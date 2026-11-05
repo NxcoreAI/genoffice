@@ -182,3 +182,22 @@ export function IconQuoteMark(props: IconProps) {
     </Svg>
   )
 }
+
+export function IconComment(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M 2.99 3.91 h 10.01 v 6.83 h -5.46 L 4.81 13.46 v -2.73 h -1.82 z" />
+      <path d="M 5.27 6.18 h 5.46 M 5.27 8.46 h 3.64" />
+    </Svg>
+  )
+}
+
+export function IconComments(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M 5.75 3.45 h 7.28 v 5.46 h -1.68" />
+      <path d="M 2.99 5.75 h 8.19 v 5.46 h -4.1 L 4.81 13.5 v -2.29 h -1.82 z" />
+      <path d="M 5.27 8.2 h 3.9" />
+    </Svg>
+  )
+}
