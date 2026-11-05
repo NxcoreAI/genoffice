@@ -1,4 +1,5 @@
 import type { AgentSkill, ToolDisplay } from '@genoffice/agent-core'
+import { occupiedBoxes, pickFreeBox } from './free-area'
 import type {
   GroupRenderNode,
   RenderNode,
@@ -945,7 +946,7 @@ const TOOLS: AgentToolDef[] = [
   {
     name: 'add_chart',
     description:
-      "Insert a chart on a page (native pptx chart, still editable in PowerPoint). categories are the x-axis categories; series is each series' name and values (length must match categories). Omit x/y/w/h to center it. dataSource declares where the numbers came from and is enforced — never present invented numbers as real data.",
+      "Insert a chart on a page (native pptx chart, still editable in PowerPoint). categories are the x-axis categories; series is each series' name and values (length must match categories). Omit x/y/w/h to auto-place it in the emptiest area of the page (avoids covering existing text). dataSource declares where the numbers came from and is enforced — never present invented numbers as real data.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1093,7 +1094,7 @@ const TOOLS: AgentToolDef[] = [
   {
     name: 'edit_chart',
     description:
-      'Modify a chart (including charts from imported files; first edit converts it to editable automatically): change type/data/colors/chart elements. kind options: bar/barStacked/line/area/pie/doughnut. colorScheme: default/colorful/colorful2/mono-accent1..6 (theme-derived); legacy keys blue/warm/cool/mono still work.',
+      'Modify a chart in place (including imported-file charts; first edit converts it to editable automatically): change type/data/colors/chart elements. kind options: bar/barStacked/line/area/pie/doughnut. Changing kind edits the SAME element and keeps its position and size — to switch a bar chart to a line chart, pass kind here; never delete the chart and re-add it (the re-added one gets a default frame and can cover body text). colorScheme: default/colorful/colorful2/mono-accent1..6 (theme-derived); legacy keys blue/warm/cool/mono still work.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2841,6 +2842,15 @@ async function executeTool(
       const defH = Math.round(slide.heightPx * 0.62)
       const w = Number(call.input.w) || defW
       const h = Number(call.input.h) || defH
+      // 省略 x/y 时不再死板居中：页面正中常常压在正文上（实测「左文右图」的稿子就是这样），
+      // 改为在空白处落位——零重叠优先，其次重叠面积最小，同样干净取离页心最近的。
+      const spot = pickFreeBox({
+        pageW: slide.widthPx,
+        pageH: slide.heightPx,
+        w,
+        h,
+        occupied: occupiedBoxes(slide),
+      })
       const r = await window.slidesApi.addChart({
         slideIndex: idx,
         kind: String(call.input.kind) as
@@ -2851,11 +2861,11 @@ async function executeTool(
         xPx:
           Number.isFinite(Number(call.input.x)) && call.input.x != null
             ? Number(call.input.x)
-            : Math.round((slide.widthPx - w) / 2),
+            : spot.x,
         yPx:
           Number.isFinite(Number(call.input.y)) && call.input.y != null
             ? Number(call.input.y)
-            : Math.round((slide.heightPx - h) / 2),
+            : spot.y,
         wPx: w,
         hPx: h,
         fitWidthPx: access.fitWidthPx,
@@ -2863,8 +2873,15 @@ async function executeTool(
       if (!r) return fail(t('aiFailChart'), 'Insertion failed (check kind and data)')
       access.applySlide(idx, r.slide)
       const sampleNote = call.input.dataSource === 'sample' ? SAMPLE_DATA_NOTE : ''
+      // 插入后立刻跑一次几何审计：压住文字/溢出版面要当场告诉模型，别等用户发现。
+      const chartAudit = auditSlideLayout(r.slide)
+      const chartAuditStr = chartAudit.length
+        ? `\n⚠️ The layout audit found ${chartAudit.length} issue(s) on this page:\n${chartAudit.map((s) => `- ${s}`).join('\n')}\nFix them with edit_transform (move/resize) before reporting success.`
+        : ''
       return {
-        output: `Inserted a ${String(call.input.kind)} chart on page ${idx + 1}, element id=${r.sourceId}.${sampleNote}`,
+        output:
+          `Inserted a ${String(call.input.kind)} chart on page ${idx + 1}, element id=${r.sourceId}.` +
+          `${chartAuditStr}${sampleNote}`,
         mutated: true,
         summary: t('aiSumChart', { n: idx + 1 }),
       }
