@@ -11,6 +11,7 @@ import {
 import {
   applyPictureBytesToImageBlock,
   cropImageDataUrl,
+  grayscaleImageDataUrl,
   imageBlockTargetAt,
   parseImagePayload,
   pictureNaturalSize,
@@ -844,6 +845,40 @@ function imageRemoveBackgroundOp(
   })()
 }
 
+function imageGrayscaleOp(
+  input: Record<string, unknown>,
+  ctx: OperationContext,
+): Promise<OperationOutcome> | OperationOutcome {
+  const blockIndex = checkBlockIndex(ctx.editor, input.blockIndex)
+  if (typeof blockIndex === 'string') return failure(blockIndex)
+  const target = imageBlockTargetAt(ctx.editor.state.doc, blockIndex)
+  if ('error' in target) return failure(target.error)
+  const dataUrl = currentImageDataUrl(ctx, blockIndex)
+  if (typeof dataUrl === 'object') return failure(dataUrl.error)
+  if (ctx.dryRun) {
+    return planned(
+      `would convert the picture in block ${blockIndex} to grayscale (BT.601 luma, alpha preserved)`,
+      { blockIndex },
+    )
+  }
+  return (async () => {
+    const result = await grayscaleImageDataUrl(dataUrl)
+    if (!result.ok || !result.dataUrl) return failure(result.error ?? 'grayscale conversion failed')
+    const applied = await applyPictureBytesToImageBlock(ctx.editor, blockIndex, result.dataUrl)
+    if (!applied.ok) return failure(applied.error ?? 'grayscale picture apply failed')
+    return success(
+      `Converted the picture in block ${blockIndex} to grayscale (${result.widthPx}×${result.heightPx}px); `
+        + `display size ${applied.widthPx}×${applied.heightPx}px.`,
+      'recolor picture (grayscale)',
+      {
+        blockIndex,
+        widthPx: applied.widthPx,
+        heightPx: applied.heightPx,
+      },
+    )
+  })()
+}
+
 // ── A1: shape stacking order (imported shapes patch their original anchor) ──
 
 const SHAPE_Z_ORDERS = ['front', 'back', 'forward', 'backward', 'absolute'] as const
@@ -1351,6 +1386,22 @@ export const objectOperations: OperationDef[] = [
       required: ['blockIndex'],
     },
     handler: imageRemoveBackgroundOp,
+  },
+  {
+    name: 'object.image.grayscale',
+    group: 'object',
+    description:
+      'object.image.grayscale { blockIndex } — convert a picture to grayscale (BT.601 luma, the same '
+      + 'result as the ribbon\'s "recolor → grayscale"); alpha/transparency is preserved, output is PNG; '
+      + 'works on both imported and editor-created pictures',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blockIndex: { type: 'integer', minimum: 0, description: 'index of the image block' },
+      },
+      required: ['blockIndex'],
+    },
+    handler: imageGrayscaleOp,
   },
   {
     name: 'object.shape.zOrder',

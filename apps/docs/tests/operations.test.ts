@@ -2891,6 +2891,102 @@ describe('object.image.removeBackground', () => {
   })
 })
 
+describe('object.image.grayscale', () => {
+  it('converts the picture via the BT.601 luma and replaces the bytes', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outcome = await run(editor, [
+        { op: 'object.image.grayscale', blockIndex: 1 },
+      ])
+      expect(outcome.ok).toBe(true)
+      const image = editor.getJSON().content![1] as unknown as JsonNode
+      expect(String(image.attrs?.imageDataUrl)).toContain('STUB100x80')
+      const record = outcome.results[0].record as { widthPx: number; heightPx: number }
+      expect(record).toMatchObject({ widthPx: 100, heightPx: 80 })
+    } finally {
+      stubs.restore()
+    }
+  })
+
+  it('writes BT.601 luma into every pixel and keeps alpha untouched', async () => {
+    // 用会改写缓冲区的 stub 检验像素算术：R=255,G=128,B=0,A=77 → RGB 同值 luma，alpha 不动
+    const seen: number[] = []
+    const alphas: number[] = []
+    const proto = HTMLCanvasElement.prototype as unknown as Record<string, unknown>
+    const savedContext = proto.getContext
+    const savedToDataUrl = proto.toDataURL
+    const savedImage = globalThis.Image
+    proto.getContext = function getContextStub(this: HTMLCanvasElement) {
+      return {
+        canvas: this,
+        drawImage: () => {},
+        getImageData: (_x: number, _y: number, w: number, h: number) => {
+          const data = new Uint8ClampedArray(w * h * 4)
+          for (let i = 0; i < data.length; i += 4) {
+            data[i] = 255
+            data[i + 1] = 128
+            data[i + 2] = 0
+            data[i + 3] = 77
+          }
+          return { data, width: w, height: h }
+        },
+        putImageData: (img: { data: Uint8ClampedArray }) => {
+          for (let i = 0; i < img.data.length; i += 4) {
+            seen.push(img.data[i]!, img.data[i + 1]!, img.data[i + 2]!)
+            alphas.push(img.data[i + 3]!)
+          }
+        },
+      }
+    }
+    globalThis.Image = class A1FakeImageLuma {
+      naturalWidth = 100
+      naturalHeight = 50
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.())
+      }
+    } as unknown as typeof Image
+    proto.toDataURL = function toDataUrlStub(this: HTMLCanvasElement, type?: string) {
+      return `data:${type ?? 'image/png'};base64,STUB${this.width}x${this.height}`
+    }
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const outcome = await run(editor, [
+        { op: 'object.image.grayscale', blockIndex: 1 },
+      ])
+      expect(outcome.ok).toBe(true)
+      // BT.601: 0.299*255 + 0.587*128 + 0.114*0 = 151.7 → 152（Uint8ClampedArray 取整）
+      const expectLuma = Math.round(0.299 * 255 + 0.587 * 128 + 0.114 * 0)
+      expect(seen.length).toBeGreaterThan(0)
+      expect(new Set(seen).size).toBe(1)
+      expect(seen[0]).toBe(expectLuma)
+      expect(new Set(alphas)).toEqual(new Set([77]))
+    } finally {
+      proto.getContext = savedContext
+      proto.toDataURL = savedToDataUrl
+      globalThis.Image = savedImage
+    }
+  })
+
+  it('dryRun plans without touching the document, non-image blocks fail', async () => {
+    const stubs = installPictureStubs()
+    try {
+      const editor = createEditor([para('first'), imageBlock()])
+      const before = snapshot(editor)
+      const dry = await run(editor, [{ op: 'object.image.grayscale', blockIndex: 1 }], { dryRun: true })
+      expect(dry.results[0]).toMatchObject({ ok: true, planned: true })
+      expect(snapshot(editor)).toBe(before)
+      const notImage = await run(editor, [{ op: 'object.image.grayscale', blockIndex: 0 }])
+      expect(notImage.ok).toBe(false)
+      expect(notImage.results[0].error).toContain('not an image block')
+    } finally {
+      stubs.restore()
+    }
+  })
+})
+
 describe('object.shape.zOrder', () => {
   const ANCHOR_XML = '<w:p><w:r><w:drawing><wp:anchor distT="0" simplePos="0" relativeHeight="251658240" behindDoc="0">x</wp:anchor></w:drawing></w:r></w:p>'
 

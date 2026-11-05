@@ -253,6 +253,54 @@ export async function cropImageDataUrl(dataUrl: string, rect: unknown): Promise<
   }
 }
 
+// ---- recolor (grayscale) ----
+
+export interface GrayscaleResult {
+  ok: boolean
+  error?: string
+  dataUrl?: string
+  widthPx?: number
+  heightPx?: number
+}
+
+/**
+ * Dialog-free grayscale conversion: ITU-R BT.601 luma weights (the same
+ * "recolor → grayscale" the Word ribbon renders), alpha preserved, PNG output.
+ */
+export async function grayscaleImageDataUrl(dataUrl: string): Promise<GrayscaleResult> {
+  let img: HTMLImageElement
+  try {
+    img = await loadImage(dataUrl)
+  } catch {
+    return { ok: false, error: 'the current picture could not be decoded' }
+  }
+  const width = img.naturalWidth
+  const height = img.naturalHeight
+  if (!width || !height) return { ok: false, error: 'the picture has no readable dimensions' }
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return { ok: false, error: 'canvas rendering is unavailable in this environment' }
+    ctx.drawImage(img, 0, 0)
+    const image = ctx.getImageData(0, 0, width, height)
+    const data = image.data
+    for (let i = 0; i < data.length; i += 4) {
+      // BT.601 luma: the channel weights Word's "recolor → grayscale" follows.
+      const luma = 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!
+      data[i] = luma
+      data[i + 1] = luma
+      data[i + 2] = luma
+      // data[i + 3] (alpha) untouched: transparency survives the conversion
+    }
+    ctx.putImageData(image, 0, 0)
+    return { ok: true, dataUrl: canvas.toDataURL('image/png'), widthPx: width, heightPx: height }
+  } catch {
+    return { ok: false, error: 'grayscale conversion failed (canvas error)' }
+  }
+}
+
 // ---- local tolerance-cutout background removal ----
 
 export interface RemoveBackgroundResult {
