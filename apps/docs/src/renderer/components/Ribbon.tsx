@@ -205,8 +205,9 @@ interface RibbonProps {
   darkCanvas: boolean
   onDarkCanvas: (v: boolean) => void
   onAiPreset: (instruction: string) => void
-  /** external request (e.g. native menu Page Setup) to switch to a specific tab */
-  tabRequest?: { tab: string; nonce: number } | null
+  /** external request (e.g. native menu Page Setup / AI-mode 排版) to switch
+   *  to a specific tab; `dropdown` optionally opens one of that tab's panels */
+  tabRequest?: { tab: string; nonce: number; dropdown?: string | null } | null
   header: HeaderFooter | null
   onHeader: (next: HeaderFooter) => void
   onPageNumFormat: () => void
@@ -709,7 +710,9 @@ function RibbonInner({
       const requested = tabRequest.tab as (typeof TABS)[number]
       lastRegularTab.current = requested
       setTab(requested)
-      setDropdown(null)
+      // 「AI 排版」从 AI 编辑模式回到正常面板时要直接展开论文排版下拉；
+      // 其余外部请求（页面设置等）仍然只切标签、清空下拉。
+      setDropdown(tabRequest.dropdown ?? null)
     }
   }, [tabRequest])
 

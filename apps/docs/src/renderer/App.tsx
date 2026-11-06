@@ -168,6 +168,7 @@ import { cachedByDoc } from './doc-cache'
 import { useShallowStable, useStableCallbacks } from './use-stable'
 import { FindPanel } from './components/FindPanel'
 import { Ribbon } from './components/Ribbon'
+import { AiTab } from './components/AiTab'
 import { computeFormatState } from './components/ribbon-format-state'
 import { IconRedo, IconSave, IconUndo } from './components/icons'
 import { ToastHost } from './components/toast'
@@ -1076,9 +1077,13 @@ export function App() {
   })
   /** Increments on every open/new document: AiPanel remounts by key to reset the conversation and history (save path changes don't bump it, so the session continues) */
   const [aiPanelKey, setAiPanelKey] = useState(0)
-  const [ribbonTabRequest, setRibbonTabRequest] = useState<{ tab: string; nonce: number } | null>(
-    null,
-  )
+  const [ribbonTabRequest, setRibbonTabRequest] = useState<{
+    tab: string
+    nonce: number
+    dropdown?: string | null
+  } | null>(null)
+  /** AI 编辑模式下的浮动论文排版面板：与 ribbon「AI → 排版」是同一个 AiTab 面板组件 */
+  const [floatingThesis, setFloatingThesis] = useState(false)
   const [status, setStatus] = useState('')
   const [zoom, setZoom] = useState(100)
   const [darkCanvas, setDarkCanvas] = useState(false)
@@ -1905,6 +1910,23 @@ export function App() {
   useEffect(() => {
     localStorage.setItem('aidocs.chromeHidden', chromeHidden ? '1' : '0')
   }, [chromeHidden])
+  // 从 AI 编辑模式回到正常面板时，把浮动排版面板「接回」ribbon：切到 AI 标签
+  // 并展开同一个论文排版下拉，用户不用再点一次「排版」。
+  useEffect(() => {
+    if (!chromeHidden && floatingThesis) {
+      setFloatingThesis(false)
+      setRibbonTabRequest({ tab: 'ai', dropdown: 'thesis', nonce: Date.now() })
+    }
+  }, [chromeHidden, floatingThesis])
+  // Esc 收起 AI 编辑模式下的浮动排版面板
+  useEffect(() => {
+    if (!floatingThesis) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFloatingThesis(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [floatingThesis])
   // Host-driven toggle (EverRoom toolbar / menu): payload may carry an explicit
   // hidden value; omitted = toggle.
   useEffect(() => window.desktop.onChromeToggle?.((hidden) => {
@@ -5755,13 +5777,21 @@ export function App() {
   }
 
   /**
-   * AI 排版 entry for the AI-mode bar. Standalone builds open the AI panel and
-   * run the tidy-format prompt; the EverRoom embed has no in-editor AI backend,
-   * so the instruction is relayed to the host agent over the existing ask channel.
+   * 「AI 排版」入口。
+   *
+   * EverRoom embed 里这条按钮原先直接把 aiTidyPrompt 丢给宿主 Agent，于是在
+   * AI 编辑模式下点它只会发一句指令；而正常模式 ribbon「AI」标签里的「排版」
+   * 是论文格式面板（上传模版 / 预览 / 一键排版）。现在两者统一：AI 模式
+   * 下弹出同一个 AiTab 面板的浮动形态（保留收起操作面板的状态），正常模式下
+   * 切到 AI 标签并展开论文排版下拉。独立版仍走自带的 AI 面板。
    */
   const runAiTidy = () => {
     if (everroomEmbed) {
-      submitHostAgentAsk(t('aiTidyPrompt'))
+      if (chromeHidden) {
+        setFloatingThesis((value) => !value)
+        return
+      }
+      setRibbonTabRequest({ tab: 'ai', dropdown: 'thesis', nonce: Date.now() })
       return
     }
     setShowAi(true)
@@ -5815,6 +5845,26 @@ export function App() {
           onRedo={() => editor?.chain().focus().redo().run()}
           onAi={runAiTidy}
         />
+      )}
+      {/* AI 编辑模式：操作面板收起时，把 ribbon「AI → 排版」的同一个论文格式面板
+          以浮动形态弹出（上传模版 / 模版预览 / 删除 / 一键排版全都在里面）。
+          遮罩负责点外部收起，Esc 亦可关闭，不改变 chromeHidden 状态。 */}
+      {chromeHidden && floatingThesis && (
+        <>
+          <div
+            className="ai-thesis-floating-mask"
+            onMouseDown={() => setFloatingThesis(false)}
+          />
+          <AiTab
+            hasDoc={!!doc}
+            dropdown="thesis"
+            setDropdown={() => setFloatingThesis(false)}
+            onNotice={setStatus}
+            panelOnly
+            floating
+            onClose={() => setFloatingThesis(false)}
+          />
+        </>
       )}
       {docCss && <style>{docCss}</style>}
       {doc && liveDocCjk != null && (
