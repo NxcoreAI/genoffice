@@ -24,7 +24,10 @@ import {
   showSaveDialogWithMemory,
 } from '@genoffice/electron-utils'
 import { createI18n, getUiLang } from '@genoffice/i18n'
-import { cloudToolsEnabled, type AiSettings } from '@genoffice/ai-provider'
+import {
+  cloudToolsEnabled,
+  type AiSettings,
+} from '@genoffice/ai-provider'
 import { gskGenerateImage, hasGskAuth } from '@genoffice/ai-search'
 import { atomicWriteFile } from './atomic-write'
 import {
@@ -48,10 +51,17 @@ import type {
   ExportPdfRequest,
   ExportResult,
   ImageData,
+  MdComment,
+  MdCommentsDoc,
   SaveMarkdownRequest,
   SaveMarkdownResult,
   SaveMode,
 } from '../shared/ipc'
+
+/// EverRoom embed build: the bundled Genspark AI surface is folded out (the
+/// host supplies its own agent panel). Declared here and defined by the vite
+/// config's `define` (mirrors apps/docs).
+declare const __GENOFFICE_EMBED_ONLY__: boolean
 
 const tDlg = createI18n({
   zh: {
@@ -351,6 +361,65 @@ export function setMarkdownDocxExportedHook(hook: (path: string) => void): void 
   docxExportedHook = hook
 }
 
+/**
+ * Host-side clean-canvas control (EverRoom embed): hide/show the editor's
+ * operation area (ribbon/status bar). `hidden` omitted = toggle. The renderer
+ * keeps its own restore pill and ⌘⇧F, so hiding is always reversible.
+ */
+export function setMarkdownChromeHidden(contents: WebContents, hidden?: boolean): void {
+  if (contents.isDestroyed()) return
+  contents.send(MARKDOWN_CHANNELS.chromeToggle, hidden === undefined ? {} : { hidden })
+}
+
+/**
+ * Document-ready signal: the renderer reports the loaded file path once the
+ * editor mounted. true = the expected path is open (identity match), false =
+ * timeout / view destroyed / identity mismatch. Mirrors docs waitForAgentReady.
+ */
+export function waitForMarkdownAgentReady(
+  contents: WebContents,
+  expectedPath: string,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (contents.isDestroyed()) return resolve(false)
+    // a report that already arrived satisfies the wait immediately
+    if (agentReadyPaths.get(contents.id) === expectedPath) return resolve(true)
+    const finish = (ok: boolean): void => {
+      clearTimeout(timer)
+      agentReadyWaiters.delete(contents.id)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    agentReadyWaiters.set(contents.id, { expectedPath, finish })
+    // destroyed between the isDestroyed check and registration: settle now
+    if (contents.isDestroyed()) finish(false)
+  })
+}
+
+/** last agent-ready path per view (identity-checked by waitForMarkdownAgentReady) */
+const agentReadyPaths = new Map<number, string>()
+const agentReadyWaiters = new Map<number, { expectedPath: string; finish: (ok: boolean) => void }>()
+
+/**
+ * Teardown for embedded hosts: clear per-view tracking so a reused webContents
+ * id can never resolve against stale state. Mirrors docs teardownDocsRenderer.
+ */
+export function teardownMarkdownRenderer(contents: WebContents): void {
+  const wcId = contents.id
+  openPathByWc.delete(wcId)
+  allowedByWc.delete(wcId)
+  savePathByWc.delete(wcId)
+  dirtyByWc.delete(wcId)
+  agentReadyPaths.delete(wcId)
+  agentReadyWaiters.get(wcId)?.finish(false)
+  agentReadyWaiters.delete(wcId)
+  closeSaveWaiters.get(wcId)?.(false)
+  closeSaveWaiters.delete(wcId)
+  saveWaiters.get(wcId)?.(false)
+  saveWaiters.delete(wcId)
+}
+
 function markdownConversionSession(): Promise<string> {
   conversionSessionPromise ??= createMarkdownConversionSession(
     join(app.getPath('userData'), 'markdown-conversions'),
@@ -539,7 +608,8 @@ function registerImageProtocol(): void {
 
 let ipcRegistered = false
 
-function registerMarkdownIpc(): void {
+/** Host-callable IPC bootstrap (embed hosts call it once before creating views) */
+export function registerMarkdownIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
 
@@ -685,32 +755,35 @@ function registerMarkdownIpc(): void {
   }
 
   // markdown-owned (like docs:ai-generate-image): the shared ai:* handlers are
-  // shell-registered, but image generation is gated per app
-  ipcMain.handle(
-    MARKDOWN_CHANNELS.aiGenerateImage,
-    async (_e, op: { prompt?: unknown; aspectRatio?: unknown }) => {
-      if (!hasGskAuth())
-        return {
-          error: 'Genspark account is not logged in on this machine; ask the user to log in first',
+  // shell-registered, but image generation is gated per app. EverRoom embed
+  // builds fold the whole bundled AI surface out (the host has its own panel).
+  if (!__GENOFFICE_EMBED_ONLY__) {
+    ipcMain.handle(
+      MARKDOWN_CHANNELS.aiGenerateImage,
+      async (_e, op: { prompt?: unknown; aspectRatio?: unknown }) => {
+        if (!hasGskAuth())
+          return {
+            error: 'Genspark account is not logged in on this machine; ask the user to log in first',
+          }
+        if (!gskCloudToolsOn())
+          return {
+            error:
+              'Genspark cloud tools are turned off in Settings (AI Model); enable them to use this tool',
+          }
+        const prompt = String(op?.prompt ?? '').trim()
+        if (!prompt) return { error: 'prompt must not be empty' }
+        try {
+          const r = await gskGenerateImage({
+            prompt,
+            aspectRatio: op?.aspectRatio ? String(op.aspectRatio) : undefined,
+          })
+          return { url: r.url }
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) }
         }
-      if (!gskCloudToolsOn())
-        return {
-          error:
-            'Genspark cloud tools are turned off in Settings (AI Model); enable them to use this tool',
-        }
-      const prompt = String(op?.prompt ?? '').trim()
-      if (!prompt) return { error: 'prompt must not be empty' }
-      try {
-        const r = await gskGenerateImage({
-          prompt,
-          aspectRatio: op?.aspectRatio ? String(op.aspectRatio) : undefined,
-        })
-        return { url: r.url }
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) }
-      }
-    },
-  )
+      },
+    )
+  }
 
   const MIME_BY_EXT: Record<string, ImageData['mime']> = {
     '.png': 'image/png',
@@ -836,6 +909,92 @@ function registerMarkdownIpc(): void {
     else dirtyByWc.delete(e.sender.id)
   })
 
+  // renderer reports the loaded file (background agent sessions wait on it)
+  ipcMain.on(MARKDOWN_CHANNELS.agentReady, (e, path: unknown) => {
+    const wcId = e.sender.id
+    if (typeof path === 'string' && path) agentReadyPaths.set(wcId, path)
+    else agentReadyPaths.delete(wcId)
+    const waiter = agentReadyWaiters.get(wcId)
+    if (waiter && waiter.expectedPath === path) waiter.finish(true)
+  })
+
+  /** Sidecar path for a view's comment store: `<doc>.comments.json` next to the .md */
+  function commentsSidecarPath(wcId: number): string | null {
+    const doc = savePathByWc.get(wcId)
+    if (!doc) return null
+    return `${doc}.comments.json`
+  }
+
+  function parseCommentsDoc(raw: string): MdCommentsDoc | null {
+    try {
+      const parsed = JSON.parse(raw) as Partial<MdCommentsDoc>
+      if (parsed.version !== 1 || !Array.isArray(parsed.comments)) return null
+      const comments: MdComment[] = []
+      for (const entry of parsed.comments) {
+        if (!entry || typeof entry !== 'object') continue
+        const c = entry as Partial<MdComment>
+        if (
+          typeof c.id !== 'string' ||
+          typeof c.author !== 'string' ||
+          typeof c.text !== 'string' ||
+          typeof c.blockIndex !== 'number' ||
+          typeof c.excerpt !== 'string' ||
+          typeof c.offset !== 'number'
+        ) {
+          continue
+        }
+        comments.push({
+          id: c.id,
+          author: c.author,
+          ...(c.initials !== undefined ? { initials: c.initials } : {}),
+          ...(c.date !== undefined ? { date: c.date } : {}),
+          text: c.text,
+          ...(c.parentId !== undefined ? { parentId: c.parentId } : {}),
+          ...(c.done !== undefined ? { done: c.done } : {}),
+          blockIndex: c.blockIndex,
+          excerpt: c.excerpt,
+          offset: c.offset,
+        })
+      }
+      return { version: 1, comments }
+    } catch {
+      return null
+    }
+  }
+
+  ipcMain.handle(MARKDOWN_CHANNELS.commentsRead, async (e): Promise<MdCommentsDoc> => {
+    const sidecar = commentsSidecarPath(e.sender.id)
+    if (!sidecar || !existsSync(sidecar)) return { version: 1, comments: [] }
+    try {
+      const parsed = parseCommentsDoc(await readFile(sidecar, 'utf8'))
+      if (parsed) return parsed
+    } catch (err) {
+      console.warn('[markdown] comment sidecar read failed:', err)
+    }
+    return { version: 1, comments: [] }
+  })
+
+  ipcMain.handle(
+    MARKDOWN_CHANNELS.commentsWrite,
+    async (e, doc: unknown): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const sidecar = commentsSidecarPath(e.sender.id)
+      if (!sidecar) return { ok: false, error: 'markdown: untitled document has no comment sidecar' }
+      const parsed = parseCommentsDoc(JSON.stringify(doc ?? { version: 1, comments: [] }))
+      if (!parsed) return { ok: false, error: 'markdown: bad comments payload' }
+      try {
+        if (parsed.comments.length === 0) {
+          // an empty store removes the sidecar (no orphan files on full delete)
+          if (existsSync(sidecar)) await rm(sidecar, { force: true })
+          return { ok: true }
+        }
+        await atomicWriteFile(sidecar, Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, 'utf8'))
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  )
+
   ipcMain.on(MARKDOWN_CHANNELS.closeSaveResult, (e, ok: unknown) => {
     const waiter = closeSaveWaiters.get(e.sender.id)
     closeSaveWaiters.delete(e.sender.id)
@@ -879,7 +1038,10 @@ function grantAndTrack(wc: WebContents, openPath?: string | null): void {
   })
 }
 
-export function createMarkdownView(openPath?: string | null): WebContentsView {
+export function createMarkdownView(
+  openPath?: string | null,
+  options?: { hostMode?: 'tab' | 'everroom'; readonly?: boolean },
+): WebContentsView {
   registerMarkdownIpc()
   const view = new WebContentsView({
     webPreferences: {
@@ -887,11 +1049,27 @@ export function createMarkdownView(openPath?: string | null): WebContentsView {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // hidden host views (background agent sessions) must not be throttled
+      backgroundThrottling: false,
     },
   })
   grantAndTrack(view.webContents, openPath)
-  if (runtime.rendererUrl) void view.webContents.loadURL(runtime.rendererUrl)
-  else if (runtime.rendererFile) void view.webContents.loadFile(runtime.rendererFile)
+  // Embedded hosts own the traffic lights / caption buttons and supply their
+  // own agent panel — the renderer reads the mode from the URL query (docs parity).
+  const hostMode = options?.hostMode ?? 'tab'
+  if (runtime.rendererUrl) {
+    const devUrl = new URL(runtime.rendererUrl)
+    devUrl.searchParams.set('mode', hostMode)
+    if (options?.readonly) devUrl.searchParams.set('readonly', '1')
+    void view.webContents.loadURL(devUrl.toString())
+  } else if (runtime.rendererFile) {
+    void view.webContents.loadFile(runtime.rendererFile, {
+      query: {
+        mode: hostMode,
+        ...(options?.readonly ? { readonly: '1' } : {}),
+      },
+    })
+  }
   return view
 }
 

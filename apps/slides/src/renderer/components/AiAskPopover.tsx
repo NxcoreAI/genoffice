@@ -95,18 +95,35 @@ interface TriggerProps {
   onOpen: () => void
   /** EverRoom embed: pencil "Annotate" chip instead of the AI sparkle */
   hostMode?: boolean
+  /**
+   * EverRoom embed with a command channel: the chip grows into a WPS-style
+   * format bar — B/I/U/S + quick text colors + the note pencil — anchored to
+   * the same selection rect. One floating affordance instead of two.
+   */
+  onTextToggle?: (kind: 'bold' | 'italic' | 'underline' | 'strike') => void
+  /** Element text color apply (hex without '#') */
+  onTextColor?: (hex: string) => void
 }
+
+/** Quick text colors on the embed format bar (full picker stays on the ribbon) */
+const TRIGGER_QUICK_COLORS = ['#C00000', '#FF0000', '#FFC000', '#00B050', '#0070C0', '#7030A0']
 
 /** Floating Ask AI chip that follows the selected element(s), matching Docs. */
 export function AiAskTrigger({
   getAnchorRect,
   onOpen,
   hostMode,
+  onTextToggle,
+  onTextColor,
 }: TriggerProps): React.JSX.Element | null {
   const { t } = useI18n()
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
   const pointerDownRef = useRef(false)
+  // measure whichever chrome is mounted (single chip or the format bar)
+  const anchorEl = () =>
+    hostMode && onTextToggle ? (barRef.current ?? btnRef.current) : btnRef.current
 
   useLayoutEffect(() => {
     const update = () => {
@@ -115,8 +132,9 @@ export function AiAskTrigger({
         setPos(null)
         return
       }
-      const w = btnRef.current?.offsetWidth ?? 96
-      const h = btnRef.current?.offsetHeight ?? 32
+      const el = anchorEl()
+      const w = el?.offsetWidth ?? 96
+      const h = el?.offsetHeight ?? 32
       const bottom = Math.min(rect.viewBottom, window.innerHeight)
       setPos({
         left: Math.min(rect.right + 6, window.innerWidth - w - EDGE),
@@ -125,7 +143,7 @@ export function AiAskTrigger({
     }
     update()
     const onPointerDown = (event: PointerEvent) => {
-      if (btnRef.current?.contains(event.target as Node)) return
+      if (anchorEl()?.contains(event.target as Node)) return
       pointerDownRef.current = true
       setPos(null)
     }
@@ -148,9 +166,81 @@ export function AiAskTrigger({
       document.removeEventListener('pointerup', onPointerUp, true)
       document.removeEventListener('pointercancel', onPointerUp, true)
     }
-  }, [getAnchorRect])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getAnchorRect, hostMode, onTextToggle])
 
   if (!pos) return null
+
+  // Embed format bar: B/I/U/S + quick colors + note pencil in one row
+  if (hostMode && onTextToggle) {
+    const fmtBtn = (
+      kind: 'bold' | 'italic' | 'underline' | 'strike',
+      label: React.ReactNode,
+      tip: string,
+    ) => (
+      <button
+        key={kind}
+        type="button"
+        className="sel-fmt-btn"
+        data-tip={tip}
+        aria-label={tip}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => onTextToggle(kind)}
+      >
+        {label}
+      </button>
+    )
+    return (
+      <div
+        ref={barRef}
+        className="sel-fmt-bar"
+        style={{ left: pos.left, top: pos.top }}
+        role="toolbar"
+        aria-label={t('selFmtToolbarLabel')}
+      >
+        {fmtBtn('bold', <b>B</b>, t('ribbonBold'))}
+        {fmtBtn('italic', <i>I</i>, t('ribbonItalic'))}
+        {fmtBtn('underline', <u>U</u>, t('ribbonUnderline'))}
+        {fmtBtn('strike', <s>ab</s>, t('ribbonStrikethrough'))}
+        <span className="sel-fmt-sep" />
+        <div className="sel-fmt-color">
+          {TRIGGER_QUICK_COLORS.map((hex) => (
+            <button
+              key={hex}
+              type="button"
+              className="sel-fmt-swatch"
+              style={{ background: hex }}
+              data-tip={hex}
+              aria-label={hex}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onTextColor?.(hex.slice(1))}
+            />
+          ))}
+        </div>
+        <span className="sel-fmt-sep" />
+        <button
+          ref={btnRef}
+          type="button"
+          className="sel-fmt-btn sel-fmt-comment"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onOpen}
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden>
+            {/* pencil: annotating the selection, not asking for an AI rewrite */}
+            <path
+              d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3zM14 7l3 3"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {t('aiNoteBtn')}
+        </button>
+      </div>
+    )
+  }
+
   return (
     <button
       ref={btnRef}

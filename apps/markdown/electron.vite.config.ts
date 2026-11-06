@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 
@@ -18,9 +19,24 @@ const TIPTAP_DEDUPE = [
   '@tiptap/extension-code-block',
 ]
 
+// EverRoom embed build: standalone bootstrap is folded out; the bundled
+// Genspark AI surface is replaced by the host's own agent panel (docs parity).
+const embedOnly = process.env.GENOFFICE_EMBED_ONLY === '1'
+
 export default defineConfig({
   // @genoffice/i18n and @genoffice/electron-utils ship as TS source — must be bundled
   main: {
+    build: {
+      rollupOptions: {
+        input: {
+          ...(!embedOnly ? { index: resolve(__dirname, 'src/main/index.ts') } : {}),
+          embed: resolve(__dirname, 'src/main/embed.ts'),
+        },
+      },
+    },
+    define: {
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(embedOnly),
+    },
     plugins: [externalizeDepsPlugin({ exclude: ['@genoffice/i18n', '@genoffice/electron-utils'] })],
   },
   preload: {
@@ -28,6 +44,9 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@genoffice/i18n', '@genoffice/electron-utils'] })],
   },
   renderer: {
+    define: {
+      __GENOFFICE_EMBED_ONLY__: JSON.stringify(embedOnly),
+    },
     plugins: [react()],
     resolve: { dedupe: TIPTAP_DEDUPE },
     server: {

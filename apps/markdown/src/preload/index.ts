@@ -4,7 +4,13 @@ import type { AiStreamChunk } from '@genoffice/ai-provider'
 import type { ProjectApi } from '@genoffice/project-store'
 import { installDropOpenBridge } from '@genoffice/electron-utils/drop-open'
 import { AI_CHANNELS, MARKDOWN_CHANNELS } from '../shared/ipc'
-import type { ExportFormat, MarkdownApi, SaveMode, UiTheme } from '../shared/ipc'
+import type {
+  ExportFormat,
+  MarkdownApi,
+  MdCommentsDoc,
+  SaveMode,
+  UiTheme,
+} from '../shared/ipc'
 
 const api: MarkdownApi = {
   consumePending: () => ipcRenderer.invoke(MARKDOWN_CHANNELS.consumePending),
@@ -73,6 +79,15 @@ const api: MarkdownApi = {
     ipcRenderer.invoke(AI_CHANNELS.imageSearch, query, maxResults),
   fetchImage: (url) => ipcRenderer.invoke(AI_CHANNELS.fetchImage, url),
   aiGenerateImage: (op) => ipcRenderer.invoke(MARKDOWN_CHANNELS.aiGenerateImage, op),
+  onChromeToggle: (handler) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { hidden?: boolean }) =>
+      handler(payload?.hidden === undefined ? null : Boolean(payload.hidden))
+    ipcRenderer.on(MARKDOWN_CHANNELS.chromeToggle, listener)
+    return () => ipcRenderer.removeListener(MARKDOWN_CHANNELS.chromeToggle, listener)
+  },
+  reportAgentReady: (path) => ipcRenderer.send(MARKDOWN_CHANNELS.agentReady, path),
+  readComments: () => ipcRenderer.invoke(MARKDOWN_CHANNELS.commentsRead),
+  writeComments: (doc) => ipcRenderer.invoke(MARKDOWN_CHANNELS.commentsWrite, doc),
 }
 
 /** Chat persistence: the shared project:* handlers are registered once by the shell (docs-main registerProjectIpc) */

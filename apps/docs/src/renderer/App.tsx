@@ -73,6 +73,7 @@ import {
 } from './ai/operations'
 import { applyHfText, hfEditText } from './editor/hf-text'
 import { AiAskPopover, selectionKind as askSelectionKind } from './components/AiAskPopover'
+import { SelectionFormatToolbar } from './components/SelectionFormatToolbar'
 import { HostNoteCard } from './components/HostNoteCard'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type DocsEditQueueItem } from './ai/edit-queue'
 import {
@@ -1263,6 +1264,9 @@ export function App() {
   const [showFind, setShowFind] = useState(false)
   const [findFocusReplace, setFindFocusReplace] = useState(0)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  // EverRoom embed: nonce that opens the host comment popover on demand —
+  // bumped by the selection format toolbar's comment button.
+  const [commentNonce, setCommentNonce] = useState(0)
   const ribbonActionsRef = useRef<{
     stepFontSize?: (dir: 1 | -1) => void
     nudgeFontSize?: (dir: 1 | -1) => void
@@ -5901,7 +5905,8 @@ export function App() {
             {doc && everroomEmbed && (
               // Host-driven popover: no in-editor AI backend. It collapses to a
               // compact note input (Enter queues via onHostQueue); edits of
-              // existing host notes update through the ask-queue IPC.
+              // existing host notes update through the ask-queue IPC. The
+              // floating trigger is off — the format toolbar owns the entry.
               <AiAskPopover
                 editor={editor}
                 queueFull
@@ -5917,6 +5922,17 @@ export function App() {
                   window.desktop.askQueueAction({ kind: 'remove', draftId })
                 }
                 hostMode
+                hideTrigger
+                openNonce={commentNonce}
+              />
+            )}
+            {doc && everroomEmbed && editor && (
+              // WPS-style format bar on the selection (the ribbon is hidden in
+              // the embed): B/I/U/S + font color, and the comment pencil that
+              // opens the host note popover above.
+              <SelectionFormatToolbar
+                editor={editor}
+                onComment={() => setCommentNonce((nonce) => nonce + 1)}
               />
             )}
             {doc && everroomEmbed && (

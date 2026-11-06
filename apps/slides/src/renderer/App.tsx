@@ -4342,8 +4342,9 @@ export function App() {
       )}
 
       {/* Annotate entry: the standalone build opens the full AI edit form; the
-          EverRoom embed gets the compact host-note input (pencil chip → one
-          line → Enter joins the host's queue). */}
+          EverRoom embed gets the compact host-note input. With text-toggle
+          wiring the chip grows into a WPS-style format bar (B/I/U/S + quick
+          colors + the pencil) over the selected element(s). */}
       {!askState &&
         !editing &&
         !editingCell &&
@@ -4356,6 +4357,13 @@ export function App() {
             getAnchorRect={getAskTriggerRect}
             onOpen={openAskPopover}
             hostMode={everroomEmbed}
+            {...(everroomEmbed
+              ? {
+                  onTextToggle: (kind: 'bold' | 'italic' | 'underline' | 'strike') =>
+                    onTextToggle(kind),
+                  onTextColor: (hex: string) => onElementTextColor(hex),
+                }
+              : {})}
           />
         )}
 

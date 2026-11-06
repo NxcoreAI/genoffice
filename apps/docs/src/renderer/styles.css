@@ -6385,6 +6385,90 @@ html[data-host-mode='everroom'] .ai-entry {
   background: var(--hover);
 }
 
+/* selection format toolbar (WPS-style): compact rounded bar over the selection
+ * with B/I/U/S, font color, and the host comment pencil in one place */
+.sel-fmt-bar {
+  position: fixed;
+  z-index: 59;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--docs-shadow-menu);
+}
+
+.sel-fmt-btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sel-fmt-btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+.sel-fmt-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.sel-fmt-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sel-fmt-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.sel-fmt-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--border);
+  flex: none;
+}
+
+/* font-color trigger: "A" over a color strip */
+.sel-fmt-color-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.sel-fmt-color-glyph {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+.sel-fmt-color-strip {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/* palette pinned under the bar trigger */
+.sel-fmt-color-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 61;
+}
+
+/* comment pencil keeps the AI accent so it stays discoverable */
+.sel-fmt-comment {
+  color: var(--color-ai-action);
+}
+
 /* anchored ask popover (shared look with the slides one, docs tokens) */
 .ai-ask-pop {
   position: fixed;
@@ -8799,6 +8883,14 @@ ruby.doc-ruby rt {
   border-radius: 8px;
   box-shadow: var(--docs-shadow-ctx);
   font-size: 13px;
+}
+
+/* long menus (table + list + floating image) stay a fixed size: the list
+ * scrolls instead of growing past the viewport */
+.ctx-list {
+  max-height: min(420px, calc(100vh - 32px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ctx-item {

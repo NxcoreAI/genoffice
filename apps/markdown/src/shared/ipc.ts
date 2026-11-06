@@ -19,11 +19,41 @@ export const MARKDOWN_CHANNELS = {
   exportPdf: 'markdown:export-pdf',
   printRequest: 'markdown:print-request',
   aiGenerateImage: 'markdown:ai-generate-image',
+  chromeToggle: 'markdown:chrome-toggle',
+  agentReady: 'markdown:agent-ready',
+  commentsRead: 'markdown:comments-read',
+  commentsWrite: 'markdown:comments-write',
   getLanguage: 'app:get-language',
   languageChanged: 'app:language-changed',
   getTheme: 'app:get-theme',
   themeChanged: 'app:theme-changed',
 } as const
+
+/** One markdown comment thread (sidecar-stored; ids are stable strings). */
+export interface MdComment {
+  id: string
+  author: string
+  initials?: string
+  /** ISO timestamp */
+  date?: string
+  text: string
+  /** Reply: parent comment id */
+  parentId?: string
+  /** Resolved threads hide behind the "resolved" group */
+  done?: boolean
+  /** Anchor: top-level block index (0-based) the comment is attached to */
+  blockIndex: number
+  /** Anchor: exact source excerpt (first 120 chars) at creation time */
+  excerpt: string
+  /** Anchor: character offset of the excerpt inside the block text */
+  offset: number
+}
+
+/** Sidecar document shape: `<file>.comments.json` next to the .md file. */
+export interface MdCommentsDoc {
+  version: 1
+  comments: MdComment[]
+}
 
 export type UiTheme = 'light' | 'dark' | 'system'
 
@@ -171,4 +201,13 @@ export interface MarkdownApi {
     url?: string
     error?: string
   }>
+  /** Host (EverRoom clean-canvas) or local ⌘⇧F hides/shows the operation
+   *  panel; null = toggle (host sent no explicit state) */
+  onChromeToggle(handler: (hidden: boolean | null) => void): () => void
+  /** Report the loaded file path to the host (background agent sessions wait on it) */
+  reportAgentReady(path: string | null): void
+  /** Read the comment sidecar of the granted document (empty doc when none) */
+  readComments(): Promise<MdCommentsDoc>
+  /** Persist the comment sidecar next to the document (untitled → error) */
+  writeComments(doc: MdCommentsDoc): Promise<{ ok: true } | { ok: false; error: string }>
 }
