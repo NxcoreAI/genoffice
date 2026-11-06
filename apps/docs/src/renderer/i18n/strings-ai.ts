@@ -25,7 +25,7 @@ export const aiStrings = defineStrings({
     aiScopeClearTitle: '取消选中范围',
     aiAskBtn: 'AI 修改',
     aiNoteBtn: "评论",
-    aiNotePlaceholder: "写注释，回车加入队列…",
+    aiNotePlaceholder: "写评论，回车加入队列…",
     aiNoteEditPlaceholder: "修改注释…",
     aiNoteCardEdit: "修改",
     aiNoteCardDelete: "删除",
