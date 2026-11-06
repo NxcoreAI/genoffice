@@ -9,6 +9,7 @@ export {
   createDocsView,
   describeAgentDoc,
   docsQueryDirty,
+  exportDocsPdf,
   markDocsNewBlank,
   pushDocsAskQueue,
   queueDocsAiContent,

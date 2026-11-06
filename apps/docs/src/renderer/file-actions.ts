@@ -78,6 +78,8 @@ export interface FileActionContext {
   saveInFlightRef: { current: boolean }
   saveIncompleteRef: { current: boolean }
   pendingMixedExportRef: { current: boolean | string }
+  /** host-driven export receipt riding along pendingMixedExportRef (null = user export) */
+  pendingExportResultRef: { current: ExportPdfResultReporter | null }
   /** the print dialog auto-opened the pagination preview: closing the dialog closes it again */
   printAutoOpenedPreviewRef: { current: boolean }
   setShowPrintDialog: (show: boolean) => void
@@ -941,7 +943,20 @@ export function printDoc(ctx: FileActionContext): void {
   ctx.setShowPrintDialog(true)
 }
 
-export async function exportPdf(ctx: FileActionContext, outPath?: string): Promise<void> {
+/**
+ * Result receipt for host-driven exports (exportDocsPdf): invoked exactly once
+ * per export attempt that reached a terminal state. The deferred branch
+ * (mixed paper / header-footer forcing the pagination preview open) reports
+ * nothing here — its replay through pendingMixedExportRef carries the same
+ * onResult through to the terminal state.
+ */
+export type ExportPdfResultReporter = (result: { ok: boolean; path?: string; error?: string }) => void
+
+export async function exportPdf(
+  ctx: FileActionContext,
+  outPath?: string,
+  onResult?: ExportPdfResultReporter,
+): Promise<void> {
   const { doc } = ctx
   if (!doc) return
   ctx.setStatus(t('appExportingPdf'))
@@ -986,6 +1001,7 @@ export async function exportPdf(ctx: FileActionContext, outPath?: string): Promi
             ctx.setStatus(
               t('appExportPdfFailed', { error: part.error ?? t('appPrintGroupFailed') }),
             )
+            onResult?.({ ok: false, error: part.error ?? t('appPrintGroupFailed') })
             return
           }
           parts.push(part.base64)
@@ -1001,6 +1017,9 @@ export async function exportPdf(ctx: FileActionContext, outPath?: string): Promi
             ? t('appExportPdfFailed', { error: result.error })
             : t('appExportPdfCanceled'),
       )
+      onResult?.(result.ok
+        ? { ok: true, path: result.path }
+        : { ok: false, error: result.error ?? 'export canceled' })
       return
     }
     // preview open but uniform paper: single export at the preview size
@@ -1014,6 +1033,9 @@ export async function exportPdf(ctx: FileActionContext, outPath?: string): Promi
             ? t('appExportPdfFailed', { error: result.error })
             : t('appExportPdfCanceled'),
       )
+      onResult?.(result.ok
+        ? { ok: true, path: result.path }
+        : { ok: false, error: result.error ?? 'export canceled' })
       return
     }
   }
@@ -1052,6 +1074,7 @@ export async function exportPdf(ctx: FileActionContext, outPath?: string): Promi
   ) {
     ctx.setShowPagePreview(true)
     ctx.pendingMixedExportRef.current = outPath ?? true
+    ctx.pendingExportResultRef.current = onResult ?? null
     if (mixedPaper) ctx.setStatus(t('appMixedExportOpening'))
     return
   }
@@ -1069,4 +1092,7 @@ export async function exportPdf(ctx: FileActionContext, outPath?: string): Promi
         ? t('appExportPdfFailed', { error: result.error })
         : t('appExportPdfCanceled'),
   )
+  onResult?.(result.ok
+    ? { ok: true, path: result.path }
+    : { ok: false, error: result.error ?? 'export canceled' })
 }

@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import {
   BrowserWindow,
   Menu,
@@ -2197,6 +2197,13 @@ function allowPdfWrite(wcId: number, filePath: string): void {
   pdfWritablePaths.set(wcId, set)
 }
 
+/** Host-driven export (exportDocsPdf): the embed host's main process authorizes
+ *  one output path for one renderer — same one-shot semantics as the save dialog
+ *  picking that exact path, but without any UI (headless/agent sessions). */
+function allowHostPdfWrite(wcId: number, filePath: string): void {
+  allowPdfWrite(wcId, filePath)
+}
+
 // Fidelity-harness escape hatch: headless runs have no save dialog to authorize
 // paths, so an explicitly configured directory (set only by our test scripts)
 // is treated as pre-authorized for PDF export.
@@ -4342,11 +4349,17 @@ interface DocsAgentReply {
   ok: boolean
   describe?: DocsAgentDescribeResult
   results?: DocsAgentToolResult[]
+  /** export-pdf: the path the renderer actually wrote (host-authorized). */
+  path?: string
   error?: string
 }
 
 const agentToolWaiters = new Map<number, Map<string, (reply: DocsAgentReply) => void>>()
 const AGENT_TOOL_TIMEOUT_MS = 120_000
+/** Host-driven export can walk the full pagination-preview + group-merge
+ *  pipeline on a large mixed document (chunked printToPDF + pdf-lib merge);
+ *  the per-request cap must cover that, not just tool batches. */
+const AGENT_EXPORT_TIMEOUT_MS = 5 * 60_000
 let agentRequestSeq = 0
 
 ipcMain.on('docs:agent-tool-result', (event, payload: unknown) => {
@@ -4360,8 +4373,9 @@ ipcMain.on('docs:agent-tool-result', (event, payload: unknown) => {
 
 function requestRendererAgentAction<T>(
   contents: WebContents,
-  kind: 'describe' | 'apply',
-  body: { calls?: DocsAgentToolCall[] },
+  kind: 'describe' | 'apply' | 'export-pdf',
+  body: { calls?: DocsAgentToolCall[]; outPath?: string },
+  timeoutMs = AGENT_TOOL_TIMEOUT_MS,
 ): Promise<T> {
   return new Promise<T>((resolve) => {
     const requestId = `agent-${++agentRequestSeq}-${Date.now()}`
@@ -4379,7 +4393,7 @@ function requestRendererAgentAction<T>(
     const timer = setTimeout(() => {
       agentToolWaiters.get(contents.id)?.delete(requestId)
       resolve({ ok: false, error: 'renderer did not reply in time' } as T)
-    }, AGENT_TOOL_TIMEOUT_MS)
+    }, timeoutMs)
     byRequest.set(requestId, (reply) => {
       clearTimeout(timer)
       resolve(reply as T)
@@ -4417,6 +4431,36 @@ export async function applyAgentDocTools(
   })
   if (!reply.ok || !reply.results) return { error: reply.error ?? 'apply failed' }
   return { results: reply.results }
+}
+
+/**
+ * Host-driven PDF export (EverRoom embed): render the document open in this
+ * webContents to `outPath` with zero UI. The renderer runs the exact same
+ * exportPdf orchestration a user triggers (pagination preview when the
+ * document needs it — headers/footers, mixed paper — then chunked
+ * printToPDF + pdf-lib merge), so fidelity matches the in-app export.
+ *
+ * The path is authorized host-side once (allowHostPdfWrite); the renderer
+ * never sees a save dialog and cannot redirect writes elsewhere. Returns
+ * the written path, or an error string.
+ */
+export async function exportDocsPdf(
+  contents: WebContents,
+  outPath: string,
+): Promise<{ path: string } | { error: string }> {
+  if (!outPath || typeof outPath !== 'string' || !isAbsolute(outPath)) {
+    return { error: 'export target must be an absolute path' }
+  }
+  if (contents.isDestroyed()) return { error: 'view closed' }
+  allowHostPdfWrite(contents.id, outPath)
+  const reply = await requestRendererAgentAction<DocsAgentReply>(
+    contents,
+    'export-pdf',
+    { outPath },
+    AGENT_EXPORT_TIMEOUT_MS,
+  )
+  if (!reply.ok) return { error: reply.error ?? 'export failed' }
+  return { path: reply.path ?? outPath }
 }
 
 // ── Agent readiness (EverRoom hidden docs view): "document loaded and ready" ──

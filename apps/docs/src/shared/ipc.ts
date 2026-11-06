@@ -505,9 +505,13 @@ export interface DocsAgentToolRequestCall {
   input: Record<string, unknown>
 }
 
-/** describe (context + vocabulary) or apply (execute tool calls) request. */
+/** describe (context + vocabulary), apply (execute tool calls), or export-pdf
+ *  (host-driven silent PDF render: the renderer runs the full exportPdf
+ *  orchestration but writes to the host-authorized path, no save dialog). */
 export interface DocsAgentToolRequest {
   requestId: string
-  kind: 'describe' | 'apply'
+  kind: 'describe' | 'apply' | 'export-pdf'
   calls?: DocsAgentToolRequestCall[]
+  /** export-pdf only: absolute output path pre-authorized by the host main process. */
+  outPath?: string
 }

@@ -1686,6 +1686,8 @@ export function App() {
 
   // Mixed-paper menu export: after the preview mounts and renders, the merge export resumes automatically
   const pendingMixedExportRef = useRef<boolean | string>(false)
+  // Host-driven export receipt riding along pendingMixedExportRef (null = user export)
+  const pendingExportResultRef = useRef<FileActionContext['pendingExportResultRef']['current']>(null)
   // Print dialog (Word-style preview + range); the pagination preview is its print source
   const [showPrintDialog, setShowPrintDialog] = useState(false)
   // the dialog auto-opened the pagination preview: close it again with the dialog
@@ -1700,6 +1702,7 @@ export function App() {
     saveInFlightRef,
     saveIncompleteRef,
     pendingMixedExportRef,
+    pendingExportResultRef,
     printAutoOpenedPreviewRef,
     setShowPrintDialog,
     setStatus,
@@ -2303,7 +2306,8 @@ export function App() {
   }, [pgNumModal, sections, activeSection])
 
   const exportPdf = useCallback(
-    (outPath?: string) => exportPdfImpl(fileCtxRef.current, outPath),
+    (outPath?: string, onResult?: Parameters<typeof exportPdfImpl>[2]) =>
+      exportPdfImpl(fileCtxRef.current, outPath, onResult),
     [],
   )
   const printDoc = useCallback(() => printDocImpl(fileCtxRef.current), [])
@@ -2319,8 +2323,12 @@ export function App() {
     if (!showPagePreview || pendingMixedExportRef.current === false) return
     const pending = pendingMixedExportRef.current
     pendingMixedExportRef.current = false
+    // host-driven export: hand its receipt through to the replayed export so
+    // the deferred branch reports exactly like the direct one
+    const pendingReport = pendingExportResultRef.current
+    pendingExportResultRef.current = null
     const timer = window.setTimeout(() => {
-      void exportPdf(typeof pending === 'string' ? pending : undefined)
+      void exportPdf(typeof pending === 'string' ? pending : undefined, pendingReport ?? undefined)
     }, 1200)
     return () => window.clearTimeout(timer)
   }, [showPagePreview, exportPdf])
@@ -4091,6 +4099,45 @@ export function App() {
       const { editor: liveEditor, save: liveSave } = agentDocRefs.current
       if (!liveEditor) {
         reply({ ok: false, error: 'no document is open' })
+        return
+      }
+      // Host-driven silent export (exportDocsPdf): same orchestration as the
+      // menu export, but the outPath is host-authorized so no save dialog
+      // appears and the written path is reported back to the host instead of
+      // a status toast. Runs detached from the apply batch: export never
+      // mutates the doc, and the reply must wait out the whole
+      // pagination-preview + chunked-print + merge pipeline — including the
+      // deferred branch, where exportPdfImpl returns after opening the
+      // preview and the pendingMixedExport replay delivers the receipt.
+      if (request.kind === 'export-pdf') {
+        const outPath = typeof request.outPath === 'string' ? request.outPath : undefined
+        if (!outPath) {
+          reply({ ok: false, error: 'export-pdf requires an authorized outPath' })
+          return
+        }
+        void (async () => {
+          let settled = false
+          const deliver = (result: { ok: boolean; path?: string; error?: string }) => {
+            if (settled) return
+            settled = true
+            reply(result.ok ? { ok: true, path: result.path ?? outPath } : { ok: false, error: result.error })
+          }
+          const watchdog = window.setTimeout(
+            () => deliver({ ok: false, error: 'export timed out' }),
+            4 * 60_000,
+          )
+          try {
+            await exportPdfImpl(fileCtxRef.current, outPath, (result) => {
+              window.clearTimeout(watchdog)
+              deliver(result)
+            })
+            // direct-path exports call onResult synchronously inside; the
+            // deferred branch settles later via the replay effect
+          } catch (error) {
+            window.clearTimeout(watchdog)
+            deliver({ ok: false, error: error instanceof Error ? error.message : String(error) })
+          }
+        })()
         return
       }
       if (request.kind === 'describe') {
