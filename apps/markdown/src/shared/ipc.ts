@@ -23,6 +23,9 @@ export const MARKDOWN_CHANNELS = {
   agentReady: 'markdown:agent-ready',
   commentsRead: 'markdown:comments-read',
   commentsWrite: 'markdown:comments-write',
+  agentAsk: 'markdown:agent-ask',
+  askQueue: 'markdown:ask-queue',
+  askQueueAction: 'markdown:ask-queue-action',
   getLanguage: 'app:get-language',
   languageChanged: 'app:language-changed',
   getTheme: 'app:get-theme',
@@ -54,6 +57,46 @@ export interface MdCommentsDoc {
   version: 1
   comments: MdComment[]
 }
+
+/**
+ * EverRoom embed only: one selection-scoped note relayed to the host agent
+ * (the embed build has no AI backend of its own). The anchor is the same
+ * triple the comment sidecar stores — top-level block index + exact excerpt
+ * + character offset — so the host re-pushes queue rows and the renderer
+ * resolves them with the comment fuzzy matcher.
+ */
+export interface MdAgentAskOp {
+  /** What the user typed into the compact popover (bounded by main). */
+  instruction: string
+  /** Top-level block index (0-based) the selection starts in. */
+  blockIndex: number
+  /** Plain-text excerpt of the selection (whitespace-collapsed, ≤200 chars). */
+  excerpt?: string
+  /** Character offset of the excerpt inside the block text. */
+  offset?: number
+  /** 'queue' = add to the host's batch instead of sending right away (default 'now'). */
+  mode?: 'now' | 'queue'
+}
+
+export type MdAgentAskResult = { ok: true } | { ok: false; error: string }
+
+/** One host-side annotation for this document: the anchored passage + the note. */
+export interface MdAskQueueItem {
+  id: string
+  /** The note itself (what the user typed). */
+  instruction: string
+  /** Original-text excerpt captured when the note was made. */
+  excerpt?: string
+  /** Top-level block index (0-based) the note was anchored to. */
+  blockIndex: number
+  /** Character offset of the excerpt inside the block text. */
+  offset?: number
+}
+
+export type MdAskQueueAction =
+  | { kind: 'send-all' }
+  | { kind: 'remove'; draftId: string }
+  | { kind: 'update'; draftId: string; instruction: string }
 
 export type UiTheme = 'light' | 'dark' | 'system'
 
@@ -210,4 +253,18 @@ export interface MarkdownApi {
   readComments(): Promise<MdCommentsDoc>
   /** Persist the comment sidecar next to the document (untitled → error) */
   writeComments(doc: MdCommentsDoc): Promise<{ ok: true } | { ok: false; error: string }>
+  /**
+   * EverRoom embed only: relay a selection-scoped note to the host agent. The
+   * host resolves file/workspace from this view's webContents id, so the
+   * renderer only describes the selection (block index + excerpt + offset).
+   */
+  agentAsk(op: MdAgentAskOp): Promise<MdAgentAskResult>
+  /**
+   * EverRoom embed only: the host's annotation queue (file-scoped) is pushed
+   * down so the editor can underline the anchored passages (click an anchor to
+   * edit/remove the note); the queue itself stays owned by the conversation.
+   */
+  onAskQueue(handler: (items: MdAskQueueItem[]) => void): () => void
+  /** EverRoom embed only: ask the host to update one note / drop one item / send the whole queue. */
+  askQueueAction(action: MdAskQueueAction): void
 }

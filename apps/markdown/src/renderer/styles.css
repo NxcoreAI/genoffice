@@ -2386,6 +2386,17 @@ div.tiptap-mathematics-render {
   cursor: pointer;
 }
 
+/* EverRoom embed: host-note underline (the conversation owns the queue; click
+ * an anchor to edit/remove the note — distinct from the dashed AI queue) */
+.host-note-anchor {
+  text-decoration: underline;
+  text-decoration-style: solid;
+  text-decoration-color: var(--md-ai-anchor-line);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+  cursor: pointer;
+}
+
 /* ---- floating Ask-AI entry that follows the text selection ---- */
 
 .ai-ask-trigger {
@@ -2421,6 +2432,25 @@ div.tiptap-mathematics-render {
   border-radius: var(--radius-12);
   background: var(--surface);
   box-shadow: var(--md-pop-shadow);
+}
+
+/* EverRoom embed: the compact note variant — one input, no title/footer */
+.ai-ask-pop-compact {
+  padding: 8px;
+}
+
+.host-note-pop-delete {
+  align-self: flex-end;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.host-note-pop-delete:hover {
+  color: var(--danger);
 }
 
 .ai-ask-pop-close {

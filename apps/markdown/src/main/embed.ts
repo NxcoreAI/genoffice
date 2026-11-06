@@ -10,15 +10,27 @@ export {
   markdownFileRenamed,
   markdownFilePath,
   markdownIsDirty,
+  pushMarkdownAskQueue,
   registerMarkdownIpc,
   requestMarkdownClose,
   requestMarkdownSave,
   sendMarkdownExportRequest,
   sendMarkdownPrintRequest,
+  setMarkdownAgentAskHook,
+  setMarkdownAskQueueActionHook,
   setMarkdownChromeHidden,
   setMarkdownDocxExportedHook,
   setMarkdownFileSavedHook,
   teardownMarkdownRenderer,
   waitForMarkdownAgentReady,
 } from './markdown-main'
-export type { ExportFormat, MdComment, MdCommentsDoc, SaveMode } from '../shared/ipc'
+export type {
+  ExportFormat,
+  MdAgentAskOp,
+  MdAgentAskResult,
+  MdAskQueueAction,
+  MdAskQueueItem,
+  MdComment,
+  MdCommentsDoc,
+  SaveMode,
+} from '../shared/ipc'

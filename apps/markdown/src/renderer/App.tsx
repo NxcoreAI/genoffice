@@ -23,15 +23,21 @@ import { FrontmatterPanel } from './components/FrontmatterPanel'
 import { AiAskPopover } from './components/AiAskPopover'
 import { AiPanel, GensparkMark, type AiPreset, type MarkdownAiDeps } from './ai/AiPanel'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type EditQueueItem } from './ai/edit-queue'
-import { addQueueAnchor, clearQueueAnchors, removeQueueAnchors } from './editor/aiQueueAnchors'
+import {
+  addQueueAnchor,
+  clearQueueAnchors,
+  HOST_NOTE_ANCHOR_CLASS,
+  removeQueueAnchors,
+} from './editor/aiQueueAnchors'
 import { EditorModeBar } from '@genoffice/ui'
 import { CommentsPanel } from './components/CommentsPanel'
 import {
   captureSelectionAnchor,
   jumpToComment,
   nextCommentId,
+  resolveAnchor,
 } from './editor/comments'
-import type { MdComment } from '../shared/ipc'
+import type { MdAskQueueItem, MdComment } from '../shared/ipc'
 import { DOCX_MAX_IMAGE_PX, exportDocxBytes } from './export/docxExport'
 import { buildPrintHtml } from './export/printHtml'
 import { resolveImageSrc } from './editor/localImage'
@@ -177,6 +183,9 @@ export default function App() {
     offset: number
   } | null>(null)
   const [commentsToast, setCommentsToast] = useState<string | null>(null)
+
+  // ---- EverRoom embed: host annotation queue (conversation owns the queue) ----
+  const [hostAskQueue, setHostAskQueue] = useState<MdAskQueueItem[]>([])
 
   const statusRef = useRef<LoadStatus>('loading')
   const dirtyRef = useRef(false)
@@ -597,6 +606,86 @@ export default function App() {
     setAiPreset((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }))
   }, [])
 
+  // ---- EverRoom embed: selection notes relay to the host agent ----
+  /**
+   * The host agent owns the note, so the popover's instruction is sent with
+   * the comment-sidecar anchor triple (block index + excerpt + offset) — the
+   * same locator the local comments use, resolvable back to a range with the
+   * fuzzy matcher once the host re-pushes its queue.
+   */
+  const submitHostAgentAsk = useCallback(
+    (instruction: string, mode: 'now' | 'queue' = 'now'): void => {
+      const current = editorRef.current
+      const text = instruction.trim()
+      if (!current || !text || statusRef.current !== 'ready') return
+      const anchor = captureSelectionAnchor(current)
+      if (!anchor) {
+        setCommentsToast('先选中要评论的文字')
+        return
+      }
+      void window.markdownApi
+        .agentAsk({
+          instruction: text,
+          blockIndex: anchor.blockIndex,
+          excerpt: anchor.excerpt,
+          offset: anchor.offset,
+          ...(mode === 'queue' ? { mode: 'queue' as const } : {}),
+        })
+        .then((result) => {
+          if (result.ok) return
+          const reason = result.error === 'NO_HOST_AGENT'
+            ? '当前环境没有可用的 Agent'
+            : result.error === 'EMPTY_INSTRUCTION_OR_ANCHOR'
+              ? '请先输入评论内容并选中文字'
+              : result.error
+          setCommentsToast(reason)
+        })
+        .catch((error: unknown) => {
+          setCommentsToast(error instanceof Error ? error.message : String(error))
+        })
+    },
+    [],
+  )
+
+  /** Host rows shaped as the popover's queue item (qid = host draft id). */
+  const hostQueueRef = useRef(hostAskQueue)
+  hostQueueRef.current = hostAskQueue
+  const getHostQueueItem = useCallback(
+    (qid: string): EditQueueItem | undefined => {
+      const row = hostQueueRef.current.find((item) => item.id === qid)
+      return row
+        ? { qid: row.id, instruction: row.instruction, capturedText: row.excerpt ?? '' }
+        : undefined
+    },
+    [],
+  )
+
+  /** 宿主队列 → 文档内下划线锚点（块索引 + 摘要模糊解析；与评论侧车同一匹配器）。 */
+  useEffect(() => {
+    if (!everroomEmbed || !editor) return
+    clearQueueAnchors(editor)
+    for (const item of hostAskQueue) {
+      const range = resolveAnchor(editor, {
+        id: item.id,
+        author: '',
+        text: item.instruction,
+        blockIndex: item.blockIndex,
+        excerpt: item.excerpt ?? '',
+        offset: item.offset ?? 0,
+      })
+      if (range) addQueueAnchor(editor, item.id, range.from, range.to, HOST_NOTE_ANCHOR_CLASS)
+    }
+  }, [everroomEmbed, editor, hostAskQueue])
+
+  /** 宿主批注队列快照订阅（embed only；队列事实只在宿主/对话侧）。 */
+  useEffect(() => {
+    if (!everroomEmbed) return
+    const off = window.markdownApi.onAskQueue((items) => {
+      setHostAskQueue(Array.isArray(items) ? items : [])
+    })
+    return () => off()
+  }, [everroomEmbed])
+
   const aiDeps: MarkdownAiDeps = {
     getEditor: () => editorRef.current,
     // envelopeRef, not fmText state: a write-then-read within one AI run must
@@ -918,7 +1007,28 @@ export default function App() {
       <SlashMenu ref={slashMenuRef} state={slashState} onDismiss={() => setSlashState(null)} />
       <ToastHost />
       <TableMenu editor={editor} scrollRef={scrollRef} zoom={zoom} />
-      {editor && status === 'ready' && (
+      {editor && status === 'ready' && everroomEmbed && (
+        // Host-driven popover: the embed has no in-editor AI backend — the
+        // trigger becomes the comment entry (pencil + 评论) and Enter queues
+        // the note into the host conversation's annotation batch.
+        <AiAskPopover
+          editor={editor}
+          queueFull
+          getItem={getHostQueueItem}
+          onSendNow={(text) => submitHostAgentAsk(text, 'now')}
+          onHostQueue={(text) => submitHostAgentAsk(text, 'queue')}
+          onHostUpdate={(draftId, text) =>
+            window.markdownApi.askQueueAction({ kind: 'update', draftId, instruction: text })
+          }
+          onQueueAdd={() => undefined}
+          onQueueUpdate={() => undefined}
+          onQueueRemove={(draftId) =>
+            window.markdownApi.askQueueAction({ kind: 'remove', draftId })
+          }
+          hostMode
+        />
+      )}
+      {editor && status === 'ready' && !everroomEmbed && (
         <AiAskPopover
           editor={editor}
           queueFull={editQueue.length >= EDIT_QUEUE_MAX}

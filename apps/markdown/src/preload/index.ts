@@ -7,7 +7,10 @@ import { AI_CHANNELS, MARKDOWN_CHANNELS } from '../shared/ipc'
 import type {
   ExportFormat,
   MarkdownApi,
+  MdAskQueueAction,
+  MdAskQueueItem,
   MdCommentsDoc,
+  MdAgentAskOp,
   SaveMode,
   UiTheme,
 } from '../shared/ipc'
@@ -88,6 +91,14 @@ const api: MarkdownApi = {
   reportAgentReady: (path) => ipcRenderer.send(MARKDOWN_CHANNELS.agentReady, path),
   readComments: () => ipcRenderer.invoke(MARKDOWN_CHANNELS.commentsRead),
   writeComments: (doc) => ipcRenderer.invoke(MARKDOWN_CHANNELS.commentsWrite, doc),
+  agentAsk: (op: MdAgentAskOp) => ipcRenderer.invoke(MARKDOWN_CHANNELS.agentAsk, op),
+  onAskQueue: (handler: (items: MdAskQueueItem[]) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, items: MdAskQueueItem[]) => handler(items)
+    ipcRenderer.on(MARKDOWN_CHANNELS.askQueue, listener)
+    return () => ipcRenderer.removeListener(MARKDOWN_CHANNELS.askQueue, listener)
+  },
+  askQueueAction: (action: MdAskQueueAction) =>
+    ipcRenderer.send(MARKDOWN_CHANNELS.askQueueAction, action),
 }
 
 /** Chat persistence: the shared project:* handlers are registered once by the shell (docs-main registerProjectIpc) */

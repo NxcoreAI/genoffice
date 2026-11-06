@@ -5,6 +5,11 @@
  * re-opens the same popover in edit mode. (Docs parity; markdown selection
  * kinds add code blocks and task lists.)
  *
+ * Host mode (EverRoom embed): the bundled AI surface is folded out, so the
+ * popover collapses to a compact single-line note input — Enter hands the note
+ * to the host's annotation queue, an outside click discards it. The floating
+ * trigger stays and becomes the comment entry (pencil + "评论").
+ *
  * Mounted at the app root with fixed positioning; ProseMirror's coordsAtPos
  * already speaks viewport coordinates. Positions refresh while the document
  * scrolls; outside clicks commit non-empty text into the queue (it stays
@@ -41,14 +46,33 @@ interface Props {
   onQueueAdd: (text: string) => void
   onQueueUpdate: (qid: string, text: string) => void
   onQueueRemove: (qid: string) => void
+  /**
+   * Host-driven mode (EverRoom embed): there is no in-editor AI backend and no
+   * anchor queue. The popover collapses to a compact single-line note input —
+   * Enter hands the note to the host's queue, an outside click discards it.
+   */
+  hostMode?: boolean
+  /** Host mode only: collect the note into the host's batch instead of sending now. */
+  onHostQueue?: (text: string) => void
+  /**
+   * Host mode only: save an edit of an already-queued host note (IPC
+   * askQueueAction 'update'), wired when the host queue is reachable.
+   */
+  onHostUpdate?: (draftId: string, text: string) => void
 }
 
-type OpenState = { mode: 'new' } | { mode: 'edit'; qid: string }
+type OpenState =
+  | { mode: 'new' }
+  | { mode: 'edit'; qid: string }
+  /** host mode only: qid is the host draft id, not a local anchor id */
+  | { mode: 'hostEdit'; qid: string }
 
 const WIDTH = 340
+const HOST_WIDTH = 260
 const GAP = 8
 const EDGE = 8
 const EST_HEIGHT = 150
+const HOST_EST_HEIGHT = 84
 
 type SelectionKind = 'image' | 'table' | 'code' | 'task' | 'text'
 
@@ -102,6 +126,9 @@ export function AiAskPopover({
   onQueueAdd,
   onQueueUpdate,
   onQueueRemove,
+  hostMode = false,
+  onHostQueue,
+  onHostUpdate,
 }: Props): ReactElement | null {
   const { t } = useI18n()
   const [trigger, setTrigger] = useState<{ left: number; top: number } | null>(null)
@@ -118,11 +145,20 @@ export function AiAskPopover({
   textRef.current = text
   const queueFullRef = useRef(queueFull)
   queueFullRef.current = queueFull
+  const hostModeRef = useRef(hostMode)
+  hostModeRef.current = hostMode
+  const onHostUpdateRef = useRef(onHostUpdate)
+  onHostUpdateRef.current = onHostUpdate
 
   const anchorRect = useCallback((): AnchorRect | null => {
     const state = openRef.current
     if (!state) return null
     if (state.mode === 'edit') {
+      const range = queueAnchorRange(editor.state, state.qid)
+      return range ? rangeRect(editor, range.from, range.to) : null
+    }
+    if (state.mode === 'hostEdit') {
+      // host-note anchors share the decoration plugin; the id IS the draft id
       const range = queueAnchorRange(editor.state, state.qid)
       return range ? rangeRect(editor, range.from, range.to) : null
     }
@@ -169,7 +205,18 @@ export function AiAskPopover({
   useEffect(() => {
     const onAnchorClick = (e: Event) => {
       const qid = (e as CustomEvent<{ qid: string }>).detail?.qid
-      const item = qid ? getItem(qid) : undefined
+      if (!qid) return
+      if (hostModeRef.current) {
+        // host mode: getItem returns EditQueueItem-shaped host rows; the
+        // popover edits in place through the host's update IPC
+        const item = getItem(qid)
+        if (!item || !onHostUpdateRef.current) return
+        setText(item.instruction)
+        setOpen({ mode: 'hostEdit', qid: item.qid })
+        setTrigger(null)
+        return
+      }
+      const item = getItem(qid)
       if (!item) return
       setText(item.instruction)
       setOpen({ mode: 'edit', qid: item.qid })
@@ -209,6 +256,12 @@ export function AiAskPopover({
   const commitOrClose = useCallback(() => {
     const state = openRef.current
     const value = textRef.current.trim()
+    // Host mode has no anchor queue: an accidental outside click must not fire
+    // a request at the host agent.
+    if (hostModeRef.current) {
+      close()
+      return
+    }
     if (state && value) {
       if (state.mode === 'edit') onQueueUpdate(state.qid, value)
       else if (!queueFullRef.current) onQueueAdd(value)
@@ -234,11 +287,11 @@ export function AiAskPopover({
   }
 
   const canSubmit = text.trim().length > 0
-  const editItem = open?.mode === 'edit' ? getItem(open.qid) : undefined
+  const editItem = open?.mode === 'edit' || open?.mode === 'hostEdit' ? getItem(open.qid) : undefined
 
   const excerpt = (() => {
     if (!open) return ''
-    if (open.mode === 'edit') {
+    if (open.mode === 'edit' || open.mode === 'hostEdit') {
       const range = queueAnchorRange(editor.state, open.qid)
       return range
         ? editor.state.doc.textBetween(range.from, range.to, ' ', ' ')
@@ -251,7 +304,75 @@ export function AiAskPopover({
     .trim()
 
   let box: ReactElement | null = null
-  if (open && rect) {
+  if (open && rect && hostMode) {
+    // Compact host-mode popover: one short input, no title/excerpt/chips/footer.
+    // Enter queues the note (Esc/outside closes) — the full form stays on the
+    // standalone build.
+    const width = HOST_WIDTH
+    const height = boxRef.current?.offsetHeight ?? HOST_EST_HEIGHT
+    const below = rect.bottom + GAP
+    const above = rect.top - GAP - height
+    const top =
+      below + height <= window.innerHeight - EDGE
+        ? below
+        : above >= EDGE
+          ? above
+          : Math.max(EDGE, window.innerHeight - EDGE - height)
+    const left = Math.min(
+      Math.max(EDGE, (rect.left + rect.right) / 2 - width / 2),
+      Math.max(EDGE, window.innerWidth - width - EDGE),
+    )
+    const hostEdit = open.mode === 'hostEdit' ? open : null
+    box = (
+      <div
+        ref={boxRef}
+        className="ai-ask-pop ai-ask-pop-compact"
+        style={{ left, top, width }}
+        role="dialog"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            close()
+          }
+        }}
+      >
+        <input
+          ref={inputRef}
+          className="ai-ask-pop-input"
+          value={text}
+          maxLength={EDIT_INSTRUCTION_MAX}
+          placeholder={t(hostEdit ? 'aiNoteEditPlaceholder' : 'aiNotePlaceholder')}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              if (!canSubmit) return
+              if (hostEdit) {
+                onHostUpdate?.(hostEdit.qid, text.trim())
+                close()
+              } else if (onHostQueue) {
+                onHostQueue(text.trim())
+                close()
+              }
+            }
+          }}
+        />
+        {hostEdit && (
+          <button
+            type="button"
+            className="host-note-pop-delete"
+            onClick={() => {
+              onQueueRemove(hostEdit.qid)
+              close()
+            }}
+          >
+            {t('aiNoteCardDelete')}
+          </button>
+        )}
+      </div>
+    )
+  } else if (open && rect) {
     const height = boxRef.current?.offsetHeight ?? EST_HEIGHT
     const below = rect.bottom + GAP
     const above = rect.top - GAP - height
@@ -313,6 +434,9 @@ export function AiAskPopover({
               if (open.mode === 'edit') {
                 onQueueUpdate(open.qid, text.trim())
                 close()
+              } else if (hostMode) {
+                onSendNow(text.trim())
+                close()
               } else if (!queueFull) {
                 onQueueAdd(text.trim())
                 close()
@@ -320,7 +444,7 @@ export function AiAskPopover({
             }
           }}
         />
-        {open.mode === 'new' && (
+        {open.mode === 'new' && !hostMode && (
           <div className="ai-ask-pop-chips">
             {CHIP_KEYS[kind].map((key) => (
               <button
@@ -358,6 +482,31 @@ export function AiAskPopover({
                 }}
               >
                 {t('aiAskUpdate')}
+              </button>
+            </>
+          ) : hostMode ? (
+            <>
+              {onHostQueue ? (
+                <button
+                  className="ai-ask-cancel"
+                  disabled={!canSubmit}
+                  onClick={() => {
+                    onHostQueue(text.trim())
+                    close()
+                  }}
+                >
+                  {t('aiAskQueue')}
+                </button>
+              ) : null}
+              <button
+                className="ai-ask-confirm"
+                disabled={!canSubmit}
+                onClick={() => {
+                  onSendNow(text.trim())
+                  close()
+                }}
+              >
+                {t('aiAskSendNow')}
               </button>
             </>
           ) : (
@@ -401,12 +550,23 @@ export function AiAskPopover({
           onClick={openFromSelection}
         >
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden>
-            <path
-              d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7L12 3zM19 15l.85 2.3L22 18.15l-2.15.85L19 21.3l-.85-2.3-2.15-.85 2.15-.85L19 15z"
-              fill="currentColor"
-            />
+            {hostMode ? (
+              // pencil: annotating the selection, not asking for an AI rewrite
+              <path
+                d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3zM14 7l3 3"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ) : (
+              <path
+                d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7L12 3zM19 15l.85 2.3L22 18.15l-2.15.85L19 21.3l-.85-2.3-2.15-.85 2.15-.85L19 15z"
+                fill="currentColor"
+              />
+            )}
           </svg>
-          {t('aiAskBtn')}
+          {t(hostMode ? 'aiNoteBtn' : 'aiAskBtn')}
         </button>
       )}
       {box}

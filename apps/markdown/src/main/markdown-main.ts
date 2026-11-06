@@ -12,6 +12,7 @@ import {
   net,
   protocol,
   shell,
+  webContents,
 } from 'electron'
 import type { WebContents } from 'electron'
 import {
@@ -51,12 +52,21 @@ import type {
   ExportPdfRequest,
   ExportResult,
   ImageData,
+  MdAgentAskOp,
+  MdAgentAskResult,
+  MdAskQueueAction,
+  MdAskQueueItem,
   MdComment,
   MdCommentsDoc,
   SaveMarkdownRequest,
   SaveMarkdownResult,
   SaveMode,
 } from '../shared/ipc'
+import {
+  normalizeAgentAskOp,
+  normalizeAskQueueAction,
+  normalizeAskQueueItems,
+} from './host-ask'
 
 /// EverRoom embed build: the bundled Genspark AI surface is folded out (the
 /// host supplies its own agent panel). Declared here and defined by the vite
@@ -1009,9 +1019,77 @@ export function registerMarkdownIpc(): void {
     waiter?.(ok === true)
   })
 
+  // EverRoom embed: 选区「评论」浮层 → 宿主 Agent（宿主按 webContents id 反查
+  // 文件与空间；载荷只描述选区：块索引 + 摘要 + 偏移，与评论侧车同一锚型）。
+  ipcMain.handle(
+    MARKDOWN_CHANNELS.agentAsk,
+    async (event, raw?: unknown): Promise<MdAgentAskResult> => {
+      const op = normalizeAgentAskOp(raw)
+      if (!op) return { ok: false, error: 'EMPTY_INSTRUCTION_OR_ANCHOR' }
+      if (!mdAgentAskHook) return { ok: false, error: 'NO_HOST_AGENT' }
+      return mdAgentAskHook(event.sender.id, op).catch(
+        (error: unknown): MdAgentAskResult => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    },
+  )
+
+  // EverRoom embed: 批注动作（全部发送 / 移除一条 / 改写一条）→ 宿主。
+  ipcMain.on(MARKDOWN_CHANNELS.askQueueAction, (event, raw?: unknown) => {
+    if (!mdAskQueueActionHook) return
+    const action = normalizeAskQueueAction(raw)
+    if (action) mdAskQueueActionHook(event.sender.id, action)
+  })
+
   // Language channel shared with other modules; removeHandler tolerates duplicate registration
   ipcMain.removeHandler(MARKDOWN_CHANNELS.getLanguage)
   ipcMain.handle(MARKDOWN_CHANNELS.getLanguage, () => getUiLang())
+}
+
+// ── EverRoom embed: 选区「评论」转发（docs/pdf 同一协议的 markdown 面） ──
+
+/**
+ * EverRoom embed only: the floating note popover on a selection relays the
+ * user's note here. The host resolves room/file from the calling view's
+ * webContents id and injects the request into its agent conversation, so no
+ * ids travel from the renderer.
+ */
+let mdAgentAskHook:
+  | ((wcId: number, op: MdAgentAskOp) => Promise<MdAgentAskResult>)
+  | null = null
+
+/** Install the host's selection-note forwarder (null clears it). */
+export function setMarkdownAgentAskHook(
+  hook: ((wcId: number, op: MdAgentAskOp) => Promise<MdAgentAskResult>) | null,
+): void {
+  mdAgentAskHook = hook
+}
+
+/**
+ * EverRoom embed only: the host pushes its annotation queue for this document
+ * down so the editor can underline the anchored passages; the queue itself
+ * stays owned by the conversation side (docs/pdf parity).
+ */
+let mdAskQueueActionHook: ((wcId: number, action: MdAskQueueAction) => void) | null = null
+
+/** Install the host's queue-action sink (null clears it). */
+export function setMarkdownAskQueueActionHook(
+  hook: ((wcId: number, action: MdAskQueueAction) => void) | null,
+): void {
+  mdAskQueueActionHook = hook
+}
+
+/**
+ * Push the host's annotation queue snapshot to one markdown view (empty array
+ * clears the anchors). Malformed rows are dropped: the renderer trusts nothing
+ * that comes over IPC.
+ */
+export function pushMarkdownAskQueue(wcId: number, items: MdAskQueueItem[]): void {
+  const contents = webContents.fromId(wcId)
+  if (!contents || contents.isDestroyed()) return
+  contents.send(MARKDOWN_CHANNELS.askQueue, normalizeAskQueueItems(items))
 }
 
 function grantAndTrack(wc: WebContents, openPath?: string | null): void {
