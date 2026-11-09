@@ -146,11 +146,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
+export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = false, floating = false, onClose }: {
   hasDoc: boolean
   dropdown: string | null
   setDropdown: SetDropdown
   onNotice?: (message: string) => void
+  /** AI 编辑模式：只渲染论文排版面板，不渲染 ribbon 里的「排版」大按钮 */
+  panelOnly?: boolean
+  /** 浮动形态：脱离 ribbon 的锚点定位，由外层浮层/遮罩管理开合 */
+  floating?: boolean
+  onClose?: () => void
 }) {
   const { t, dateLocale } = useI18n()
   const [cards, setCards] = useState<ThesisPanelCard[] | null>(null)
@@ -204,7 +209,8 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     /** 出稿提示（模版骨架回落、自检软伤）：必须显性展示，否则用户只看到成品、猜不到原因。 */
     warnings?: string[]
   } | null>(null)
-  const open = dropdown === 'thesis'
+  // panelOnly 由外层浮层直接控制挂载，恒为打开；正常模式仍由 ribbon dropdown 控制。
+  const open = panelOnly || dropdown === 'thesis'
 
   const refresh = useCallback(() => {
     void window.desktop.thesisListCards().then((outcome) => {
@@ -229,7 +235,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
   }, [open, refresh])
 
   /**
-   * 上传论文模版：只收 Word（用户预期「可导入 word 格式」）。
+   * 上传模版：只收 Word（用户预期「可导入 word 格式」）。
    * 解析成功后**直接对当前打开的文档排版**——导入模版的下一步就是排版，
    * 不再让用户多点一次（长任务最怕「点了没反应」）。
    */
@@ -375,7 +381,9 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
     } catch (err) {
       const message = errorMessage(err)
       setError(message === t('aiThesisTimeout') ? t('aiThesisTimeout') : message)
-      setDropdown(() => 'thesis')
+      // 正常模式下排版失败仍要把下拉面板钉住；浮动面板本来就不会自己收起，
+      // 它的 setDropdown 是外层的「关闭」回调，误调会直接把面板关掉。
+      if (!panelOnly) setDropdown(() => 'thesis')
     } finally {
       setBusy(false)
       setJob(null)
@@ -384,9 +392,10 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
 
   return (
     <>
-      <div className="ribbon-group">
+      <div className={`ribbon-group${panelOnly ? ' ai-thesis-floating-host' : ''}`}>
         <div className="ribbon-group-items">
           <div className="rb-split-wrap">
+            {!panelOnly && (
             <button
               className="rb-big"
               disabled={!hasDoc || busy}
@@ -407,9 +416,27 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
               </span>
               <span>{busy ? t('aiThesisRunning') : t('aiThesisBtn')}</span>
             </button>
+            )}
             {open && (
-              <div data-rb-panel="" className="layout-menu ai-thesis-panel">
-                <p className="ai-thesis-title">{t('aiThesisPanelTitle')}</p>
+              <div
+                data-rb-panel=""
+                className={`layout-menu ai-thesis-panel${floating ? ' ai-thesis-panel-floating' : ''}`}
+              >
+                {floating ? (
+                  <div className="ai-thesis-panel-head">
+                    <p className="ai-thesis-title">{t('aiThesisPanelTitle')}</p>
+                    <button
+                      type="button"
+                      className="ai-thesis-floating-close"
+                      aria-label="关闭"
+                      onClick={onClose}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ) : (
+                  <p className="ai-thesis-title">{t('aiThesisPanelTitle')}</p>
+                )}
                 {job ? (
                   <div className="ai-thesis-progress" role="status">
                     <div className="ai-thesis-progress-bar">
@@ -584,7 +611,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice }: {
             )}
           </div>
         </div>
-        <div className="ribbon-group-label">{t('aiThesisGroupLabel')}</div>
+        {!panelOnly && <div className="ribbon-group-label">{t('aiThesisGroupLabel')}</div>}
       </div>
 
     </>

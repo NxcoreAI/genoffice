@@ -10845,3 +10845,76 @@ tr > .page-gap-cut {
 .host-note-card-del:hover {
   color: var(--danger);
 }
+
+/* ---- AI 编辑模式下的浮动论文排版面板 ------------------------------------
+ * .app.chrome-hidden 会把整条 ribbon 设为 display:none，所以这里复用同一个
+ * AiTab 面板组件（panelOnly + floating），改用固定定位。面板内容、上传论文
+ * 模版、模版预览/删除、一键排版与正常模式「AI → 排版」完全一致。 */
+.ai-thesis-floating-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 59;
+  background: transparent;
+}
+
+/* panelOnly 形态仍借用 .ribbon-group 的 DOM；压成 0×0 容器即可，面板自身是
+   position:fixed，不受容器尺寸影响，也不会被收起的 ribbon 一起隐藏。 */
+.ribbon-group.ai-thesis-floating-host {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 61;
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+}
+
+.layout-menu.ai-thesis-panel.ai-thesis-panel-floating {
+  position: fixed;
+  position-anchor: auto;
+  position-try-fallbacks: none;
+  position-visibility: always;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 61;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.ai-thesis-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ai-thesis-panel-head .ai-thesis-title {
+  margin: 0;
+}
+
+/* 选择器要压过 .layout-menu button 的默认按钮样式（width:100% / padding 等） */
+.layout-menu.ai-thesis-panel .ai-thesis-floating-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.layout-menu.ai-thesis-panel .ai-thesis-floating-close:hover {
+  background: var(--hover, transparent);
+  color: var(--text-primary);
+}
