@@ -647,6 +647,57 @@ export default function App() {
     [],
   )
 
+  /** EverRoom embed: whole-document quick actions from the AI-mode bar (润色 / 总结).
+   *  scope 'document' = no selection anchor; the host message addresses the file. */
+  const submitHostDocumentAsk = useCallback(
+    (instruction: string): void => {
+      const text = instruction.trim()
+      if (!text || statusRef.current !== 'ready') return
+      void window.markdownApi
+        .agentAsk({ instruction: text, blockIndex: 0, scope: 'document' })
+        .then((result) => {
+          if (result.ok) return
+          const reason = result.error === 'NO_HOST_AGENT'
+            ? '当前环境没有可用的 Agent'
+            : result.error
+          setCommentsToast(reason)
+        })
+        .catch((error: unknown) => {
+          setCommentsToast(error instanceof Error ? error.message : String(error))
+        })
+    },
+    [],
+  )
+
+  /**
+   * Quick AI capabilities for the AI-mode bar. The EverRoom embed relays the
+   * instruction to the host agent (scope 'document'); standalone builds
+   * auto-run it in the local AI panel.
+   */
+  const aiQuickActions = everroomEmbed
+    ? [
+      { id: 'polish', label: t('aiPolishBtn'), run: () => submitHostDocumentAsk(t('aiPolishPrompt')) },
+      { id: 'summarize', label: t('aiSummarizeBtn'), run: () => submitHostDocumentAsk(t('aiSummarizePrompt')) },
+    ]
+    : [
+      {
+        id: 'polish',
+        label: t('aiPolishBtn'),
+        run: () => {
+          setAiOpen(true)
+          setAiPreset((prev) => ({ text: t('aiPolishPrompt'), nonce: (prev?.nonce ?? 0) + 1 }))
+        },
+      },
+      {
+        id: 'summarize',
+        label: t('aiSummarizeBtn'),
+        run: () => {
+          setAiOpen(true)
+          setAiPreset((prev) => ({ text: t('aiSummarizePrompt'), nonce: (prev?.nonce ?? 0) + 1 }))
+        },
+      },
+    ]
+
   /** Host rows shaped as the popover's queue item (qid = host draft id). */
   const hostQueueRef = useRef(hostAskQueue)
   hostQueueRef.current = hostAskQueue
@@ -884,8 +935,9 @@ export default function App() {
         onNewComment={startNewComment}
         onShowComments={() => setShowComments(true)}
       />
-      {/* AI edit mode: the panel is hidden, only the floating bar remains
-          (fixed overlay — hiding the ribbon never reflows the document) */}
+      {/* AI edit mode: the panel is hidden; the floating bar keeps save / undo /
+          redo plus the quick AI actions (润色 / 总结 — the embed relays them to
+          the host agent, standalone runs them in the local AI panel) */}
       {chromeHidden && (
         <EditorModeBar
           labels={{
@@ -893,17 +945,20 @@ export default function App() {
             save: t('save'),
             undo: t('undo'),
             redo: t('redo'),
-            ai: '',
+            ai: everroomEmbed ? t('aiPolishBtn') : '',
+            aiMenuTip: t('aiQuickActionsTip'),
           }}
           canSave={status === 'ready' && dirty}
           canUndo={Boolean(editor?.can().undo())}
           canRedo={Boolean(editor?.can().redo())}
-          showAi={false}
+          showAi={status === 'ready'}
+          aiDisabled={status !== 'ready'}
           onRestore={() => setChromeHidden(false)}
           onSave={() => void doSave('save')}
           onUndo={() => editor?.chain().focus().undo().run()}
           onRedo={() => editor?.chain().focus().redo().run()}
           onAi={() => {}}
+          aiActions={aiQuickActions}
         />
       )}
       {status === 'loading' && <div className="center-note">{t('loading')}</div>}

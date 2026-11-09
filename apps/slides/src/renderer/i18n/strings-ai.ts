@@ -27,6 +27,7 @@ export const aiStrings = defineStrings({
     aiImageBtn: 'AI 配图',
     aiImagePrompt: '根据这一页的内容生成一张相关配图,并插入到幻灯片的合适位置',
     aiBeautifyBtn: 'AI 美化',
+    aiQuickActionsTip: 'AI 快捷能力',
     aiBeautifyPrompt: '美化这一页幻灯片:优化排版、配色和字体层级,使页面更专业美观',
     aiSwitchModel: '切换 AI 模型',
     aiNewChat: '新对话',
@@ -275,6 +276,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       "Generate an image that matches this slide's content and insert it in a suitable spot on the slide",
     aiBeautifyBtn: 'AI Beautify',
+    aiQuickActionsTip: 'Quick AI actions',
     aiBeautifyPrompt:
       'Beautify this slide: improve the layout, colors, and typography to make it look more professional',
     aiSwitchModel: 'Switch AI model',
@@ -527,6 +529,7 @@ export const aiStrings = defineStrings({
     aiImageBtn: 'AI 画像',
     aiImagePrompt: 'このスライドの内容に合った画像を生成し、スライドの適切な位置に挿入してください',
     aiBeautifyBtn: 'AI デザイン',
+    aiQuickActionsTip: 'AIクイック操作',
     aiBeautifyPrompt:
       'このスライドを美しく整えてください:レイアウト・配色・文字の階層を改善し、より洗練されたページにしてください',
     aiSwitchModel: 'AI モデルを切り替え',
@@ -780,6 +783,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       '이 슬라이드의 내용에 어울리는 이미지를 생성해 슬라이드의 적절한 위치에 삽입해 주세요',
     aiBeautifyBtn: 'AI 꾸미기',
+    aiQuickActionsTip: 'AI 빠른 작업',
     aiBeautifyPrompt:
       '이 슬라이드를 보기 좋게 다듬어 주세요: 레이아웃, 색상, 글자 위계를 개선해 더 전문적으로 만들어 주세요',
     aiSwitchModel: 'AI 모델 전환',
@@ -1033,6 +1037,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Générez une image en rapport avec le contenu de cette diapositive et insérez-la à un endroit approprié',
     aiBeautifyBtn: 'Design IA',
+    aiQuickActionsTip: 'Actions IA rapides',
     aiBeautifyPrompt:
       'Embellissez cette diapositive : améliorez la mise en page, les couleurs et la typographie pour un rendu plus professionnel',
     aiSwitchModel: "Changer de modèle d'IA",
@@ -1289,6 +1294,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Erzeuge ein zum Inhalt dieser Folie passendes Bild und füge es an einer passenden Stelle der Folie ein',
     aiBeautifyBtn: 'KI-Design',
+    aiQuickActionsTip: 'Schnelle KI-Aktionen',
     aiBeautifyPrompt:
       'Gestalte diese Folie ansprechender: Verbessere Layout, Farben und Typografie für einen professionelleren Look',
     aiSwitchModel: 'KI-Modell wechseln',
@@ -1544,6 +1550,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Genera una imagen acorde con el contenido de esta diapositiva e insértala en un lugar adecuado',
     aiBeautifyBtn: 'Diseño IA',
+    aiQuickActionsTip: 'Acciones rápidas de IA',
     aiBeautifyPrompt:
       'Embellece esta diapositiva: mejora el diseño, los colores y la tipografía para que luzca más profesional',
     aiSwitchModel: 'Cambiar de modelo de IA',
@@ -1798,6 +1805,7 @@ export const aiStrings = defineStrings({
     aiImageBtn: 'ภาพ AI',
     aiImagePrompt: 'สร้างภาพที่สอดคล้องกับเนื้อหาของสไลด์นี้ และแทรกลงในตำแหน่งที่เหมาะสมบนสไลด์',
     aiBeautifyBtn: 'ตกแต่งด้วย AI',
+    aiQuickActionsTip: 'การดำเนินการ AI ด่วน',
     aiBeautifyPrompt: 'ตกแต่งสไลด์นี้: ปรับปรุงเลย์เอาต์ สี และตัวอักษรให้ดูเป็นมืออาชีพยิ่งขึ้น',
     aiSwitchModel: 'สลับโมเดล AI',
     aiNewChat: 'แชทใหม่',
@@ -2050,6 +2058,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Buat gambar yang sesuai dengan isi slide ini dan sisipkan di posisi yang tepat pada slide',
     aiBeautifyBtn: 'Percantik AI',
+    aiQuickActionsTip: 'Aksi AI cepat',
     aiBeautifyPrompt:
       'Percantik slide ini: perbaiki tata letak, warna, dan tipografi agar tampak lebih profesional',
     aiSwitchModel: 'Ganti model AI',
@@ -2304,6 +2313,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Сгенерируйте изображение, соответствующее содержимому этого слайда, и вставьте его в подходящее место',
     aiBeautifyBtn: 'ИИ-дизайн',
+    aiQuickActionsTip: 'Быстрые действия ИИ',
     aiBeautifyPrompt:
       'Улучшите оформление этого слайда: доработайте макет, цвета и типографику, чтобы он выглядел профессиональнее',
     aiSwitchModel: 'Сменить модель ИИ',
@@ -2557,6 +2567,7 @@ export const aiStrings = defineStrings({
     aiImageBtn: 'صورة AI',
     aiImagePrompt: 'أنشئ صورة تتناسب مع محتوى هذه الشريحة وأدرجها في موضع مناسب على الشريحة',
     aiBeautifyBtn: 'تجميل AI',
+    aiQuickActionsTip: 'إجراءات الذكاء الاصطناعي السريعة',
     aiBeautifyPrompt: 'جمّل هذه الشريحة: حسّن التخطيط والألوان وأسلوب الخط لتبدو أكثر احترافية',
     aiSwitchModel: 'تبديل نموذج الذكاء الاصطناعي',
     aiNewChat: 'محادثة جديدة',
@@ -2809,6 +2820,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Gere uma imagem condizente com o conteúdo deste slide e insira-a em um local adequado',
     aiBeautifyBtn: 'Design IA',
+    aiQuickActionsTip: 'Ações rápidas de IA',
     aiBeautifyPrompt:
       'Deixe este slide mais bonito: melhore o layout, as cores e a tipografia para um visual mais profissional',
     aiSwitchModel: 'Trocar modelo de IA',
@@ -3063,6 +3075,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       "Genera un'immagine adatta al contenuto di questa diapositiva e inseriscila in una posizione appropriata",
     aiBeautifyBtn: 'Design IA',
+    aiQuickActionsTip: 'Azioni IA rapide',
     aiBeautifyPrompt:
       "Migliora l'aspetto di questa diapositiva: perfeziona layout, colori e tipografia per un look più professionale",
     aiSwitchModel: 'Cambia modello di IA',
@@ -3317,6 +3330,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Wygeneruj obraz pasujący do treści tego slajdu i wstaw go w odpowiednim miejscu',
     aiBeautifyBtn: 'Upiększanie AI',
+    aiQuickActionsTip: 'Szybkie akcje AI',
     aiBeautifyPrompt:
       'Upiększ ten slajd: popraw układ, kolory i typografię, aby wyglądał bardziej profesjonalnie',
     aiSwitchModel: 'Zmień model AI',
@@ -3571,6 +3585,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Genereer een afbeelding die past bij de inhoud van deze dia en voeg deze op een geschikte plek in',
     aiBeautifyBtn: 'AI-opmaak',
+    aiQuickActionsTip: 'Snelle AI-acties',
     aiBeautifyPrompt:
       'Maak deze dia mooier: verbeter de lay-out, kleuren en typografie voor een professionelere uitstraling',
     aiSwitchModel: 'AI-model wisselen',
@@ -3826,6 +3841,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'Jana imej yang sepadan dengan kandungan slaid ini dan sisipkannya di kedudukan yang sesuai pada slaid',
     aiBeautifyBtn: 'Percantik AI',
+    aiQuickActionsTip: 'Tindakan AI pantas',
     aiBeautifyPrompt:
       'Percantik slaid ini: perbaiki susun atur, warna dan tipografi supaya kelihatan lebih profesional',
     aiSwitchModel: 'Tukar model AI',
@@ -4080,6 +4096,7 @@ export const aiStrings = defineStrings({
     aiImageBtn: 'תמונת AI',
     aiImagePrompt: 'צור תמונה שמתאימה לתוכן השקופית הזו והוסף אותה במקום מתאים בשקופית',
     aiBeautifyBtn: 'עיצוב AI',
+    aiQuickActionsTip: 'פעולות AI מהירות',
     aiBeautifyPrompt:
       'עצב את השקופית הזו: שפר את הפריסה, הצבעים והטיפוגרפיה כדי שתיראה מקצועית יותר',
     aiSwitchModel: 'החלף מודל AI',
@@ -4331,6 +4348,7 @@ export const aiStrings = defineStrings({
     aiImagePrompt:
       'इस स्लाइड की सामग्री से मेल खाती एक छवि बनाएँ और उसे स्लाइड में उपयुक्त स्थान पर सम्मिलित करें',
     aiBeautifyBtn: 'AI सजावट',
+    aiQuickActionsTip: 'त्वरित AI क्रियाएँ',
     aiBeautifyPrompt:
       'इस स्लाइड को सुंदर बनाएँ: लेआउट, रंग और टाइपोग्राफ़ी सुधारें ताकि यह अधिक पेशेवर दिखे',
     aiSwitchModel: 'AI मॉडल बदलें',
@@ -4582,6 +4600,7 @@ export const aiStrings = defineStrings({
     aiImageBtn: 'AI 配圖',
     aiImagePrompt: '根據這一頁的內容生成一張相關配圖,並插入到投影片的合適位置',
     aiBeautifyBtn: 'AI 美化',
+    aiQuickActionsTip: 'AI 快捷能力',
     aiBeautifyPrompt: '美化這一頁投影片:優化排版、配色和字體層級,使頁面更專業美觀',
     aiSwitchModel: '切換 AI 模型',
     aiNewChat: '新對話',

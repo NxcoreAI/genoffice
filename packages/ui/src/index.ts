@@ -39,6 +39,7 @@ export {
 export {
   EditorModeBar,
   EditorModeToggle,
+  type EditorModeAiAction,
   type EditorModeBarLabels,
   type EditorModeBarProps,
   type EditorModeToggleProps,

@@ -205,6 +205,9 @@ interface ExcelShellProps {
     range: string
     mode: 'now' | 'queue'
   }) => void
+  /// EverRoom embed: whole-workbook quick actions from the AI-mode bar
+  /// (AI 分析 / AI 校验) relayed to the host agent with scope 'workbook'.
+  readonly onAiQuickAskHost?: (instruction: string) => void
   readonly onAiScopeDismiss: () => void
   /// Citation link in an AI answer: jumps the grid to the cited cell/range.
   readonly onAiCitation: (href: string) => void
@@ -363,6 +366,7 @@ export function ExcelShell({
   aiSelectionAskAnchor,
   onAiSelectionAskDismiss,
   onAiSelectionAskHost,
+  onAiQuickAskHost,
   onAiScopeDismiss,
   onAiCitation,
   onCommand,
@@ -490,9 +494,37 @@ export function ExcelShell({
   /// AI edit mode's one-click action: the same path as the ribbon's Genspark AI
   /// ▸ "AI 分析" button (open the panel, send the analyze prompt).
   const runAiAnalyze = () => {
+    if (onAiQuickAskHost) {
+      onAiQuickAskHost(t('aiAnalyzePrompt'))
+      return
+    }
     setIsCopilotOpen(true)
     onSend(t('aiAnalyzePrompt'))
   }
+
+  /// Quick AI capabilities for the AI-mode bar. In the EverRoom embed each
+  /// instruction is relayed to the host agent with scope 'workbook' (whole
+  /// workbook, no selection anchor); standalone builds auto-run it locally.
+  const aiQuickActions = onAiQuickAskHost
+    ? [
+      { id: 'analyze', label: t('aiAnalyzeBtn'), run: runAiAnalyze },
+      {
+        id: 'check',
+        label: t('aiCheckBtn'),
+        run: () => onAiQuickAskHost!(t('aiCheckPrompt')),
+      },
+    ]
+    : [
+      { id: 'analyze', label: t('aiAnalyzeBtn'), run: runAiAnalyze },
+      {
+        id: 'check',
+        label: t('aiCheckBtn'),
+        run: () => {
+          setIsCopilotOpen(true)
+          onSend(t('aiCheckPrompt'))
+        },
+      },
+    ]
 
   return (
     <main
@@ -638,7 +670,8 @@ export function ExcelShell({
         />
       </header>
 
-      {/* AI edit mode: the panel is collapsed, only save / undo / redo / AI 分析 stay
+      {/* AI edit mode: the panel is collapsed; the floating bar keeps save /
+          undo / redo plus the quick AI actions (AI 分析 / AI 校验)
           (fixed overlay, so hiding the header never reflows the grid) */}
       {aiMode && (
         <EditorModeBar
@@ -648,17 +681,19 @@ export function ExcelShell({
             undo: t('appUndo'),
             redo: t('appRedo'),
             ai: t('aiAnalyzeBtn'),
+            aiMenuTip: t('aiQuickActionsTip'),
           }}
           canSave={canSave}
           canUndo={canUndo}
           canRedo={canRedo}
-          showAi={!__GENOFFICE_EMBED_ONLY__ && !READONLY_EMBED}
+          showAi={!READONLY_EMBED}
           aiDisabled={!sheetHasContent || aiBusy}
           onRestore={() => setAiMode(false)}
           onSave={onSave}
           onUndo={() => onUndo()}
           onRedo={onRedo}
           onAi={runAiAnalyze}
+          aiActions={aiQuickActions}
         />
       )}
 

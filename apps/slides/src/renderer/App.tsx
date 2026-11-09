@@ -1459,6 +1459,42 @@ export function App() {
     window.slidesApi.askQueueAction({ kind: 'remove', draftId })
   }, [])
 
+  /**
+   * EverRoom embed: whole-page quick actions from the AI-mode bar (AI 美化 / AI
+   * 事实核查). scope 'page' addresses the current slide — no element targets, no
+   * selection anchor. Standalone builds keep the local AI-panel preset path.
+   */
+  const submitHostPageAsk = useCallback(
+    (instruction: string) => {
+      void window.slidesApi
+        .agentAsk({ instruction, slideIndex: current, targets: [], scope: 'page' })
+        .then((res) => {
+          if (!res.ok) showToast(res.error ?? t('aiErrUnknown'), 'error')
+        })
+        .catch((err) => showToast(err instanceof Error ? err.message : String(err), 'error'))
+    },
+    [current, t],
+  )
+
+  /** Quick AI capabilities for the AI-mode bar (WPS-style shortcuts). */
+  const aiQuickActions = everroomEmbed
+    ? [
+      { id: 'beautify', label: t('aiBeautifyBtn'), run: () => submitHostPageAsk(t('aiBeautifyPrompt')) },
+      { id: 'factcheck', label: t('aiFactCheckBtn'), run: () => submitHostPageAsk(t('aiFactCheckPrompt')) },
+    ]
+    : [
+      {
+        id: 'beautify',
+        label: t('aiBeautifyBtn'),
+        run: () => pushAiPreset(t('aiBeautifyPrompt'), true, undefined, undefined, true),
+      },
+      {
+        id: 'factcheck',
+        label: t('aiFactCheckBtn'),
+        run: () => pushAiPreset(t('aiFactCheckPrompt'), true, undefined, undefined, true),
+      },
+    ]
+
   /** A send-all / host-side removal drops the note being edited: close the popover. */
   useEffect(() => {
     const hostItemId = askState?.hostItemId
@@ -2993,7 +3029,7 @@ export function App() {
     <div className={aiMode ? 'app ai-mode' : 'app'}>
       <ToastHost />
       {/* AI edit mode: ribbon and status bar are hidden, so the shared floating bar
-          is the only chrome left (restore / save / undo / redo / AI Beautify). */}
+          is the only chrome left (restore / save / undo / redo + quick AI actions). */}
       {aiMode && (
         <EditorModeBar
           labels={{
@@ -3002,17 +3038,19 @@ export function App() {
             undo: t('ribbonUndo'),
             redo: t('ribbonRedo'),
             ai: t('aiBeautifyBtn'),
+            aiMenuTip: t('aiQuickActionsTip'),
           }}
           canSave={dirty}
           canUndo={!!slide && (histState.canUndo || !!editing || !!editingCell)}
           canRedo={!!slide && (histState.canRedo || !!editing || !!editingCell)}
-          showAi={!everroomEmbed}
+          showAi
           aiDisabled={!slide || deckEmpty}
           onRestore={exitAiMode}
           onSave={() => void save()}
           onUndo={() => void undo()}
           onRedo={() => void redo()}
           onAi={() => pushAiPreset(t('aiBeautifyPrompt'), true, undefined, undefined, true)}
+          aiActions={aiQuickActions}
         />
       )}
       {/* Read-only embed: the reading view is the whole UI — no editing ribbon */}

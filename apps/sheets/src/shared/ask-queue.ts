@@ -83,6 +83,7 @@ export function normalizeSheetsAgentAskOp(raw: unknown): SheetsAgentAskOp | null
     ...(range ? { range } : {}),
     ...(excerpt ? { excerpt } : {}),
     ...(mode ? { mode } : {}),
+    ...(value.scope === 'workbook' ? { scope: 'workbook' as const } : {}),
   }
 }
 

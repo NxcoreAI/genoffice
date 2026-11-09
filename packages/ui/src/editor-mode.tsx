@@ -1,5 +1,6 @@
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
+import { useDismissablePopover } from './popover-dismiss'
 import { IconModeAi, IconModeRedo, IconModeSave, IconModeUndo, IconPanelToggle } from './icons'
 
 /**
@@ -47,6 +48,22 @@ export interface EditorModeBarLabels {
   redo: string
   /** the app's one-click AI action, e.g. "AI 排版" */
   ai: string
+  /** aria/text tip of the caret that opens the quick AI actions menu */
+  aiMenuTip?: string
+}
+
+/**
+ * One quick AI capability in the AI-mode bar's action menu (the WPS-style
+ * shortcut list). The first action doubles as the primary button when the
+ * host passes a single entry without a menu.
+ */
+export interface EditorModeAiAction {
+  /** stable id for React keys and selection routing */
+  id: string
+  /** visible label, e.g. "AI 排版" */
+  label: string
+  /** ScreenTip / aria text when different from the label (defaults to label) */
+  tip?: string
 }
 
 export interface EditorModeBarProps {
@@ -62,6 +79,13 @@ export interface EditorModeBarProps {
   onUndo: () => void
   onRedo: () => void
   onAi: () => void
+  /**
+   * Quick AI capabilities for the AI button's dropdown (WPS-style shortcuts:
+   * 排版 / 润色 / 总结 …). When provided, the AI entry becomes a split button —
+   * the primary action runs the first entry, the caret opens the menu. When
+   * omitted, the single `onAi` button is rendered as before.
+   */
+  aiActions?: ReadonlyArray<EditorModeAiAction & { run: () => void }>
 }
 
 /** The only chrome left in AI mode. Fixed overlay so hiding the panel never
@@ -78,6 +102,7 @@ export function EditorModeBar({
   onUndo,
   onRedo,
   onAi,
+  aiActions,
 }: EditorModeBarProps) {
   // Pressing a bar button must not move focus out of the editor: the app-level
   // handlers (and native undo/redo) act on the current selection.
@@ -130,7 +155,14 @@ export function EditorModeBar({
       >
         <IconModeRedo />
       </button>
-      {showAi && (
+      {showAi && (aiActions?.length ? (
+        <EditorModeAiMenu
+          labels={labels}
+          {...(aiDisabled !== undefined ? { aiDisabled } : {})}
+          onAi={onAi}
+          actions={aiActions}
+        />
+      ) : (
         <>
           <span className="editor-mode-sep" aria-hidden="true" />
           <button
@@ -140,13 +172,143 @@ export function EditorModeBar({
             aria-label={labels.ai}
             disabled={aiDisabled}
             onMouseDown={keepFocus}
-        onClick={onAi}
+            onClick={onAi}
           >
             <IconModeAi />
             <span className="editor-mode-ai-label">{labels.ai}</span>
           </button>
         </>
-      )}
+      ))}
     </div>
   )
 }
+
+/**
+ * Split AI entry: the primary side runs the first quick action (same behavior
+ * as the old single button), the caret opens the full shortcut menu. Keyboard:
+ * arrows move within the menu, Enter runs, Escape closes (focus returns to the
+ * editor because the bar never takes focus away from it).
+ */
+function EditorModeAiMenu({
+  labels,
+  aiDisabled = false,
+  onAi,
+  actions,
+}: {
+  labels: EditorModeBarLabels
+  aiDisabled?: boolean
+  onAi: () => void
+  actions: ReadonlyArray<EditorModeAiAction & { run: () => void }>
+}) {
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const wrapRef = useRef<HTMLSpanElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  useDismissablePopover(open, () => setOpen(false), { inside: () => [wrapRef.current] })
+  useEffect(() => {
+    if (!open) return
+    setActive(0)
+  }, [open])
+  useEffect(() => {
+    if (!open) return
+    // jsdom has no scrollIntoView; guard so tests can render the menu
+    listRef.current?.querySelectorAll('.editor-mode-ai-item')[active]?.scrollIntoView?.({ block: 'nearest' })
+  }, [open, active])
+
+  const primary = actions[0]!
+  const primaryLabel = labels.ai || primary.label
+  const primaryTip = primary.tip ?? primaryLabel
+  // The primary side runs the first action when the host passed a real list;
+  // onAi remains the fallback for single-action hosts that only set labels.ai.
+  const runPrimary = actions.length > 1 ? primary.run : onAi
+
+  const runAt = (index: number) => {
+    const action = actions[index]
+    if (!action) return
+    setOpen(false)
+    action.run()
+  }
+
+  return (
+    <>
+      <span className="editor-mode-sep" aria-hidden="true" />
+      <span className="editor-mode-ai-split" ref={wrapRef}>
+        <button
+          type="button"
+          className="editor-mode-btn editor-mode-ai"
+          data-tip={primaryTip}
+          aria-label={primaryTip}
+          disabled={aiDisabled}
+          onMouseDown={keepFocusStatic}
+          onClick={() => runPrimary()}
+        >
+          <IconModeAi />
+          <span className="editor-mode-ai-label">{primaryLabel}</span>
+        </button>
+        <button
+          type="button"
+          className={`editor-mode-btn editor-mode-ai-caret${open ? ' is-open' : ''}`}
+          data-tip={labels.aiMenuTip ?? primaryLabel}
+          aria-label={labels.aiMenuTip ?? primaryLabel}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          disabled={aiDisabled}
+          onMouseDown={keepFocusStatic}
+          onClick={() => setOpen((value) => !value)}
+          onKeyDown={(event) => {
+            if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+              event.preventDefault()
+              setOpen(true)
+            }
+          }}
+        >
+          <span className="editor-mode-caret" aria-hidden="true" />
+        </button>
+        {open && (
+          <div
+            className="editor-mode-ai-menu"
+            role="menu"
+            ref={listRef}
+            aria-label={labels.aiMenuTip ?? primaryLabel}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            {actions.map((action, index) => (
+              <button
+                key={action.id}
+                type="button"
+                role="menuitem"
+                className={`editor-mode-ai-item${index === active ? ' is-active' : ''}`}
+                data-tip={action.tip ?? action.label}
+                aria-label={action.tip ?? action.label}
+                onMouseDown={keepFocusStatic}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => runAt(index)}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    setActive((index + 1) % actions.length)
+                  } else if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    setActive((index - 1 + actions.length) % actions.length)
+                  } else if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    runAt(index)
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault()
+                    setOpen(false)
+                  }
+                }}
+              >
+                <IconModeAi size={14} />
+                <span className="editor-mode-ai-item-label">{action.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </span>
+    </>
+  )
+}
+
+/** Module-level twin of the bar's keepFocus (the menu renders outside it). */
+const keepFocusStatic = (event: ReactMouseEvent<HTMLButtonElement>) => event.preventDefault()

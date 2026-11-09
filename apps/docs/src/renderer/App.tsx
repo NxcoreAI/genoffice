@@ -5716,9 +5716,39 @@ export function App() {
    * address blocks by index, never by page/line) plus a text excerpt the agent
    * can cross-check after its own re-read.
    */
-  const submitHostAgentAsk = (instruction: string, mode: 'now' | 'queue' = 'now') => {
+  const submitHostAgentAsk = (
+    instruction: string,
+    mode: 'now' | 'queue' = 'now',
+    scope?: 'document',
+  ) => {
     const text = instruction.trim()
     if (!text || !editor) return
+    if (scope === 'document') {
+      // Whole-document quick action (AI-mode bar): no selection exists, so no
+      // anchor/excerpt is fabricated — the host message says "the document".
+      void window.desktop
+        .agentAsk({
+          instruction: text,
+          fromBlockIndex: 0,
+          toBlockIndex: 0,
+          kind: 'text',
+          scope,
+          ...(mode === 'queue' ? { mode: 'queue' as const } : {}),
+        })
+        .then((result) => {
+          if (result.ok) return
+          const reason = result.error === 'NO_HOST_AGENT'
+            ? '当前环境没有可用的 Agent'
+            : result.error === 'EMPTY_INSTRUCTION'
+              ? '请先输入修改意见'
+              : result.error
+          setStatus(t('aiErrorPrefix', { error: reason }))
+        })
+        .catch((error: unknown) => {
+          setStatus(t('aiErrorPrefix', { error: error instanceof Error ? error.message : String(error) }))
+        })
+      return
+    }
     const { from, to } = editor.state.selection
     const docNode = editor.state.doc
     const fromBlockIndex = blockIndexOfPos(docNode, from)
@@ -5761,12 +5791,44 @@ export function App() {
    */
   const runAiTidy = () => {
     if (everroomEmbed) {
-      submitHostAgentAsk(t('aiTidyPrompt'))
+      submitHostAgentAsk(t('aiTidyPrompt'), 'now', 'document')
       return
     }
     setShowAi(true)
     setAiPreset({ text: t('aiTidyPrompt'), nonce: Date.now(), autoRun: true })
   }
+
+  /**
+   * Quick AI capabilities for the AI-mode bar (WPS-style shortcuts). Each entry
+   * reuses an existing prompt key; in the EverRoom embed the instruction goes to
+   * the host agent with scope 'document' (whole document, no selection anchor),
+   * standalone builds auto-run it in the local AI panel instead.
+   */
+  const aiQuickActions = [
+    { id: 'tidy', label: t('aiTidyBtn'), run: runAiTidy },
+    {
+      id: 'polish',
+      label: t('aiPolishBtn'),
+      run: () => {
+        if (everroomEmbed) submitHostAgentAsk(t('aiPolishPrompt'), 'now', 'document')
+        else {
+          setShowAi(true)
+          setAiPreset({ text: t('aiPolishPrompt'), nonce: Date.now(), autoRun: true })
+        }
+      },
+    },
+    {
+      id: 'summarize',
+      label: t('aiSummarizeBtn'),
+      run: () => {
+        if (everroomEmbed) submitHostAgentAsk(t('aiSummarizePrompt'), 'now', 'document')
+        else {
+          setShowAi(true)
+          setAiPreset({ text: t('aiSummarizePrompt'), nonce: Date.now(), autoRun: true })
+        }
+      },
+    },
+  ]
 
   const docZoomStyle = {
     zoom: zoom / 100,
@@ -5794,7 +5856,8 @@ export function App() {
       className={`app ${readMode ? 'read-mode' : ''}${revisionDisplay !== 'all' ? ` rev-display-${revisionDisplay}` : ''}${revisionDisplay === 'all' && viewMode === 'print' ? ' rev-balloon' : ''}${chromeHidden ? ' chrome-hidden' : ''}`}
     >
       <ToastHost />
-      {/* AI edit mode: the panel is collapsed, only save / undo / redo / AI 排版 stay */}
+      {/* AI edit mode: the panel is collapsed; the floating bar keeps save /
+          undo / redo plus the quick AI actions (排版 / 润色 / 总结) */}
       {chromeHidden && (
         <EditorModeBar
           labels={{
@@ -5803,6 +5866,7 @@ export function App() {
             undo: t('appUndo'),
             redo: t('appRedo'),
             ai: t('aiTidyBtn'),
+            aiMenuTip: t('aiQuickActionsTip'),
           }}
           canSave={hasDoc && hasUnsavedChanges}
           canUndo={hasDoc && histState.canUndo}
@@ -5814,6 +5878,7 @@ export function App() {
           onUndo={() => editor?.chain().focus().undo().run()}
           onRedo={() => editor?.chain().focus().redo().run()}
           onAi={runAiTidy}
+          aiActions={aiQuickActions}
         />
       )}
       {docCss && <style>{docCss}</style>}

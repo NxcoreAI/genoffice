@@ -74,7 +74,10 @@ export function normalizeAgentAskOp(raw: unknown): SlidesAgentAskOp | null {
     })
     if (targets.length >= ASK_TARGETS_MAX) break
   }
-  if (!instruction || slideIndex === null || targets.length === 0) return null
+  if (!instruction || slideIndex === null) return null
+  // AI-mode-bar quick actions (scope 'page') address the whole slide: no
+  // element targets exist, and that is not a malformed payload.
+  if (targets.length === 0 && value.scope !== 'page') return null
   const excerpt = normalizeExcerpt(value.excerpt)
   return {
     instruction: clip(instruction, ASK_INSTRUCTION_MAX),
@@ -82,6 +85,7 @@ export function normalizeAgentAskOp(raw: unknown): SlidesAgentAskOp | null {
     targets,
     ...(excerpt ? { excerpt } : {}),
     ...(value.mode === 'queue' ? { mode: 'queue' as const } : {}),
+    ...(value.scope === 'page' ? { scope: 'page' as const } : {}),
   }
 }
 

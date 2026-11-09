@@ -120,6 +120,7 @@ export const strings = {
     aiSummarizeBtn: 'AI 总结',
     aiSummarizePrompt: '总结这篇文档的主要内容和要点',
     aiPolishBtn: 'AI 润色',
+    aiQuickActionsTip: 'AI 快捷能力',
     aiPolishPrompt: '润色全文，使表达更清晰流畅',
     aiTidyBtn: 'AI 排版',
     aiTidyPrompt:
@@ -313,6 +314,7 @@ export const strings = {
     aiSummarizeBtn: 'AI Summarize',
     aiSummarizePrompt: 'Summarize the main content and key points of this document',
     aiPolishBtn: 'AI Polish',
+    aiQuickActionsTip: 'Quick AI actions',
     aiPolishPrompt: 'Polish the whole document to make the writing clearer and more fluent',
     aiTidyBtn: 'AI Format',
     aiTidyPrompt:
@@ -505,6 +507,7 @@ export const strings = {
     aiSummarizeBtn: 'AI 要約',
     aiSummarizePrompt: 'この文書の主な内容と要点を要約してください',
     aiPolishBtn: 'AI 推敲',
+    aiQuickActionsTip: 'AIクイック操作',
     aiPolishPrompt: '文書全体を推敲し、より明確で読みやすい文章にしてください',
     aiTidyBtn: 'AI 書式整理',
     aiTidyPrompt:
@@ -698,6 +701,7 @@ export const strings = {
     aiSummarizeBtn: 'AI 요약',
     aiSummarizePrompt: '이 문서의 주요 내용과 핵심 사항을 요약해 주세요',
     aiPolishBtn: 'AI 다듬기',
+    aiQuickActionsTip: 'AI 빠른 작업',
     aiPolishPrompt: '문서 전체를 다듬어 더 명확하고 매끄럽게 만들어 주세요',
     aiTidyBtn: 'AI 서식 정리',
     aiTidyPrompt:
@@ -894,6 +898,7 @@ export const strings = {
     aiSummarizeBtn: 'Résumé IA',
     aiSummarizePrompt: 'Résumez le contenu principal et les points clés de ce document',
     aiPolishBtn: 'Amélioration IA',
+    aiQuickActionsTip: 'Actions IA rapides',
     aiPolishPrompt: 'Améliorez tout le document pour rendre le texte plus clair et plus fluide',
     aiTidyBtn: 'Mise en forme IA',
     aiTidyPrompt:
@@ -1091,6 +1096,7 @@ export const strings = {
     aiSummarizeBtn: 'KI-Zusammenfassung',
     aiSummarizePrompt: 'Fasse den Hauptinhalt und die Kernpunkte dieses Dokuments zusammen',
     aiPolishBtn: 'KI-Feinschliff',
+    aiQuickActionsTip: 'Schnelle KI-Aktionen',
     aiPolishPrompt: 'Überarbeite das gesamte Dokument, damit der Text klarer und flüssiger wird',
     aiTidyBtn: 'KI-Formatierung',
     aiTidyPrompt:
@@ -1286,6 +1292,7 @@ export const strings = {
     aiSummarizeBtn: 'Resumen IA',
     aiSummarizePrompt: 'Resume el contenido principal y los puntos clave de este documento',
     aiPolishBtn: 'Pulido IA',
+    aiQuickActionsTip: 'Acciones rápidas de IA',
     aiPolishPrompt: 'Pule todo el documento para que la redacción sea más clara y fluida',
     aiTidyBtn: 'Formato IA',
     aiTidyPrompt:
@@ -1478,6 +1485,7 @@ export const strings = {
     aiSummarizeBtn: 'สรุปด้วย AI',
     aiSummarizePrompt: 'สรุปเนื้อหาหลักและประเด็นสำคัญของเอกสารนี้',
     aiPolishBtn: 'ขัดเกลาด้วย AI',
+    aiQuickActionsTip: 'การดำเนินการ AI ด่วน',
     aiPolishPrompt: 'ขัดเกลาเอกสารทั้งฉบับให้อ่านชัดเจนและลื่นไหลขึ้น',
     aiTidyBtn: 'จัดรูปแบบด้วย AI',
     aiTidyPrompt:
@@ -1671,6 +1679,7 @@ export const strings = {
     aiSummarizeBtn: 'Ringkasan AI',
     aiSummarizePrompt: 'Ringkas isi utama dan poin-poin penting dokumen ini',
     aiPolishBtn: 'Poles AI',
+    aiQuickActionsTip: 'Aksi AI cepat',
     aiPolishPrompt: 'Poles seluruh dokumen agar tulisan lebih jelas dan mengalir',
     aiTidyBtn: 'Format AI',
     aiTidyPrompt:
@@ -1865,6 +1874,7 @@ export const strings = {
     aiSummarizeBtn: 'ИИ-резюме',
     aiSummarizePrompt: 'Кратко изложите основное содержание и ключевые моменты этого документа',
     aiPolishBtn: 'ИИ-редактура',
+    aiQuickActionsTip: 'Быстрые действия ИИ',
     aiPolishPrompt: 'Отредактируйте весь документ, чтобы текст стал яснее и плавнее',
     aiTidyBtn: 'ИИ-форматирование',
     aiTidyPrompt:
@@ -2056,6 +2066,7 @@ export const strings = {
     aiSummarizeBtn: 'تلخيص AI',
     aiSummarizePrompt: 'لخّص المحتوى الرئيسي والنقاط الأساسية لهذا المستند',
     aiPolishBtn: 'تحسين AI',
+    aiQuickActionsTip: 'إجراءات الذكاء الاصطناعي السريعة',
     aiPolishPrompt: 'حسّن المستند بأكمله لجعل الكتابة أوضح وأكثر سلاسة',
     aiTidyBtn: 'تنسيق AI',
     aiTidyPrompt:
@@ -2251,6 +2262,7 @@ export const strings = {
     aiSummarizeBtn: 'Resumo IA',
     aiSummarizePrompt: 'Resuma o conteúdo principal e os pontos-chave deste documento',
     aiPolishBtn: 'Aprimorar IA',
+    aiQuickActionsTip: 'Ações rápidas de IA',
     aiPolishPrompt: 'Aprimore todo o documento para deixar o texto mais claro e fluente',
     aiTidyBtn: 'Formatação IA',
     aiTidyPrompt:
@@ -2446,6 +2458,7 @@ export const strings = {
     aiSummarizeBtn: 'Riassunto IA',
     aiSummarizePrompt: 'Riassumi il contenuto principale e i punti chiave di questo documento',
     aiPolishBtn: 'Rifinitura IA',
+    aiQuickActionsTip: 'Azioni IA rapide',
     aiPolishPrompt: 'Rifinisci tutto il documento per rendere il testo più chiaro e scorrevole',
     aiTidyBtn: 'Formattazione IA',
     aiTidyPrompt:
@@ -2640,6 +2653,7 @@ export const strings = {
     aiSummarizeBtn: 'Podsumowanie AI',
     aiSummarizePrompt: 'Podsumuj główną treść i kluczowe punkty tego dokumentu',
     aiPolishBtn: 'Szlif AI',
+    aiQuickActionsTip: 'Szybkie akcje AI',
     aiPolishPrompt: 'Dopracuj cały dokument, aby tekst był jaśniejszy i płynniejszy',
     aiTidyBtn: 'Formatowanie AI',
     aiTidyPrompt:
@@ -2835,6 +2849,7 @@ export const strings = {
     aiSummarizeBtn: 'AI-samenvatting',
     aiSummarizePrompt: 'Vat de hoofdinhoud en kernpunten van dit document samen',
     aiPolishBtn: 'AI-polijsten',
+    aiQuickActionsTip: 'Snelle AI-acties',
     aiPolishPrompt: 'Polijst het hele document zodat de tekst duidelijker en vloeiender wordt',
     aiTidyBtn: 'AI-opmaak',
     aiTidyPrompt:
@@ -3028,6 +3043,7 @@ export const strings = {
     aiSummarizeBtn: 'Ringkasan AI',
     aiSummarizePrompt: 'Ringkaskan kandungan utama dan perkara penting dokumen ini',
     aiPolishBtn: 'Gilap AI',
+    aiQuickActionsTip: 'Tindakan AI pantas',
     aiPolishPrompt: 'Gilap keseluruhan dokumen supaya penulisan lebih jelas dan lancar',
     aiTidyBtn: 'Format AI',
     aiTidyPrompt:
@@ -3218,6 +3234,7 @@ export const strings = {
     aiSummarizeBtn: 'סיכום AI',
     aiSummarizePrompt: 'סכם את התוכן העיקרי ואת הנקודות המרכזיות של מסמך זה',
     aiPolishBtn: 'ליטוש AI',
+    aiQuickActionsTip: 'פעולות AI מהירות',
     aiPolishPrompt: 'לטש את המסמך כולו כדי שהכתיבה תהיה ברורה וזורמת יותר',
     aiTidyBtn: 'עיצוב AI',
     aiTidyPrompt:
@@ -3412,6 +3429,7 @@ export const strings = {
     aiSummarizeBtn: 'AI सारांश',
     aiSummarizePrompt: 'इस दस्तावेज़ की मुख्य सामग्री और प्रमुख बिंदुओं का सारांश दें',
     aiPolishBtn: 'AI परिष्करण',
+    aiQuickActionsTip: 'त्वरित AI क्रियाएँ',
     aiPolishPrompt: 'पूरे दस्तावेज़ को परिष्कृत करें ताकि लेखन अधिक स्पष्ट और प्रवाहपूर्ण हो',
     aiTidyBtn: 'AI स्वरूपण',
     aiTidyPrompt:
@@ -3602,6 +3620,7 @@ export const strings = {
     aiSummarizeBtn: 'AI 總結',
     aiSummarizePrompt: '總結這篇文件的主要內容和要點',
     aiPolishBtn: 'AI 潤飾',
+    aiQuickActionsTip: 'AI 快捷能力',
     aiPolishPrompt: '潤飾全文，使表達更清晰流暢',
     aiTidyBtn: 'AI 排版',
     aiTidyPrompt:

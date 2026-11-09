@@ -825,6 +825,12 @@ export interface PdfAgentAskOp {
   excerpt?: string
   /** 'queue' = add to the host's batch instead of sending right away (default 'now'). */
   mode?: 'now' | 'queue'
+  /**
+   * 'document' = a whole-document quick action from the AI-mode bar (AI 总结 /
+   * AI 要点 …): no selection exists, quads is empty and pageIndex is a 0
+   * placeholder. Undefined = the classic selection-scoped note.
+   */
+  scope?: 'document'
 }
 
 export type PdfAgentAskResult = { ok: true } | { ok: false; error: string }

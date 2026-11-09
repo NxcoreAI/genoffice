@@ -4943,6 +4943,21 @@ export function App(): React.JSX.Element {
     window.desktopApi?.askQueueAction?.(action)
   }
 
+  /**
+   * EverRoom embed: whole-workbook quick actions from the AI-mode bar (AI 分析 /
+   * AI 校验). scope 'workbook' tells the host there is no selection anchor —
+   * the instruction applies to the whole workbook.
+   */
+  const handleAiQuickAskHost = (instruction: string): void => {
+    void window.desktopApi
+      ?.agentAsk?.({ instruction, scope: 'workbook' })
+      .then((result) => {
+        if (!result || result.ok) return
+        setMessage(String(result.error))
+      })
+      .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))
+  }
+
   const aiScopeChip = resolveScopeChip(aiRunScope, aiScope, aiScopeDismissed)
 
   return (
@@ -5009,6 +5024,7 @@ export function App(): React.JSX.Element {
         aiSelectionAskAnchor={aiSelectionAskAnchor}
         onAiSelectionAskDismiss={() => setAiSelectionAskAnchor(null)}
         onAiSelectionAskHost={handleAiSelectionAskHost}
+        onAiQuickAskHost={handleAiQuickAskHost}
         onAiScopeDismiss={() => {
           setAiScopeDismissed(true)
           setAiSelectionAskAnchor(null)

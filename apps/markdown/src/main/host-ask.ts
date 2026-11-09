@@ -59,6 +59,7 @@ export function normalizeAgentAskOp(raw: unknown): MdAgentAskOp | null {
     ...(excerpt ? { excerpt } : {}),
     ...(offset > 0 ? { offset } : {}),
     ...(value.mode === 'queue' ? { mode: 'queue' as const } : {}),
+    ...(value.scope === 'document' ? { scope: 'document' as const } : {}),
   }
 }
 

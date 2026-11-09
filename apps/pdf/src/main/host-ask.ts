@@ -62,21 +62,26 @@ function quads(value: unknown): number[][] | null {
 /**
  * Normalize an untrusted renderer payload into a bounded agent-ask op.
  * Returns null when the payload carries no instruction or no usable anchor.
+ * scope 'document' (AI-mode-bar quick actions) carries no selection: empty
+ * quads are accepted then, and pageIndex stays a 0 placeholder.
  */
 export function normalizeAgentAskOp(raw: unknown): PdfAgentAskOp | null {
   const value = (raw ?? {}) as Partial<PdfAgentAskOp>
   const instruction = trimmedText(value.instruction, MAX_INSTRUCTION_CHARS)
   if (!instruction) return null
+  const documentScope = value.scope === 'document'
   const page = pageIndex(value.pageIndex)
   const pageQuads = quads(value.quads)
-  if (page === null || pageQuads === null) return null
+  if (page === null) return null
+  if (!documentScope && pageQuads === null) return null
   const excerpt = excerptText(value.excerpt)
   return {
     instruction,
     pageIndex: page,
-    quads: pageQuads,
+    quads: pageQuads ?? [],
     ...(excerpt ? { excerpt } : {}),
     ...(value.mode === 'queue' ? { mode: 'queue' as const } : {}),
+    ...(documentScope ? { scope: 'document' as const } : {}),
   }
 }
 

@@ -106,3 +106,80 @@
     display: none;
   }
 }
+
+/* ---------- Quick AI actions menu (WPS-style shortcuts) ----------
+ * Split entry: primary runs the first action, the caret opens the menu.
+ * Position: fixed + CSS-anchored to the bar (top-right of the caret) so no
+ * scroll container clips it; colors are token-only per the theming rules. */
+.editor-mode-ai-split {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.editor-mode-ai-split .editor-mode-ai {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.editor-mode-ai-caret {
+  padding: 0 3px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.editor-mode-caret {
+  width: 0;
+  height: 0;
+  border-top: 3.5px solid currentColor;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+}
+
+.editor-mode-ai-caret.is-open .editor-mode-caret {
+  transform: rotate(180deg);
+}
+
+.editor-mode-ai-menu {
+  position: fixed;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 61;
+  min-width: 148px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--chrome-bg);
+  box-shadow: var(--shadow-menu);
+}
+
+/* Fixed-position menus cannot inherit the bar's hover-opacity: always solid. */
+.editor-mode-ai-menu .editor-mode-ai-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+}
+
+.editor-mode-ai-menu .editor-mode-ai-item.is-active,
+.editor-mode-ai-menu .editor-mode-ai-item:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.editor-mode-ai-menu .editor-mode-ai-item svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}

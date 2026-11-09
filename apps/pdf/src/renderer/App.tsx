@@ -5683,6 +5683,44 @@ export default function App() {
     setAiPreset({ text, nonce: Date.now() })
   }
 
+  /**
+   * EverRoom embed: whole-document quick actions from the AI-mode bar (AI 总结 /
+   * AI 要点). scope 'document' tells the host there is no selection anchor —
+   * the instruction applies to the whole document. Standalone builds keep the
+   * local AI-panel preset path via runAiPreset.
+   */
+  const submitHostDocumentAsk = (instruction: string): void => {
+    void window.pdfApi
+      .agentAsk({ instruction, pageIndex: 0, quads: [], scope: 'document' })
+      .then((result) => {
+        if (result.ok) return
+        console.warn('[pdf] host quick action failed:', result.error)
+        showNotice(result.error || t('aiNoteQueueFailed'))
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn('[pdf] host quick action failed:', message)
+        showNotice(message || t('aiNoteQueueFailed'))
+      })
+  }
+
+  /** Quick AI capabilities for the AI-mode bar (WPS-style shortcuts). */
+  const runAiQuick = (promptKey: 'aiQuickSummaryPrompt' | 'aiQuickKeyPointsPrompt'): void => {
+    const withSelection = aiSelection
+      ? promptKey === 'aiQuickSummaryPrompt' ? 'aiQuickSummarySelPrompt' : 'aiQuickKeyPointsSelPrompt'
+      : promptKey
+    const text = t(withSelection)
+    if (everroomEmbed) {
+      submitHostDocumentAsk(text)
+      return
+    }
+    runAiPreset(text)
+  }
+  const aiQuickActions = [
+    { id: 'summarize', label: t('aiSummarizeBtn'), run: () => runAiQuick('aiQuickSummaryPrompt') },
+    { id: 'keypoints', label: t('aiKeyPointsBtn'), run: () => runAiQuick('aiQuickKeyPointsPrompt') },
+  ]
+
   /** Converter dropdown → the shell's local conversion flows (save dialog, password prompt) */
   const convertTo = async (format: PdfConvertFormat): Promise<void> => {
     setConvertOpen(false)
@@ -5971,7 +6009,8 @@ export default function App() {
 
   return (
     <div className={`app${aiMode ? ' ai-mode' : ''}`}>
-      {/* AI edit mode: the panel is collapsed, only save / undo / redo / AI 总结 stay */}
+      {/* AI edit mode: the panel is collapsed; the floating bar keeps save /
+          undo / redo plus the quick AI actions (AI 总结 / AI 要点) */}
       {aiMode && (
         <EditorModeBar
           labels={{
@@ -5980,14 +6019,16 @@ export default function App() {
             undo: t('undo'),
             redo: t('redo'),
             ai: t('aiSummarizeBtn'),
+            aiMenuTip: t('aiQuickActionsTip'),
           }}
           // Same conditions the QAT buttons use, so the bar never offers a dead action
           canSave={dirty && saveState !== 'saving'}
           canUndo={undoStack.length > 0}
           canRedo={redoStack.length > 0}
-          // No host-agent channel in the EverRoom embed: the AI surface is absent there
-          showAi={!everroomEmbed}
-          // The ribbon AI 总结 button carries no disabled state, so neither does the bar
+          // The embed relays quick actions to the host agent (scope 'document');
+          // standalone builds run them in the local AI panel as before.
+          showAi
+          // The ribbon AI buttons carry no disabled state, so neither does the bar
           aiDisabled={false}
           onRestore={() => setAiMode(false)}
           onSave={() => void save()}
@@ -5996,6 +6037,7 @@ export default function App() {
           onAi={() =>
             runAiPreset(t(aiSelection ? 'aiQuickSummarySelPrompt' : 'aiQuickSummaryPrompt'))
           }
+          aiActions={aiQuickActions}
         />
       )}
       <div className="ribbon">

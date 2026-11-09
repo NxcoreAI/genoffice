@@ -1170,6 +1170,12 @@ export interface SlidesAgentAskOp {
   mode?: 'now' | 'queue'
   /** Plain-text excerpt of the selected elements (whitespace collapsed, ≤200 chars). */
   excerpt?: string
+  /**
+   * 'page' = a current-page quick action from the AI-mode bar (AI 美化 / AI 事实
+   * 核查 …): the whole slide is the target, so `targets` is empty and the host
+   * message addresses the page, not specific elements.
+   */
+  scope?: 'page'
 }
 
 export type SlidesAgentAskResult = { ok: true } | { ok: false; error: string }

@@ -2614,6 +2614,12 @@ export interface SheetsAgentAskOp {
    */
   excerpt?: string
   mode?: SheetsAgentAskMode
+  /**
+   * 'workbook' = a whole-workbook quick action from the AI-mode bar (AI 分析 /
+   * AI 校验 …): no selection exists, no range/sheetId is claimed. Undefined =
+   * the classic selection-scoped ask.
+   */
+  scope?: 'workbook'
 }
 
 /**

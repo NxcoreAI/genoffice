@@ -76,6 +76,12 @@ export interface MdAgentAskOp {
   offset?: number
   /** 'queue' = add to the host's batch instead of sending right away (default 'now'). */
   mode?: 'now' | 'queue'
+  /**
+   * 'document' = a whole-document quick action from the AI-mode bar (润色 /
+   * 总结 …): blockIndex stays a 0 placeholder and no excerpt is claimed.
+   * Undefined = the classic selection-scoped note.
+   */
+  scope?: 'document'
 }
 
 export type MdAgentAskResult = { ok: true } | { ok: false; error: string }
