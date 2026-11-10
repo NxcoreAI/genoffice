@@ -3707,7 +3707,7 @@ export function registerDocsIpc(): void {
           margins: { top: 0, bottom: 0, left: 0, right: 0 },
         })
         writeFileSync(filePath, data)
-        openGeneratedFile(filePath)
+        openGeneratedFile(filePath, event.sender.id)
         return { ok: true, path: filePath }
       } catch (err) {
         return { ok: false, error: String(err) }
@@ -3762,7 +3762,7 @@ export function registerDocsIpc(): void {
           for (const page of pages) merged.addPage(page)
         }
         writeFileSync(filePath, Buffer.from(await merged.save()))
-        openGeneratedFile(filePath)
+        openGeneratedFile(filePath, event.sender.id)
         return { ok: true, path: filePath }
       } catch (err) {
         return { ok: false, error: String(err) }
@@ -3820,15 +3820,25 @@ export function setDocsShellHooks(hooks: DocsShellHooks | null): void {
   shellHooks = hooks
 }
 
+/** Host mode per docs view ('everroom' = embedded host that presents results
+ *  in-app). Tracked here so post-write presentation can pick the right surface. */
+const hostModeByWcId = new Map<number, 'tab' | 'everroom'>()
+
 /** After writing an exported/AI-generated file: open it in the right tab
  * (shell) or reveal it in the folder (standalone). Tab-opening failure must
- * not report the write itself as failed — the file is already persisted. */
-function openGeneratedFile(path: string): void {
+ * not report the write itself as failed — the file is already persisted.
+ *
+ * EverRoom-hosted views are the exception: the embed host imports the written
+ * artifact into its library and opens it in the app's own file pane, so a
+ * Finder reveal here would pop the system file manager for a temporary export
+ * path instead (the user asked for the in-app pane, not Finder). */
+function openGeneratedFile(path: string, wcId?: number): void {
   try {
     if (shellHooks?.openGeneratedPath?.(path)) return
   } catch (err) {
     console.warn('[docs] Failed to open generated file:', err)
   }
+  if (wcId !== undefined && hostModeByWcId.get(wcId) === 'everroom') return
   shell.showItemInFolder(path)
 }
 
@@ -4719,7 +4729,9 @@ export function createDocsView(
   }
   // view.webContents becomes undefined after destroy, so grab the id beforehand
   const wcId = view.webContents.id
+  hostModeByWcId.set(wcId, hostMode)
   view.webContents.once('destroyed', () => {
+    hostModeByWcId.delete(wcId)
     pendingWindowOpens.delete(wcId)
     dropDocWriter(wcId)
     closeCheckWaiters.get(wcId)?.({ dirty: false, autoSave: false })
