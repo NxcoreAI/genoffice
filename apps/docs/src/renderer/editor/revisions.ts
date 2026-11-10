@@ -266,9 +266,55 @@ function stripTrackMarker(raw: string | null, tag: string, container: string): s
   return out
 }
 
+/**
+ * A tracked replacement is recorded as two independent ranges: the new text
+ * (ins) followed by the struck-through old text (del), both stamped with the
+ * same author/date. The Review tab shows them as separate entries, but
+ * accepting/rejecting only one half leaves a hidden half behind: rejecting
+ * the insertion while the deletion stays pending makes the whole value vanish
+ * from "No Markup"/balloon views, and accepting the insertion leaves the old
+ * value struck through forever. Treat the pair as one change when either half
+ * is accepted/rejected.
+ */
+function isReplacementPair(a: RevisionRange, b: RevisionRange): boolean {
+  if (a.author !== b.author) return false
+  if ((a.date ?? '') !== (b.date ?? '')) return false
+  // replacement: insertion directly before/after the struck old text
+  if (a.kind === 'ins' && b.kind === 'del') return b.from === a.to || b.to === a.from
+  if (a.kind === 'del' && b.kind === 'ins') return a.to === b.from || a.from === b.to
+  // whole-block replacement: the two nodes are adjacent
+  if (a.kind === 'blockIns' && b.kind === 'blockDel') return b.from === a.to || b.to === a.from
+  if (a.kind === 'blockDel' && b.kind === 'blockIns') return a.to === b.from || a.from === b.to
+  return false
+}
+
+function expandReplacementPairs(
+  targets: RevisionRange[],
+  all: RevisionRange[],
+): RevisionRange[] {
+  const rangeKey = (r: RevisionRange) => `${r.kind}:${r.from}:${r.to}:${r.author}`
+  const selected = new Map<string, RevisionRange>()
+  for (const target of targets) selected.set(rangeKey(target), target)
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const target of [...selected.values()]) {
+      for (const candidate of all) {
+        if (selected.has(rangeKey(candidate))) continue
+        if (!isReplacementPair(target, candidate)) continue
+        selected.set(rangeKey(candidate), candidate)
+        grew = true
+      }
+    }
+  }
+  return [...selected.values()]
+}
+
 function applyRevisions(editor: Editor, ranges: RevisionRange[], mode: 'accept' | 'reject'): void {
   if (ranges.length === 0) return
   const { state } = editor
+  // expand a single targeted half into the whole replacement it belongs to
+  ranges = expandReplacementPairs(ranges, collectRevisions(state.doc))
   const tr = state.tr
   tr.setMeta(TRACK_IGNORE, true)
   // reverse order keeps earlier positions valid while later ranges mutate

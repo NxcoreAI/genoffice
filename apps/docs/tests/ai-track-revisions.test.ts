@@ -8,7 +8,12 @@ import {
   saveDocx,
 } from '@genoffice/docx-engine'
 import { blocksToPmDoc, pmDocToSavePlan, type PmNode } from '../src/renderer/editor/convert'
-import { applyRevisionsBy, collectRevisions } from '../src/renderer/editor/revisions'
+import {
+  applyRevisionsBy,
+  collectRevisions,
+  rejectAllRevisions,
+  rejectCurrentRevision,
+} from '../src/renderer/editor/revisions'
 import { executeTool } from '../src/renderer/ai/tools'
 
 /**
@@ -212,6 +217,71 @@ describe('AI edits merged into the revision model', () => {
     applyRevisionsBy(editor, TRACK.author, 'accept')
     expect(editor.state.doc.textContent).not.toContain('Some text.')
     expect(editor.state.doc.textContent).toContain('Replacement text.')
+    editor.destroy()
+  })
+
+  it('replace_blocks records revisions when the live tracker is on even without an explicit track author', async () => {
+    const { editor } = await createEditor(true)
+    const storage = editor.storage.trackChanges as { enabled: boolean; author: string }
+    storage.enabled = true
+    storage.author = 'Tester'
+
+    const exec = await executeTool(
+      editor,
+      {
+        id: 't',
+        name: 'replace_blocks',
+        input: { startBlockIndex: 0, endBlockIndex: 0, html: '<p>Rewritten first paragraph.</p>' },
+      },
+      NUM_IDS,
+    )
+    expect(exec.isError).toBeFalsy()
+    expect(collectRevisions(editor.state.doc).length).toBeGreaterThan(0)
+    rejectAllRevisions(editor)
+    expect(editor.state.doc.textContent).toContain('Original first paragraph.')
+    expect(editor.state.doc.textContent).not.toContain('Rewritten')
+    editor.destroy()
+  })
+
+  it('apply_commands find/replace under tracking keeps the old text; rejecting the insertion restores it', async () => {
+    const editor = new Editor({
+      element: document.createElement('div'),
+      extensions: (await import('../src/renderer/editor/extensions')).editorExtensions,
+    })
+    editor.commands.setContent(
+      blocksToPmDoc([
+        {
+          type: 'paragraph',
+          docxIndex: 0,
+          runs: [{ text: '当前金额：100 元', bold: false, italic: false }],
+        } as never,
+      ]) as never,
+    )
+    const storage = editor.storage.trackChanges as { enabled: boolean; author: string }
+    storage.enabled = true
+    storage.author = 'Tester'
+
+    const exec = await executeTool(
+      editor,
+      {
+        id: 't',
+        name: 'apply_commands',
+        input: {
+          commands: [{ replaceAllText: { containsText: '100 元', replaceText: '150 元' } }],
+        },
+      },
+      NUM_IDS,
+    )
+    expect(exec.isError).toBeFalsy()
+    const revisions = collectRevisions(editor.state.doc)
+    expect(revisions.map((revision) => revision.kind).sort()).toEqual(['del', 'ins'])
+    expect(editor.state.doc.textContent).toBe('当前金额：150 元100 元')
+
+    const insertion = revisions.find((revision) => revision.kind === 'ins')!
+    editor.commands.setTextSelection(insertion.from)
+    expect(rejectCurrentRevision(editor)).toBe(true)
+    expect(editor.state.doc.textContent).toBe('当前金额：100 元')
+    expect(collectRevisions(editor.state.doc)).toHaveLength(0)
     editor.destroy()
   })
 

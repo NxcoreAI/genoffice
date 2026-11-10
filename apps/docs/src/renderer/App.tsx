@@ -829,6 +829,10 @@ function describeDocumentState(refs: {
     },
     bookmarks,
     sources: parsed?.sources.length ?? 0,
+    // live Track Changes toggle: the host agent uses it to decide whether edits
+    // land as reviewable revisions or write straight into the document
+    trackChanges:
+      (refs.editor?.storage.trackChanges as TrackChangesStorage | undefined)?.enabled === true,
     protection: {
       editingRestriction: protection ? (protection.enforced ? protection.edit : null) : null,
       writePassword: !!writeProtection?.hash,
@@ -4406,6 +4410,7 @@ export function App() {
         }
         const results = []
         let mutated = false
+        const revisionsBefore = collectRevisions(liveEditor.state.doc).length
         for (const call of calls.slice(0, 50)) {
           if (!ALLOWED_TOOLS.has(call.name)) {
             results.push({
@@ -4733,11 +4738,18 @@ export function App() {
             continue
           }
           try {
+            // Revisions created by the host agent carry the AI author, not the
+            // editor's manual-edit author ("用户"), so the Review tab can tell
+            // them apart. Read the live tracker each call: an earlier
+            // apply_operations in this batch may have just toggled it on.
+            const callTrack = (liveEditor.storage.trackChanges as TrackChangesStorage | undefined)?.enabled
+              ? { author: AI_REVISION_AUTHOR }
+              : undefined
             const execution = await executeTool(
               liveEditor,
               { id: call.id, name: call.name, input: call.input ?? {} },
               numIds(),
-              undefined,
+              callTrack,
               undefined,
               undefined,
               agentCommentsRef.current ?? undefined,
@@ -4760,6 +4772,12 @@ export function App() {
               isError: true,
             })
           }
+        }
+        if (mutated && collectRevisions(liveEditor.state.doc).length > revisionsBefore) {
+          // A pending revision must be visible: the panel may have been left in
+          // No Markup mode, which hides insertions/deletions entirely and makes
+          // the edit look final before the user accepted anything.
+          setRevisionDisplay('all')
         }
         // silent save (never prompts; a pathless doc would land in the default
         // folder — hosts only drive executor edits on already-open library files).
@@ -5890,9 +5908,13 @@ export function App() {
     showGrid ? 'show-grid' : '',
   ].join(' ')
 
+  // Word's balloon view moves deletions out of the text flow into a margin
+  // column. The EverRoom right-side panel is too narrow for that column, so
+  // deletions vanished and a tracked replacement looked like a plain edit
+  // until accepted. Keep inline strikethrough markup there.
   return (
     <div
-      className={`app ${readMode ? 'read-mode' : ''}${revisionDisplay !== 'all' ? ` rev-display-${revisionDisplay}` : ''}${revisionDisplay === 'all' && viewMode === 'print' ? ' rev-balloon' : ''}${chromeHidden ? ' chrome-hidden' : ''}`}
+      className={`app ${readMode ? 'read-mode' : ''}${revisionDisplay !== 'all' ? ` rev-display-${revisionDisplay}` : ''}${revisionDisplay === 'all' && viewMode === 'print' && !everroomEmbed ? ' rev-balloon' : ''}${chromeHidden ? ' chrome-hidden' : ''}`}
     >
       <ToastHost />
       {/* AI edit mode: the panel is collapsed; the floating bar keeps save /

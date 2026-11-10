@@ -2646,6 +2646,26 @@ describe('review.findReplace parity (B5)', () => {
     expect(outcome.results[0].record).toMatchObject({ matches: 3 })
   })
 
+  it('rejecting the insertion half of a tracked replacement restores the old text', async () => {
+    const editor = createEditor([para('当前金额：100 元')])
+    const storage = editor.storage.trackChanges as { enabled: boolean; author: string }
+    storage.enabled = true
+    storage.author = 'Tester'
+
+    const replaced = await run(editor, [
+      { op: 'review.findReplace', find: '100 元', replace: '150 元' },
+    ])
+    expect(replaced.ok).toBe(true)
+    expect(nodeTexts(editor)).toEqual(['当前金额：150 元100 元'])
+
+    const rejected = await run(editor, [
+      { op: 'review.reject', revisionIds: ['r0'], confirm: true },
+    ])
+    expect(rejected.ok).toBe(true)
+    expect(nodeTexts(editor)).toEqual(['当前金额：100 元'])
+    expect(collectRevisions(editor.state.doc)).toHaveLength(0)
+  })
+
   it('supports replacing only the first occurrence', async () => {
     const editor = createEditor([para('cat cat cat')])
     const outcome = await run(editor, [

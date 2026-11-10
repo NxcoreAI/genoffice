@@ -1023,3 +1023,90 @@ describe('repeated backspace under track changes', () => {
     editor.destroy()
   })
 })
+
+describe('tracked replacement accept/reject is atomic', () => {
+  function trackingEditor(initial: string): Editor {
+    const editor = createEditor([para(text(initial))])
+    const storage = editor.storage.trackChanges as TrackChangesStorage
+    storage.enabled = true
+    storage.author = 'Tester'
+    return editor
+  }
+
+  /** current-document positions of a plain text needle */
+  function findRange(editor: Editor, needle: string): { from: number; to: number } {
+    let found: { from: number; to: number } | null = null
+    editor.state.doc.descendants((node, pos) => {
+      if (found || !node.isText || !node.text) return
+      const at = node.text.indexOf(needle)
+      if (at >= 0) found = { from: pos + at, to: pos + at + needle.length }
+    })
+    if (!found) throw new Error(`"${needle}" not found`)
+    return found
+  }
+
+  /** replace `oldText` with `newText` while the recorder is on */
+  function replaceTracked(editor: Editor, oldText: string, newText: string): void {
+    const range = findRange(editor, oldText)
+    editor.commands.insertContentAt(range, newText)
+  }
+
+  it('rejecting the insertion also rejects the paired deletion and restores the old value', () => {
+    const editor = trackingEditor('当前金额：100 元')
+    replaceTracked(editor, '100 元', '150 元')
+    expect(collectRevisions(editor.state.doc).map((r) => r.kind).sort()).toEqual(['del', 'ins'])
+
+    const ins = collectRevisions(editor.state.doc).find((r) => r.kind === 'ins')!
+    editor.commands.setTextSelection(ins.from)
+    expect(rejectCurrentRevision(editor)).toBe(true)
+
+    expect(editor.state.doc.textContent).toBe('当前金额：100 元')
+    expect(collectRevisions(editor.state.doc)).toHaveLength(0)
+    editor.destroy()
+  })
+
+  it('accepting the insertion also accepts the paired deletion and leaves only the new value', () => {
+    const editor = trackingEditor('当前金额：100 元')
+    replaceTracked(editor, '100 元', '150 元')
+
+    const ins = collectRevisions(editor.state.doc).find((r) => r.kind === 'ins')!
+    editor.commands.setTextSelection(ins.from)
+    expect(acceptCurrentRevision(editor)).toBe(true)
+
+    expect(editor.state.doc.textContent).toBe('当前金额：150 元')
+    expect(collectRevisions(editor.state.doc)).toHaveLength(0)
+    editor.destroy()
+  })
+
+  it('clicking the struck deletion also rolls back the whole replacement', () => {
+    const editor = trackingEditor('当前金额：100 元')
+    replaceTracked(editor, '100 元', '150 元')
+
+    const del = collectRevisions(editor.state.doc).find((r) => r.kind === 'del')!
+    editor.commands.setTextSelection(del.from)
+    expect(rejectCurrentRevision(editor)).toBe(true)
+
+    expect(editor.state.doc.textContent).toBe('当前金额：100 元')
+    expect(collectRevisions(editor.state.doc)).toHaveLength(0)
+    editor.destroy()
+  })
+
+  it('sequential replacements stay clean: accept 100→150, then reject 150→200 keeps 150', () => {
+    const editor = trackingEditor('当前金额：100 元')
+    replaceTracked(editor, '100 元', '150 元')
+    const firstIns = collectRevisions(editor.state.doc).find((r) => r.kind === 'ins')!
+    editor.commands.setTextSelection(firstIns.from)
+    acceptCurrentRevision(editor)
+    expect(editor.state.doc.textContent).toBe('当前金额：150 元')
+    expect(collectRevisions(editor.state.doc)).toHaveLength(0)
+
+    replaceTracked(editor, '150 元', '200 元')
+    const secondIns = collectRevisions(editor.state.doc).find((r) => r.kind === 'ins')!
+    editor.commands.setTextSelection(secondIns.from)
+    rejectCurrentRevision(editor)
+
+    expect(editor.state.doc.textContent).toBe('当前金额：150 元')
+    expect(collectRevisions(editor.state.doc)).toHaveLength(0)
+    editor.destroy()
+  })
+})

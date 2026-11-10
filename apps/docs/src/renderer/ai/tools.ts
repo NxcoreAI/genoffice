@@ -690,6 +690,15 @@ function executeSyncTool(
   comments?: AiCommentsAccess,
   hf?: AiHeaderFooterAccess,
 ): ToolExecution {
+  // If the user turned Track Changes on, every agent edit must be recorded as
+  // a revision too — block replacement/insertion used to bypass the recorder
+  // entirely when callers passed no explicit author. Fall back to the live
+  // tracker state (and its author) instead of writing the change silently.
+  const tracker = editor.storage.trackChanges as
+    | { enabled?: boolean; author?: string }
+    | undefined
+  const activeTrack: AiTrack | undefined =
+    track ?? (tracker?.enabled ? { author: tracker.author || t('editorDefaultAuthor') } : undefined)
   switch (call.name) {
     case 'get_document_context':
       return {
@@ -751,7 +760,7 @@ function executeSyncTool(
       const count = editor.state.doc.childCount
       if (isBlankDocument(editor)) {
         // the blank template's single empty paragraph gets replaced
-        replaceBlockRange(editor, 0, count - 1, nodes, track)
+        replaceBlockRange(editor, 0, count - 1, nodes, activeTrack)
         return {
           output: `Inserted ${nodes.length} block(s) (the document was empty). Block indexes have changed; use get_document_context if needed.`,
           mutated: true,
@@ -764,7 +773,7 @@ function executeSyncTool(
         : Math.min(Math.max(Number(call.input.afterBlockIndex), -1), count - 1)
       if (!Number.isInteger(after)) return fail(t('aiSumInsertContent'), 'invalid afterBlockIndex')
       // -1 hits blockRangePositions' 0/0 default, i.e. insert at doc start
-      insertBlocksAfter(editor, after, nodes, track)
+      insertBlocksAfter(editor, after, nodes, activeTrack)
       return {
         output: `Inserted ${nodes.length} block(s) after block ${after}. Subsequent block indexes have shifted; use get_document_context if needed.`,
         mutated: true,
@@ -786,7 +795,7 @@ function executeSyncTool(
       }
       if (nodes.length === 0)
         return fail(t('aiSumReplaceContent'), 'html did not parse into any content blocks')
-      replaceBlockRange(editor, range.start, range.end, nodes, track)
+      replaceBlockRange(editor, range.start, range.end, nodes, activeTrack)
       return {
         output: `Replaced blocks ${range.start}-${range.end} with ${nodes.length} block(s). Block indexes have changed; use get_document_context if needed.`,
         mutated: true,
@@ -1041,7 +1050,7 @@ function executeSyncTool(
         return fail(t('aiSumApplyCommands'), 'commands must be a non-empty array')
       }
       const envelope: CommandEnvelope = { commands: commands as Command[] }
-      const outcome = executeCommands(editor, envelope, { numIds, track, selection: scope })
+      const outcome = executeCommands(editor, envelope, { numIds, track: activeTrack, selection: scope })
       if (!outcome.ok)
         return fail(t('aiSumApplyCommands'), outcome.error ?? 'command execution failed')
       const changed = outcome.results.reduce((sum, r) => sum + r.changed, 0)
