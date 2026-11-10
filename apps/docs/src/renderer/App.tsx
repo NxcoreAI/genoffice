@@ -61,6 +61,7 @@ import {
   buildDocContext,
   findNumId,
   getSelectionScope,
+  hostNoteRange,
   type AiHfState,
   type NumIds,
 } from './ai/protocol'
@@ -5713,7 +5714,9 @@ export function App() {
     if (!everroomEmbed || !editor) return
     clearQueueAnchors(editor)
     for (const item of hostAskQueue) {
-      const { from, to } = blockRangePositions(editor, item.fromBlockIndex, item.toBlockIndex)
+      // 块索引只是宿主队列里的粗糙定位；用摘要收窄到真正选中的那句话，
+      // 否则「只选了一句」也会把整段下划线高亮出来（多选错觉）。
+      const { from, to } = hostNoteRange(editor, item.fromBlockIndex, item.toBlockIndex, item.excerpt)
       if (from < to) addQueueAnchor(editor, item.id, from, to, HOST_NOTE_ANCHOR_CLASS)
     }
   }, [everroomEmbed, editor, hostAskQueue])
@@ -5774,7 +5777,13 @@ export function App() {
     const { from, to } = editor.state.selection
     const docNode = editor.state.doc
     const fromBlockIndex = blockIndexOfPos(docNode, from)
-    const toBlockIndex = blockIndexOfPos(docNode, to)
+    // 选区 end 是排他位置：它正好落在下一段开头（offset+nodeSize）时，直接把
+    // blockIndexOfPos(to) 当末块会把**下一段整段**也算进范围——用户只选了一句，
+    // 文档里的锚点高亮与 Agent 的定位却多出一整段（「莫名其妙多选了东西」）。
+    // end 往回一格，范围只覆盖真正被选中的块。
+    const toBlockIndex = to > from
+      ? Math.max(fromBlockIndex, blockIndexOfPos(docNode, to - 1))
+      : fromBlockIndex
     const excerpt = from === to
       ? ''
       : docNode.textBetween(from, to, ' ', ' ').replace(/\s+/g, ' ').trim().slice(0, 200)

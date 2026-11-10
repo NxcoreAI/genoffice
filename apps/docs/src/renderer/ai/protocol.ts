@@ -210,6 +210,65 @@ export function blockRangePositions(
   return { from, to }
 }
 
+/** 摘要短于这个长度就不当锚点：太短的常见词（「的」「请」）匹配唯一性没有意义。 */
+const HOST_NOTE_MIN_EXCERPT = 4
+
+/**
+ * 宿主批注锚点 → 精确范围：宿主队列只带块索引 + 原文摘要（块粒度），直接按块
+ * 画锚点会把「只选了一句」的批注高亮成整段——用户看到的就是莫名其妙多选了
+ * 一整段。这里在块范围内按摘要找**唯一**匹配并收窄到那句话；多块选区、摘要
+ * 被截断（200 字上限）、匹配不唯一或找不到（文档改过）时回退整块范围，宁可不猜。
+ */
+export function hostNoteRange(
+  editor: Editor,
+  startIndex: number,
+  endIndex: number,
+  excerpt: string | undefined,
+): { from: number; to: number } {
+  const fallback = blockRangePositions(editor, startIndex, endIndex)
+  if (startIndex !== endIndex) return fallback
+  const needle = (excerpt ?? '').replace(/\s+/g, ' ').trim()
+  if (needle.length < HOST_NOTE_MIN_EXCERPT || needle.length >= 200) return fallback
+  const doc = editor.state.doc
+  let block: ProseMirrorNode | null = null
+  let blockStart = -1
+  let index = 0
+  doc.forEach((node, offset) => {
+    if (index === startIndex) {
+      block = node
+      blockStart = offset
+    }
+    index++
+  })
+  if (!block || blockStart < 0) return fallback
+
+  // 块内文本 → PM 位置映射；空白压成单个空格，与摘要的归一化口径一致。
+  let text = ''
+  const positions: number[] = []
+  ;(block as ProseMirrorNode).descendants((node, pos) => {
+    if (!node.isText) return true
+    const chars = node.text ?? ''
+    for (let i = 0; i < chars.length; i += 1) {
+      const char = chars[i]!
+      if (/\s/.test(char)) {
+        if (text.endsWith(' ')) continue
+        text += ' '
+      } else {
+        text += char
+      }
+      positions.push(blockStart + 1 + pos + i)
+    }
+    return false
+  })
+  const haystack = text.trimEnd()
+  const at = haystack.indexOf(needle)
+  if (at < 0 || haystack.indexOf(needle, at + 1) >= 0) return fallback
+  const from = positions[at]
+  const last = positions[at + needle.length - 1]
+  if (from === undefined || last === undefined || from >= last + 1) return fallback
+  return { from, to: last + 1 }
+}
+
 // ---- tracked deletions (pending revisions are not current content) ----
 
 const hasDelMark = (node: ProseMirrorNode) => node.marks.some((m) => m.type.name === 'del')
