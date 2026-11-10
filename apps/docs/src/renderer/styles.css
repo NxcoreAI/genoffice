@@ -10083,6 +10083,15 @@ tr > .page-gap-cut {
   max-width: min(336px, calc(100vw - 24px));
   overflow: visible;
   padding: 10px;
+  /* 面板是纯操作区（选模版/点按钮），拖拽或双击选中文字会出现「像被全选一样」的
+     蓝色高亮（标题、文件名、上传/关闭按钮都被染蓝）。整块禁掉文本选中。 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ai-thesis-panel ::selection,
+.ai-thesis-preview-modal ::selection {
+  background: transparent;
 }
 
 .ai-thesis-title {
@@ -10221,21 +10230,27 @@ tr > .page-gap-cut {
   pointer-events: auto;
 }
 
-.ai-thesis-overlay-act {
+/* 选择器带 .layout-menu 前缀：要压过 .layout-menu button:not(:disabled):hover
+   的默认按钮底色（var(--hover) 浅灰白），否则悬停图标会被刷出白色背景框。
+   图标按钮永远是纯图标：background 透明、无框，只保留形状本身。 */
+.layout-menu .ai-thesis-overlay-act,
+.ai-thesis-panel-floating .ai-thesis-overlay-act {
   display: inline-flex;
   width: 34px;
   height: 34px;
+  flex: none;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 0;
-  background: none;
+  background: transparent;
   color: #fff;
   cursor: pointer;
   transition: transform 120ms ease, color 120ms ease;
 }
 
-.ai-thesis-overlay-act svg {
+.layout-menu .ai-thesis-overlay-act svg,
+.ai-thesis-panel-floating .ai-thesis-overlay-act svg {
   width: 18px;
   height: 18px;
   transition: width 120ms ease, height 120ms ease;
@@ -10248,12 +10263,15 @@ tr > .page-gap-cut {
   height: 22px;
 }
 
-.ai-thesis-overlay-act:hover:not(:disabled) {
+.layout-menu .ai-thesis-overlay-act:not(:disabled):hover,
+.ai-thesis-panel-floating .ai-thesis-overlay-act:not(:disabled):hover {
+  background: transparent;
   color: #fff;
   transform: scale(1.12);
 }
 
-.ai-thesis-overlay-act.is-danger:hover:not(:disabled) {
+.layout-menu .ai-thesis-overlay-act.is-danger:not(:disabled):hover,
+.ai-thesis-panel-floating .ai-thesis-overlay-act.is-danger:not(:disabled):hover {
   color: #ff8a8a;
 }
 
