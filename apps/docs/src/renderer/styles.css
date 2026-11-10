@@ -10075,11 +10075,12 @@ tr > .page-gap-cut {
   --ai-thesis-paper-shadow: rgba(31, 31, 31, 0.08);
   --ai-thesis-paper-ink: #1f1f1f;
   --ai-thesis-paper-muted: #6b7280;
-  /* 宽度随视口自适应：窄窗口跟着收窄，宽窗口不超过 336px；不裁剪内容 */
+  /* 宽度收缩包裹两列卡片（卡片宽=时间宽），不留大片空白；
+     窄窗口仍随视口收窄，标题/上传按钮等长内容在自身内换行或截断 */
   box-sizing: border-box;
-  width: min(336px, calc(100vw - 24px));
-  max-width: 100%;
-  min-width: 0;
+  width: fit-content;
+  min-width: min(232px, calc(100vw - 24px));
+  max-width: min(336px, calc(100vw - 24px));
   overflow: visible;
   padding: 10px;
 }
@@ -10114,61 +10115,48 @@ tr > .page-gap-cut {
   line-height: 1.5;
 }
 
-.ai-thesis-ai-fill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0 8px;
-  font-size: 12px;
-  color: #6b7280;
-  cursor: pointer;
-  user-select: none;
+/* AI 补写开关随「AI 补写」功能下线，样式一并移除（无引用）。 */
+
+/* 时间宽度探针：隐藏且不占布局，仅用于量出最长时间字符串的渲染宽 */
+.ai-thesis-time-probe {
+  position: absolute;
+  visibility: hidden;
+  white-space: nowrap;
+  font-size: 10px;
+  pointer-events: none;
 }
 
-.ai-thesis-ai-fill input {
-  width: 13px;
-  height: 13px;
-  accent-color: #7c5cff;
-  cursor: pointer;
-}
-
+/* 模版卡两列并排：列宽统一取 --ai-thesis-card-w（由组件按「最长时间」量出），
+   每张卡片大小完全一致；卡片宽=时间宽+左右 padding，弹窗因此收缩包裹、无多余空白 */
 .ai-thesis-cards {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  max-height: 276px;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(2, var(--ai-thesis-card-w, 96px));
+  justify-content: center;
+  gap: 6px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
 .ai-thesis-card {
   position: relative;
-  /* grid 而非 flex：minmax(0,1fr) 让文件名列可以真正收缩到 0，
-     右侧两颗按钮永远是独立的 auto 列 —— 行宽不可能超过弹窗，也就不会出现横向滚动条 */
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 4px;
+  width: var(--ai-thesis-card-w, 96px);
 }
 
+/* 竖排卡片：纸样在上、文件名/时间在下，整体居中 */
 .ai-thesis-card-main {
   display: flex;
-  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
-  /* 文件名超长时在自身内部截断，绝不把右侧按钮顶出容器 */
-  overflow: hidden;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 6px;
+  gap: 6px;
+  padding: 8px 4px 6px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: none;
   color: inherit;
   cursor: pointer;
-  text-align: left;
+  text-align: center;
 }
 
 .ai-thesis-card-main:hover:not(:disabled) {
@@ -10183,16 +10171,21 @@ tr > .page-gap-cut {
 
 .ai-thesis-card-body {
   display: flex;
+  width: 100%;
   min-width: 0;
-  flex: 1;
   flex-direction: column;
+  align-items: center;
   gap: 2px;
 }
 
+/* 文件名与下方时间行同宽：超出时间宽度即在自身内 … 截断（title 悬停看全名） */
 .ai-thesis-card-body b {
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   font-size: 11px;
   font-weight: 600;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -10200,40 +10193,71 @@ tr > .page-gap-cut {
 .ai-thesis-card-body time {
   color: var(--text-muted);
   font-size: 10px;
+  text-align: center;
+  white-space: nowrap;
 }
 
-.ai-thesis-card-act {
-  display: inline-flex;
-  grid-column: -3 / -2;
-  justify-self: end;
-  width: 28px;
+/* 悬停蒙版：盖住整张竖排卡，两颗纯图标（无底框）在蒙版正中竖排居中——
+   上=小眼睛（预览原文件），下=垃圾桶（删除）。点开前不拦截鼠标。 */
+.ai-thesis-card-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* 关键：不能被长文件名挤压成一条缝 */
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  border: 0;
+  gap: 10px;
   border-radius: 6px;
+  background: var(--ai-thesis-overlay-mask, rgba(31, 35, 41, 0.45));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.ai-thesis-card:hover .ai-thesis-card-overlay,
+.ai-thesis-card:focus-within .ai-thesis-card-overlay {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ai-thesis-overlay-act {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
   background: none;
-  color: var(--text-muted);
+  color: #fff;
   cursor: pointer;
+  transition: transform 120ms ease, color 120ms ease;
 }
 
-.ai-thesis-card-act svg {
-  width: 15px;
-  height: 15px;
+.ai-thesis-overlay-act svg {
+  width: 18px;
+  height: 18px;
+  transition: width 120ms ease, height 120ms ease;
 }
 
-.ai-thesis-card-act:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--accent);
+/* 鼠标放到文件（卡片）上：蒙版出现，两颗图标随之整体放大居中显示 */
+.ai-thesis-card:hover .ai-thesis-overlay-act svg,
+.ai-thesis-card:focus-within .ai-thesis-overlay-act svg {
+  width: 22px;
+  height: 22px;
 }
 
-.ai-thesis-card-act.is-danger:hover:not(:disabled) {
-  color: var(--danger);
+.ai-thesis-overlay-act:hover:not(:disabled) {
+  color: #fff;
+  transform: scale(1.12);
 }
 
-.ai-thesis-card-act:disabled {
+.ai-thesis-overlay-act.is-danger:hover:not(:disabled) {
+  color: #ff8a8a;
+}
+
+.ai-thesis-overlay-act:disabled {
   cursor: default;
 }
 
@@ -10395,45 +10419,8 @@ tr > .page-gap-cut {
   cursor: default;
 }
 
-/* 模版行的删除按钮：右侧小巧图标，常态浅灰、hover 转红提示危险操作。
-   绝对定位到右上角，不参与卡片主区布局（长文件名也不会被挤变形）。 */
-.ai-thesis-card {
-  position: relative;
-}
-
-/* 与其它行内按钮同尺寸，并保留足够点击区：28×28 + padding，窄窗口也点得到 */
-.ai-thesis-card-act.ai-thesis-card-del {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  flex-shrink: 0;
-  /* grid 最后一列 + 右对齐：恒定停在卡片最右侧，不需要横向滚动就能点到 */
-  grid-column: -2 / -1;
-  justify-self: end;
-  align-self: center;
-  padding: 0 6px;
-  border-radius: 6px;
-  color: var(--text-muted);
-  opacity: 0.85;
-  transition: color 120ms ease, opacity 120ms ease, background 120ms ease;
-}
-
-.ai-thesis-card-act.ai-thesis-card-del svg {
-  width: 16px;
-  height: 16px;
-}
-
-.ai-thesis-card-act.ai-thesis-card-del:hover:not(:disabled) {
-  color: var(--danger);
-  opacity: 1;
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-}
-
-.ai-thesis-card-act.ai-thesis-card-del:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--danger) 45%, transparent);
-  outline-offset: 1px;
-}
+/* 模版行右侧的预览/删除按钮已被悬停蒙版（.ai-thesis-card-overlay）取代，
+   相关 .ai-thesis-card-del 样式随按钮一并移除（无引用）。 */
 
 
 

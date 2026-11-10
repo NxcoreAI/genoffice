@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type { ThesisPanelCard } from '../../shared/ipc'
 import { useI18n } from '../i18n/locale'
@@ -164,8 +164,6 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = fal
   const [uploading, setUploading] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  /** AI 补写空白小节：默认关闭，开启后空小节由 AI 生成并带标记。 */
-  const [aiFill, setAiFill] = useState(false)
   /** 正在删除模版的卡片 id（文件+卡，或只删文件）。 */
   const [deletingId, setDeletingId] = useState<string | null>(null)
   /** 待确认删除的卡片 id：面板内联二次确认（不用 window.confirm——它会抢焦点，
@@ -177,6 +175,9 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = fal
   const [job, setJob] = useState<{ phase: string; progress: number; elapsed: number } | null>(null)
   /** 正在打开真预览的模版行。 */
   const [previewingId, setPreviewingId] = useState<string | null>(null)
+  /** 卡片宽度测量节点 + 结果：卡片宽度以「最长时间字符串完整显示」为准。 */
+  const timeProbeRef = useRef<HTMLSpanElement | null>(null)
+  const [cardWidth, setCardWidth] = useState<number | null>(null)
 
   /**
    * 预览模板：不再用格式卡重建示意（那只是缩略示意，看不出真实文档），
@@ -191,7 +192,13 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = fal
       if (!outcome.ok) throw new Error(outcome.message || t('aiThesisFailed'))
       const result = outcome.value as { opened?: boolean; reason?: string }
       if (!result.opened) {
-        setError(result.reason === 'no_file' ? t('aiThesisPreviewNoFile') : t('aiThesisPreviewFailed'))
+        setError(
+          result.reason === 'no_file'
+            ? t('aiThesisPreviewNoFile')
+            : result.reason === 'unsupported_format'
+              ? t('aiThesisPreviewUnsupported')
+              : t('aiThesisPreviewFailed'),
+        )
       }
     } catch (err) {
       setError(errorMessage(err))
@@ -233,6 +240,32 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = fal
     refresh()
     return window.desktop.onThesisCardsChanged(refresh)
   }, [open, refresh])
+
+  /**
+   * 卡片宽度 = 恰好完整显示时间（如 2026/11/09 17:16）的宽度：
+   * 用隐藏探针按卡片时间字号量出所有时间里最宽的一条，所有卡片统一取该宽，
+   * 文件名超宽即在自身内 … 截断（与下方时间行左右对齐）。
+   * 量宽必须等探针真正渲染出来（useLayoutEffect），并在窗口缩放后重量（字体宽度随 dpi 变）。
+   */
+  useLayoutEffect(() => {
+    if (!open || !cards || cards.length === 0) return undefined
+    const measure = () => {
+      const probe = timeProbeRef.current
+      if (!probe) return
+      const width = Math.max(
+        ...cards.map((row) => {
+          probe.textContent = new Date(row.updatedAt).toLocaleString(dateLocale, { dateStyle: 'short', timeStyle: 'short' })
+          return probe.getBoundingClientRect().width
+        }),
+      )
+      setCardWidth(Math.ceil(width))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+    // t 不进依赖：dateLocale 变化时重新量宽即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cards, dateLocale])
 
   /**
    * 上传模版：只收 Word（用户预期「可导入 word 格式」）。
@@ -325,7 +358,7 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = fal
     setBusy(true)
     setJob({ phase: 'queued', progress: 5, elapsed: 0 })
     try {
-      const submit = await window.desktop.thesisReformatJob(cardId, { ...options, aiFill })
+      const submit = await window.desktop.thesisReformatJob(cardId, options)
       if (!submit.ok) throw new Error(submit.message || t('aiThesisFailed'))
       const { jobId } = submit.value as { jobId: string }
 
@@ -491,15 +524,14 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = fal
                   </div>
                 ) : (
                   <>
-                    <label className="ai-thesis-ai-fill">
-                      <input
-                        type="checkbox"
-                        checked={aiFill}
-                        onChange={(event) => setAiFill(event.target.checked)}
-                      />
-                      <span>AI 补写空白小节（生成内容会标注「AI补写，请认真核对」，文件名加 -ai补写版）</span>
-                    </label>
-                    <div className="ai-thesis-cards" role="list">
+                    {/* 时间宽度探针：隐藏不占位，量出「最长时间字符串」的渲染宽，
+                        所有卡片统一取该宽（--ai-thesis-card-w），文件名超宽即 … 截断 */}
+                    <span ref={timeProbeRef} className="ai-thesis-time-probe" aria-hidden="true" />
+                    <div
+                      className="ai-thesis-cards"
+                      role="list"
+                      style={cardWidth ? ({ '--ai-thesis-card-w': `${cardWidth}px` } as React.CSSProperties) : undefined}
+                    >
                       {cards.map((row) => (
                         <div className="ai-thesis-card" key={row.id} role="listitem">
                           <button
@@ -510,48 +542,56 @@ export function AiTab({ hasDoc, dropdown, setDropdown, onNotice, panelOnly = fal
                           >
                             <ThesisMiniPaper card={readThesisCardView(row.card)} />
                             <span className="ai-thesis-card-body">
-                              <b>{row.sourceName}</b>
+                              <b title={row.sourceName}>{row.sourceName}</b>
                               <time>
                                 {new Date(row.updatedAt).toLocaleString(dateLocale, { dateStyle: 'short', timeStyle: 'short' })}
                               </time>
                             </span>
                           </button>
-                          <button
-                            className="ai-thesis-card-act"
-                            title={t('aiThesisPreview')}
-                            disabled={previewingId === row.id}
-                            onClick={() => void previewTemplate(row.id)}
-                          >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          </button>
-                          {/* 删除模版：与预览按钮同尺寸（24×24、图标 14px），浅灰常态、
-                              hover 转红；stopPropagation 防止触发父级的「用此模版排版」。
-                              点击进入行内二次确认，面板保持打开。 */}
-                          <button
-                            type="button"
-                            className="ai-thesis-card-act is-danger ai-thesis-card-del"
-                            title={t('aiThesisRemove')}
-                            aria-label={t('aiThesisRemove')}
-                            disabled={deletingId === row.id}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              event.preventDefault();
-                              setPendingDeleteId((current) => (current === row.id ? null : row.id));
-                            }}
-                          >
-                            {deletingId === row.id ? (
-                              <span className="ai-thesis-spinner" />
-                            ) : (
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
-                                <path d="M10 11v6M14 11v6" />
-                              </svg>
-                            )}
-                          </button>
-
+                          {/* 悬停蒙版：盖住整张卡片，中央竖排两颗纯图标（无底框）：
+                              上=小眼睛（预览原文件），下=垃圾桶（删除，二次确认）。 */}
+                          <div className="ai-thesis-card-overlay" aria-hidden={busy ? 'true' : undefined}>
+                            <button
+                              type="button"
+                              className="ai-thesis-overlay-act"
+                              title={t('aiThesisPreview')}
+                              aria-label={t('aiThesisPreview')}
+                              disabled={previewingId === row.id}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void previewTemplate(row.id)
+                              }}
+                            >
+                              {previewingId === row.id ? (
+                                <span className="ai-thesis-spinner" />
+                              ) : (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+                                  <circle cx="12" cy="12" r="3" />
+                                </svg>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              className="ai-thesis-overlay-act is-danger"
+                              title={t('aiThesisRemove')}
+                              aria-label={t('aiThesisRemove')}
+                              disabled={deletingId === row.id}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setPendingDeleteId((current) => (current === row.id ? null : row.id))
+                              }}
+                            >
+                              {deletingId === row.id ? (
+                                <span className="ai-thesis-spinner" />
+                              ) : (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+                                  <path d="M10 11v6M14 11v6" />
+                                </svg>
+                              )}
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
