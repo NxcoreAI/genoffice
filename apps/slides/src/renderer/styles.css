@@ -480,6 +480,9 @@ button {
   background: none;
   padding: 7px 9px 6px;
   font-size: 13px;
+  /* tab labels never wrap: a narrow window squeezes the flex row, and CJK
+   * labels would otherwise reflow one character per line (vertical text) */
+  white-space: nowrap;
   /* every tab label is semibold, not just the active one */
   font-weight: 600;
   color: inherit;
